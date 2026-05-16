@@ -28,6 +28,8 @@ jobs:
         run: |
           echo "🧹 Cleaning current repo..."
           rm -rf mesa-src/.git  || true
+          tar -jcpf workflow.tar.xz mesa-src/.github
+          rm -rf mesa-src/.github
 
           echo "📦 Copying Mesa files..."
           ls mesa-src
