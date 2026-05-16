@@ -22,10 +22,10 @@ jobs:
         shell: bash
         run: |
           echo "🧹 Cleaning current repo..."
-          rm -rf ./* ./.??* || true
+          #rm -rf ./* ./.??* || true
 
           echo "📦 Copying Mesa files..."
-          #cp -a mesa-src/* .
+          ls mesa-src
            
 
           echo "🗑️ Removing temp folder..."
