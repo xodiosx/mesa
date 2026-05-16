@@ -16,7 +16,7 @@ jobs:
 
       - name: Clone Mesa repo
         run: |
-          git clone https://gitlab.freedesktop.org/Pipetto-crypto/mesa.git mesa-src
+          git clone --depth=1 https://gitlab.freedesktop.org/Pipetto-crypto/mesa.git mesa-src
 
       - name: Replace repo contents
         shell: bash
