@@ -1,0 +1,39 @@
+name: Sync Mesa Repo
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout current repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Clone Mesa repo
+        run: |
+          git clone https://gitlab.freedesktop.org/Pipetto-crypto/mesa mesa-src
+
+      - name: Replace repo contents
+        run: |
+          shopt -s dotglob
+          rm -rf * .[^.]*
+          cp -r mesa-src/* .
+          rm -rf mesa-src
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add .
+          git commit -m "Sync Mesa repo" || echo "No changes to commit"
+
+      - name: Force push to repo
+        run: |
+          git push origin main --force
