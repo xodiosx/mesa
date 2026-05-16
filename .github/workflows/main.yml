@@ -25,13 +25,15 @@ jobs:
           rm -rf ./* ./.??* || true
 
           echo "📦 Copying Mesa files..."
-          cp -a mesa-src/. .
+          #cp -a mesa-src/* .
+           
 
           echo "🗑️ Removing temp folder..."
-          rm -rf mesa-src
+          #rm -rf mesa-src
 
       - name: Commit changes
         run: |
+          cd mesa-src
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add .
