@@ -28,6 +28,7 @@ jobs:
 
           echo "📦 Copying Mesa files..."
           ls mesa-src
+          cp -a mesa-src/. .
            
 
           echo "🗑️ Removing temp folder..."
@@ -35,7 +36,7 @@ jobs:
 
       - name: Commit changes
         run: |
-          cd mesa-src
+          #cd mesa-src
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add .
