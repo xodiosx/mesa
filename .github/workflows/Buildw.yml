@@ -25,6 +25,12 @@ jobs:
             https://github.com/xodiosx/mesa.git \
             mesa-src
           
+      - name: Fix meson option file names
+        run: |
+         cd mesa-src
+         rm -f meson.options
+         ln -s meson_options.txt meson.options  
+        
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -94,7 +100,7 @@ jobs:
           cpp = ['$TOOLCHAIN/aarch64-linux-android${API_LEVEL}-clang++', '-D__TERMUX__', '-D__USE_GNU', '-U__ANDROID__', '--target=aarch64-linux-android30']
           ar = '$TOOLCHAIN/llvm-ar'
           strip = '$TOOLCHAIN/llvm-strip'
-          pkgconfig = 'pkg-config'
+          pkg-config = 'pkg-config'
 
           [properties]
           needs_exe_wrapper = true
