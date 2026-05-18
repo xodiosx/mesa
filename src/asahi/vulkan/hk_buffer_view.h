@@ -6,7 +6,6 @@
  */
 #pragma once
 
-#include "agx_pack.h"
 #include "hk_private.h"
 
 #include "vk_buffer_view.h"
@@ -19,8 +18,9 @@ hk_get_buffer_format_features(struct hk_physical_device *pdevice,
 
 struct hk_buffer_view {
    struct vk_buffer_view vk;
-   struct agx_texture_packed tex;
-   struct agx_pbe_packed pbe;
+
+   /** Index in the image descriptor table */
+   uint32_t tex_desc_index, pbe_desc_index;
 };
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(hk_buffer_view, vk.base, VkBufferView,

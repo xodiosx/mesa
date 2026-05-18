@@ -23,7 +23,7 @@ DEBUG_GET_ONCE_OPTION(replace_shaders, "RADEON_REPLACE_SHADERS", NULL)
 
 static enum amd_ip_type si_get_context_ip_type(struct si_context *sctx)
 {
-   return sctx->is_gfx_queue ? AMD_IP_GFX : AMD_IP_COMPUTE;
+   return sctx->has_graphics ? AMD_IP_GFX : AMD_IP_COMPUTE;
 }
 
 /**
@@ -64,11 +64,11 @@ void si_save_cs(struct radeon_winsys *ws, struct radeon_cmdbuf *cs, struct radeo
    return;
 
 oom:
-   mesa_loge("%s: out of memory", __func__);
+   fprintf(stderr, "%s: out of memory\n", __func__);
    memset(saved, 0, sizeof(*saved));
 }
 
-static void si_clear_saved_cs(struct radeon_saved_cs *saved)
+void si_clear_saved_cs(struct radeon_saved_cs *saved)
 {
    FREE(saved->ib);
    FREE(saved->bo_list);
@@ -160,17 +160,17 @@ static void si_dump_gfx_shader(struct si_context *ctx, const struct si_shader_ct
    u_log_chunk(log, &si_log_chunk_type_shader, chunk);
 }
 
-static void si_dump_compute_shader(struct si_context *ctx,
-                                   struct si_compute *program,
-                                   struct u_log_context *log)
+static void si_dump_compute_shader(struct si_context *ctx, struct u_log_context *log)
 {
-   if (!program)
+   const struct si_cs_shader_state *state = &ctx->cs_shader_state;
+
+   if (!state->program)
       return;
 
    struct si_log_chunk_shader *chunk = CALLOC_STRUCT(si_log_chunk_shader);
    chunk->ctx = ctx;
-   chunk->shader = &program->shader;
-   si_compute_reference(&chunk->program, program);
+   chunk->shader = &state->program->shader;
+   si_compute_reference(&chunk->program, state->program);
    u_log_chunk(log, &si_log_chunk_type_shader, chunk);
 }
 
@@ -199,7 +199,7 @@ bool si_replace_shader(unsigned num, struct si_shader_binary *binary)
 
       p = endp;
       if (*p != ':') {
-         mesa_loge("RADEON_REPLACE_SHADERS formatted badly.");
+         fprintf(stderr, "RADEON_REPLACE_SHADERS formatted badly.\n");
          exit(1);
       }
       ++p;
@@ -219,12 +219,12 @@ bool si_replace_shader(unsigned num, struct si_shader_binary *binary)
    if (semicolon) {
       p = copy = strndup(p, semicolon - p);
       if (!copy) {
-         mesa_loge("out of memory");
+         fprintf(stderr, "out of memory\n");
          return false;
       }
    }
 
-   mesa_logi("replace shader %u by %s", num, p);
+   fprintf(stderr, "radeonsi: replace shader %u by %s\n", num, p);
 
    f = fopen(p, "r");
    if (!f) {
@@ -244,7 +244,7 @@ bool si_replace_shader(unsigned num, struct si_shader_binary *binary)
 
    binary->code_buffer = MALLOC(filesize);
    if (!binary->code_buffer) {
-      mesa_loge("out of memory");
+      fprintf(stderr, "out of memory\n");
       goto out_close;
    }
 
@@ -352,7 +352,7 @@ static void si_parse_current_ib(FILE *f, struct radeon_cmdbuf *cs, unsigned begi
    fprintf(f, "------------------ %s begin (dw = %u) ------------------\n", ip_name, begin);
 
    for (unsigned prev_idx = 0; prev_idx < cs->num_prev; ++prev_idx) {
-      struct ac_cmdbuf *chunk = &cs->prev[prev_idx];
+      struct radeon_cmdbuf_chunk *chunk = &cs->prev[prev_idx];
 
       if (begin < chunk->cdw) {
          struct ac_ib_parser ib_parser = {
@@ -402,14 +402,6 @@ void si_print_current_ib(struct si_context *sctx, FILE *f)
    si_parse_current_ib(f, &sctx->gfx_cs, 0, sctx->gfx_cs.prev_dw + sctx->gfx_cs.current.cdw,
                        NULL, 0, si_get_context_ip_type(sctx), sctx->gfx_level,
                        sctx->family);
-
-   struct radeon_cmdbuf *gang_cs = sctx->gfx_cs.gang_cs;
-   if (gang_cs) {
-      unsigned end = gang_cs->prev_dw + gang_cs->current.cdw;
-      if (end)
-         si_parse_current_ib(f, gang_cs, 0, end, NULL, 0, AMD_IP_COMPUTE,
-                             sctx->gfx_level, sctx->family);
-   }
 }
 
 static void si_log_chunk_type_cs_print(void *data, FILE *f)
@@ -504,7 +496,7 @@ void si_log_hw_flush(struct si_context *sctx)
        */
       FILE *f = dd_get_debug_file(false);
       if (!f) {
-         mesa_loge("error opening aux context dump file.");
+         fprintf(stderr, "radeonsi: error opening aux context dump file.\n");
       } else {
          dd_write_header(f, &sctx->screen->b, 0);
 
@@ -610,17 +602,17 @@ static void si_dump_framebuffer(struct si_context *sctx, struct u_log_context *l
    int i;
 
    for (i = 0; i < state->nr_cbufs; i++) {
-      if (!state->cbufs[i].texture)
+      if (!state->cbufs[i])
          continue;
 
-      tex = (struct si_texture *)state->cbufs[i].texture;
+      tex = (struct si_texture *)state->cbufs[i]->texture;
       u_log_printf(log, COLOR_YELLOW "Color buffer %i:" COLOR_RESET "\n", i);
       si_print_texture_info(sctx->screen, tex, log);
       u_log_printf(log, "\n");
    }
 
-   if (state->zsbuf.texture) {
-      tex = (struct si_texture *)state->zsbuf.texture;
+   if (state->zsbuf) {
+      tex = (struct si_texture *)state->zsbuf->texture;
       u_log_printf(log, COLOR_YELLOW "Depth-stencil buffer:" COLOR_RESET "\n");
       si_print_texture_info(sctx->screen, tex, log);
       u_log_printf(log, "\n");
@@ -747,7 +739,7 @@ static void si_dump_descriptor_list(struct si_screen *screen, struct si_descript
    }
 
    struct si_log_chunk_desc_list *chunk =
-      CALLOC_VARIANT_LENGTH_STRUCT(si_log_chunk_desc_list, 4 * (size_t)element_dw_size * num_elements);
+      CALLOC_VARIANT_LENGTH_STRUCT(si_log_chunk_desc_list, 4 * element_dw_size * num_elements);
    chunk->shader_name = shader_name;
    chunk->elem_name = elem_name;
    chunk->element_dw_size = element_dw_size;
@@ -772,32 +764,33 @@ static unsigned si_identity(unsigned slot)
    return slot;
 }
 
-static void si_dump_descriptors(struct si_context *sctx, mesa_shader_stage stage,
+static void si_dump_descriptors(struct si_context *sctx, gl_shader_stage stage,
                                 const struct si_shader_info *info, struct u_log_context *log)
 {
+   enum pipe_shader_type processor = pipe_shader_type_from_mesa(stage);
    struct si_descriptors *descs =
-      &sctx->descriptors[SI_DESCS_FIRST_SHADER + stage * SI_NUM_SHADER_DESCS];
+      &sctx->descriptors[SI_DESCS_FIRST_SHADER + processor * SI_NUM_SHADER_DESCS];
    static const char *shader_name[] = {"VS", "PS", "GS", "TCS", "TES", "CS"};
-   const char *name = shader_name[stage];
+   const char *name = shader_name[processor];
    unsigned enabled_constbuf, enabled_shaderbuf, enabled_samplers;
    unsigned enabled_images;
 
    if (info) {
-      enabled_constbuf = BITFIELD_MASK(info->base.num_ubos);
-      enabled_shaderbuf = BITFIELD_MASK(info->base.num_ssbos);
-      enabled_samplers = info->base.textures_used;
-      enabled_images = BITFIELD_MASK(info->base.num_images);
+      enabled_constbuf = u_bit_consecutive(0, info->base.num_ubos);
+      enabled_shaderbuf = u_bit_consecutive(0, info->base.num_ssbos);
+      enabled_samplers = info->base.textures_used[0];
+      enabled_images = u_bit_consecutive(0, info->base.num_images);
    } else {
       enabled_constbuf =
-         sctx->const_and_shader_buffers[stage].enabled_mask >> SI_NUM_SHADER_BUFFERS;
+         sctx->const_and_shader_buffers[processor].enabled_mask >> SI_NUM_SHADER_BUFFERS;
       enabled_shaderbuf = 0;
       for (int i = 0; i < SI_NUM_SHADER_BUFFERS; i++) {
          enabled_shaderbuf |=
-            (sctx->const_and_shader_buffers[stage].enabled_mask &
+            (sctx->const_and_shader_buffers[processor].enabled_mask &
              1llu << (SI_NUM_SHADER_BUFFERS - i - 1)) << i;
       }
-      enabled_samplers = sctx->samplers[stage].enabled_mask;
-      enabled_images = sctx->images[stage].enabled_mask;
+      enabled_samplers = sctx->samplers[processor].enabled_mask;
+      enabled_images = sctx->images[processor].enabled_mask;
    }
 
    si_dump_descriptor_list(sctx->screen, &descs[SI_SHADER_DESCS_CONST_AND_SHADER_BUFFERS], name,
@@ -823,14 +816,12 @@ static void si_dump_gfx_descriptors(struct si_context *sctx,
    si_dump_descriptors(sctx, state->cso->stage, &state->cso->info, log);
 }
 
-static void si_dump_compute_descriptors(struct si_context *sctx,
-                                        const struct si_compute *program,
-                                        struct u_log_context *log)
+static void si_dump_compute_descriptors(struct si_context *sctx, struct u_log_context *log)
 {
-   if (!program)
+   if (!sctx->cs_shader_state.program)
       return;
 
-   si_dump_descriptors(sctx, program->sel.stage, NULL, log);
+   si_dump_descriptors(sctx, MESA_SHADER_COMPUTE, NULL, log);
 }
 
 struct si_shader_inst {
@@ -853,7 +844,7 @@ struct si_shader_inst {
 static void si_add_split_disasm(struct si_screen *screen, struct ac_rtld_binary *rtld_binary,
                                 struct si_shader_binary *binary, uint64_t *addr, unsigned *num,
                                 struct si_shader_inst *instructions,
-                                mesa_shader_stage stage, unsigned wave_size)
+                                gl_shader_stage stage, unsigned wave_size)
 {
    if (!ac_rtld_open(rtld_binary, (struct ac_rtld_open_info){
                                      .info = &screen->info,
@@ -905,7 +896,7 @@ static void si_print_annotated_shader(struct si_shader *shader, struct ac_wave_i
       return;
 
    struct si_screen *screen = shader->selector->screen;
-   mesa_shader_stage stage = shader->selector->stage;
+   gl_shader_stage stage = shader->selector->stage;
    uint64_t start_addr = shader->bo->gpu_address;
    uint64_t end_addr = start_addr + shader->bo->b.b.width0;
    unsigned i;
@@ -1053,8 +1044,6 @@ void si_log_draw_state(struct si_context *sctx, struct u_log_context *log)
 
    si_dump_framebuffer(sctx, log);
 
-   si_dump_compute_shader(sctx, sctx->ts_shader_state.program, log);
-   si_dump_gfx_shader(sctx, &sctx->ms_shader_state, log);
    si_dump_gfx_shader(sctx, &sctx->shader.vs, log);
    si_dump_gfx_shader(sctx, &sctx->shader.tcs, log);
    si_dump_gfx_shader(sctx, &sctx->shader.tes, log);
@@ -1064,8 +1053,6 @@ void si_log_draw_state(struct si_context *sctx, struct u_log_context *log)
    si_dump_descriptor_list(sctx->screen, &sctx->descriptors[SI_DESCS_INTERNAL], "", "RW buffers",
                            4, sctx->descriptors[SI_DESCS_INTERNAL].num_active_slots, si_identity,
                            log);
-   si_dump_compute_descriptors(sctx, sctx->ts_shader_state.program, log);
-   si_dump_gfx_descriptors(sctx, &sctx->ms_shader_state, log);
    si_dump_gfx_descriptors(sctx, &sctx->shader.vs, log);
    si_dump_gfx_descriptors(sctx, &sctx->shader.tcs, log);
    si_dump_gfx_descriptors(sctx, &sctx->shader.tes, log);
@@ -1078,8 +1065,8 @@ void si_log_compute_state(struct si_context *sctx, struct u_log_context *log)
    if (!log)
       return;
 
-   si_dump_compute_shader(sctx, sctx->cs_shader_state.program, log);
-   si_dump_compute_descriptors(sctx, sctx->cs_shader_state.program, log);
+   si_dump_compute_shader(sctx, log);
+   si_dump_compute_descriptors(sctx, log);
 }
 
 void si_check_vm_faults(struct si_context *sctx, struct radeon_saved_cs *saved)
@@ -1128,7 +1115,7 @@ void si_check_vm_faults(struct si_context *sctx, struct radeon_saved_cs *saved)
 
    fclose(f);
 
-   mesa_loge("Detected a VM fault, exiting...");
+   fprintf(stderr, "Detected a VM fault, exiting...\n");
    exit(0);
 }
 
@@ -1139,7 +1126,7 @@ void si_gather_context_rolls(struct si_context *sctx)
    uint32_t *ib_dw_sizes = alloca(sizeof(ib_dw_sizes[0]) * (cs->num_prev + 1));
 
    for (unsigned i = 0; i < cs->num_prev; i++) {
-      struct ac_cmdbuf *chunk = &cs->prev[i];
+      struct radeon_cmdbuf_chunk *chunk = &cs->prev[i];
 
       ibs[i] = chunk->buf;
       ib_dw_sizes[i] = chunk->cdw;

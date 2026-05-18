@@ -9,6 +9,10 @@
 #include "util/macros.h"
 #include "ac_gpu_info.h"
 
+#if AMD_LLVM_AVAILABLE
+#include <llvm/Config/llvm-config.h>
+#endif
+
 const char *ac_get_family_name(enum radeon_family family)
 {
    switch (family) {
@@ -43,7 +47,6 @@ const char *ac_get_family_name(enum radeon_family family)
    CASE(NAVI10);
    CASE(NAVI12);
    CASE(NAVI14);
-   CASE(GFX1013);
    CASE(NAVI21);
    CASE(NAVI22);
    CASE(NAVI23);
@@ -56,15 +59,15 @@ const char *ac_get_family_name(enum radeon_family family)
    CASE(NAVI33);
    CASE(PHOENIX);
    CASE(PHOENIX2);
-   CASE(STRIX1);
-   CASE(STRIX_HALO);
-   CASE(KRACKAN1);
+   CASE(GFX1150);
+   CASE(GFX1151);
+   CASE(GFX1152);
    CASE(GFX1153);
    CASE(GFX1200);
    CASE(GFX1201);
 #undef CASE
    default:
-      UNREACHABLE("Unknown GPU family");
+      unreachable("Unknown GPU family");
    }
 }
 
@@ -72,7 +75,7 @@ enum amd_gfx_level ac_get_gfx_level(enum radeon_family family)
 {
    if (family >= CHIP_GFX1200)
       return GFX12;
-   if (family >= CHIP_STRIX1)
+   if (family >= CHIP_GFX1150)
       return GFX11_5;
    if (family >= CHIP_NAVI31)
       return GFX11;
@@ -88,6 +91,28 @@ enum amd_gfx_level ac_get_gfx_level(enum radeon_family family)
       return GFX7;
 
    return GFX6;
+}
+
+unsigned ac_get_family_id(enum radeon_family family)
+{
+   if (family >= CHIP_GFX1200)
+      return FAMILY_GFX12;
+   if (family >= CHIP_GFX1150)
+      return FAMILY_GFX1150;
+   if (family >= CHIP_NAVI31)
+      return FAMILY_NV3;
+   if (family >= CHIP_NAVI21)
+      return FAMILY_NV;
+   if (family >= CHIP_NAVI10)
+      return FAMILY_NV;
+   if (family >= CHIP_VEGA10)
+      return FAMILY_AI;
+   if (family >= CHIP_TONGA)
+      return FAMILY_VI;
+   if (family >= CHIP_BONAIRE)
+      return FAMILY_CI;
+
+   return FAMILY_SI;
 }
 
 const char *ac_get_llvm_processor_name(enum radeon_family family)
@@ -143,15 +168,17 @@ const char *ac_get_llvm_processor_name(enum radeon_family family)
    case CHIP_MI200:
       return "gfx90a";
    case CHIP_GFX940:
-      return "gfx942";
+      return
+#if AMD_LLVM_AVAILABLE
+             LLVM_VERSION_MAJOR >= 17 ? "gfx942" :
+#endif
+             "gfx940";
    case CHIP_NAVI10:
       return "gfx1010";
    case CHIP_NAVI12:
       return "gfx1011";
    case CHIP_NAVI14:
       return "gfx1012";
-   case CHIP_GFX1013:
-      return "gfx1013";
    case CHIP_NAVI21:
       return "gfx1030";
    case CHIP_NAVI22:
@@ -175,11 +202,11 @@ const char *ac_get_llvm_processor_name(enum radeon_family family)
    case CHIP_PHOENIX:
    case CHIP_PHOENIX2:
       return "gfx1103";
-   case CHIP_STRIX1:
+   case CHIP_GFX1150:
       return "gfx1150";
-   case CHIP_STRIX_HALO:
+   case CHIP_GFX1151:
       return "gfx1151";
-   case CHIP_KRACKAN1:
+   case CHIP_GFX1152:
       return "gfx1152";
    case CHIP_GFX1153:
       return "gfx1153";

@@ -26,6 +26,7 @@
 
 #include <stdint.h>
 
+#ifdef VIRGL_RENDERER_UNSTABLE_APIS
 struct virgl_renderer_capset_venus {
    uint32_t wire_format_version;
    uint32_t vk_xml_version;
@@ -70,5 +71,6 @@ struct virgl_renderer_capset_venus {
     */
    uint32_t use_guest_vram;
 };
+#endif
 
 #endif /* VENUS_HW_H */

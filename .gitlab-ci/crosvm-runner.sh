@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2086 # we want word splitting
-# shellcheck disable=SC1091 # paths only become valid at runtime
-
-. "${SCRIPTS_DIR}/setup-test-env.sh"
 
 set -ue
-
-if [ -z "$CROSVM_TAG" ]; then
-    echo "CROSVM_TAG must be set to the conditional build tag"
-    exit 1
-fi
-
-# Are we using the right crosvm version?
-ci_tag_test_time_check "CROSVM_TAG"
 
 # Instead of starting one dEQP instance per available CPU core, pour our
 # concurrency at llvmpipe threads instead. This is mostly useful for VirGL and
@@ -85,19 +74,15 @@ fi
 set_vsock_context || { echo "Could not generate crosvm vsock CID" >&2; exit 1; }
 
 # Securely pass the current variables to the crosvm environment
-section_start variables "Environment variables passed through to VM:"
+echo "Variables passed through:"
 SCRIPTS_DIR=$(readlink -en "${0%/*}")
-filter_env_vars | tee ${VM_TEMP_DIR}/crosvm-env.sh
+${SCRIPTS_DIR}/common/generate-env.sh | tee ${VM_TEMP_DIR}/crosvm-env.sh
 cp ${SCRIPTS_DIR}/setup-test-env.sh ${VM_TEMP_DIR}/setup-test-env.sh
-section_end variables
 
 # Set the crosvm-script as the arguments of the current script
-{
-  echo "export SCRIPTS_DIR=${SCRIPTS_DIR}"
-  echo "export RESULTS_DIR=${RESULTS_DIR}"
-  echo ". ${VM_TEMP_DIR}/setup-test-env.sh"
-  echo "$@"
-} > ${VM_TEMP_DIR}/crosvm-script.sh
+echo "export SCRIPTS_DIR=${SCRIPTS_DIR}" > ${VM_TEMP_DIR}/crosvm-script.sh
+echo ". ${VM_TEMP_DIR}/setup-test-env.sh" >> ${VM_TEMP_DIR}/crosvm-script.sh
+echo "$@" >> ${VM_TEMP_DIR}/crosvm-script.sh
 
 # Setup networking
 /usr/sbin/iptables-legacy -w -t nat -A POSTROUTING -o eth0 -j MASQUERADE
@@ -124,15 +109,6 @@ then
   set -x
 fi
 
-section_start kernel "Downloading kernel image"
-if [ ! -f "/kernel/${KERNEL_IMAGE_NAME:-bzImage}" ]; then
-  mkdir -p /kernel
-  # shellcheck disable=SC2153
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 30 \
-    -o "/kernel/${KERNEL_IMAGE_NAME:-bzImage}" "${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH:-amd64}/${KERNEL_IMAGE_NAME:-bzImage}"
-fi
-section_end kernel
-
 # We aren't testing the host driver here, so we don't need to validate NIR on the host
 NIR_DEBUG="novalidate" \
 LIBGL_ALWAYS_SOFTWARE=${CROSVM_LIBGL_ALWAYS_SOFTWARE:-} \
@@ -145,9 +121,8 @@ crosvm --no-syslog run \
     --net "host-ip=192.168.30.1,netmask=255.255.255.0,mac=AA:BB:CC:00:00:12" \
     -s $VM_SOCKET \
     --cid ${VSOCK_CID} -p "${CROSVM_KERN_ARGS}" \
-    /kernel/${KERNEL_IMAGE_NAME:-bzImage} > ${VM_TEMP_DIR}/crosvm 2>&1
+    /lava-files/${KERNEL_IMAGE_NAME:-bzImage} > ${VM_TEMP_DIR}/crosvm 2>&1
 
-section_start crosvm_results "Processing crosvm results"
 CROSVM_RET=$?
 
 [ ${CROSVM_RET} -eq 0 ] && {
@@ -164,6 +139,5 @@ CROSVM_RET=$?
     cat ${VM_TEMP_DIR}/crosvm >&2
     set -x
 }
-section_end crosvm_results
 
 exit ${CROSVM_RET}

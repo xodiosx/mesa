@@ -22,8 +22,9 @@
  */
 
 #include "v3dv_private.h"
-
+#if DETECT_OS_ANDROID
 #include "vk_android.h"
+#endif
 #include "vk_enum_defines.h"
 #include "vk_util.h"
 
@@ -32,9 +33,6 @@
 #include "vulkan/wsi/wsi_common.h"
 
 #include <vulkan/vulkan_android.h>
-
-#define V3D_VERSION 42
-#include "v3dv_format_table.h"
 
 const uint8_t *
 v3dv_get_format_swizzle(struct v3dv_device *device, VkFormat f, uint8_t plane)
@@ -105,7 +103,7 @@ v3dv_get_compatible_tfu_format(struct v3dv_device *device,
    case 4:  vk_format = VK_FORMAT_R32_SFLOAT;           break;
    case 2:  vk_format = VK_FORMAT_R16_SFLOAT;           break;
    case 1:  vk_format = VK_FORMAT_R8_UNORM;             break;
-   default: UNREACHABLE("unsupported format bit-size"); break;
+   default: unreachable("unsupported format bit-size"); break;
    };
 
    if (out_vk_format)
@@ -178,7 +176,6 @@ image_format_plane_features(struct v3dv_physical_device *pdevice,
       } else if (vk_format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ||
                  vk_format == VK_FORMAT_A2R10G10B10_UNORM_PACK32 ||
                  vk_format == VK_FORMAT_A2B10G10R10_UINT_PACK32 ||
-                 vk_format == VK_FORMAT_A2R10G10B10_UINT_PACK32 ||
                  vk_format == VK_FORMAT_B10G11R11_UFLOAT_PACK32) {
          /* To comply with shaderStorageImageExtendedFormats */
          flags |= VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT |
@@ -306,7 +303,6 @@ buffer_format_features(VkFormat vk_format, const struct v3dv_format *v3dv_format
                VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT |
                VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT;
    } else if (vk_format == VK_FORMAT_A2B10G10R10_UINT_PACK32 ||
-              vk_format == VK_FORMAT_A2R10G10B10_UINT_PACK32 ||
               vk_format == VK_FORMAT_B10G11R11_UFLOAT_PACK32) {
       flags |= VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT |
                VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT;
@@ -515,13 +511,6 @@ get_image_format_properties(
       }
    }
 
-   if (view_usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) {
-      if (!(format_feature_flags & (VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT |
-                                    VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT))) {
-         goto unsupported;
-      }
-   }
-
    switch (info->type) {
    case VK_IMAGE_TYPE_1D:
       pImageFormatProperties->maxExtent.width = V3D_MAX_IMAGE_DIMENSION;
@@ -546,7 +535,7 @@ get_image_format_properties(
       pImageFormatProperties->maxMipLevels = V3D_MAX_MIP_LEVELS;
       break;
    default:
-      UNREACHABLE("bad VkImageType");
+      unreachable("bad VkImageType");
    }
 
    /* Our hw doesn't support 1D compressed textures. */
@@ -676,12 +665,13 @@ v3dv_GetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice,
    const VkPhysicalDeviceExternalImageFormatInfo *external_info = NULL;
    const VkPhysicalDeviceImageDrmFormatModifierInfoEXT *drm_format_mod_info = NULL;
    VkExternalImageFormatProperties *external_props = NULL;
+   UNUSED VkAndroidHardwareBufferUsageANDROID *android_usage = NULL;
    VkSamplerYcbcrConversionImageFormatProperties *ycbcr_props = NULL;
    VkImageTiling tiling = base_info->tiling;
 
    /* Extract input structs */
    vk_foreach_struct_const(s, base_info->pNext) {
-      switch ((unsigned)s->sType) {
+      switch (s->sType) {
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO:
          external_info = (const void *) s;
          break;
@@ -701,9 +691,6 @@ v3dv_GetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice,
             assert("Unknown DRM format modifier");
          }
          break;
-      case VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA:
-         /* Do nothing, v3dv_image_init will handle it */;
-         break;
       default:
          vk_debug_ignored_stype(s->sType);
          break;
@@ -718,6 +705,9 @@ v3dv_GetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice,
       switch (s->sType) {
       case VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES:
          external_props = (void *) s;
+         break;
+      case VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_USAGE_ANDROID:
+         android_usage = (void *)s;
          break;
       case VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_IMAGE_FORMAT_PROPERTIES:
          ycbcr_props = (void *) s;
@@ -742,14 +732,26 @@ v3dv_GetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice,
          if (external_props)
             external_props->externalMemoryProperties = prime_fd_props;
          break;
+#if DETECT_OS_ANDROID
       case VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID:
-         result = vk_android_get_ahb_image_properties(physicalDevice,
-                                                      base_info, base_props);
+         if (external_props) {
+            external_props->externalMemoryProperties.exportFromImportedHandleTypes = 0;
+            external_props->externalMemoryProperties.compatibleHandleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+            external_props->externalMemoryProperties.externalMemoryFeatures = VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT | VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT | VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT;
+         }
          break;
+#endif
       default:
          result = VK_ERROR_FORMAT_NOT_SUPPORTED;
          break;
       }
+   }
+
+   if (android_usage) {
+#if DETECT_OS_ANDROID
+      android_usage->androidHardwareBufferUsage =
+         vk_image_usage_to_ahb_usage(base_info->flags, base_info->usage);
+#endif
    }
 
 done:
@@ -790,10 +792,6 @@ v3dv_GetPhysicalDeviceExternalBufferProperties(
    case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT:
    case VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT:
       pExternalBufferProperties->externalMemoryProperties = prime_fd_props;
-      return;
-   case VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID:
-      vk_android_get_ahb_buffer_properties(
-         physicalDevice, pExternalBufferInfo, pExternalBufferProperties);
       return;
    default: /* Unsupported */
       pExternalBufferProperties->externalMemoryProperties =

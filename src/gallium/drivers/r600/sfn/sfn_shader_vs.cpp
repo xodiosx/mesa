@@ -133,8 +133,8 @@ VertexExportForFs::finalize()
 {
    if (m_vs_as_gs_a) {
       auto primid = m_parent->value_factory().temp_vec4(pin_group, {2, 7, 7, 7});
-      m_parent->emit_instruction(
-         new AluInstr(op1_mov, primid[0], m_parent->primitive_id(), AluInstr::write));
+      m_parent->emit_instruction(new AluInstr(
+         op1_mov, primid[0], m_parent->primitive_id(), AluInstr::last_write));
       int param = m_last_param_export ? m_last_param_export->location() + 1 : 0;
 
       m_last_param_export = new ExportInstr(ExportInstr::param, param, primid);
@@ -167,9 +167,7 @@ VertexExportForFs::finalize()
 void
 VertexShader::do_get_shader_info(r600_shader *sh_info)
 {
-   sh_info->processor_type = MESA_SHADER_VERTEX;
-   sh_info->vs_draw_parameters_enabled =
-      m_vertex_id != nullptr || m_draw_parameters_enabled;
+   sh_info->processor_type = PIPE_SHADER_VERTEX;
    m_export_stage->get_shader_info(sh_info);
 }
 
@@ -202,8 +200,9 @@ VertexExportForFs::emit_varying_pos(const store_loc& store_info,
       auto src = m_parent->value_factory().src(intr.src[0], 0);
       auto clamped = m_parent->value_factory().temp_register();
       m_parent->emit_instruction(
-         new AluInstr(op1_mov, clamped, src, {alu_write, alu_dst_clamp}));
-      auto alu = new AluInstr(op1_flt_to_int, out_value[1], clamped, AluInstr::write);
+         new AluInstr(op1_mov, clamped, src, {alu_write, alu_dst_clamp, alu_last_instr}));
+      auto alu =
+         new AluInstr(op1_flt_to_int, out_value[1], clamped, AluInstr::last_write);
       if (m_parent->chip_class() < ISA_CC_EVERGREEN)
          alu->set_alu_flag(alu_is_trans);
       m_parent->emit_instruction(alu);
@@ -276,6 +275,8 @@ VertexExportForFs::emit_varying_param(const store_loc& store_info,
          m_parent->emit_instruction(alu);
       }
    }
+   if (alu)
+      alu->set_alu_flag(alu_last_instr);
 
    m_last_param_export = new ExportInstr(ExportInstr::param, export_slot, value);
    m_output_registers[nir_intrinsic_base(&intr)] = &m_last_param_export->value();
@@ -349,6 +350,8 @@ VertexExportForFs::emit_stream(int stream)
             alu = new AluInstr(op1_mov, tmp[i][j], (*so_gpr[i])[j + sc], {alu_write});
             m_parent->emit_instruction(alu);
          }
+         if (alu)
+            alu->set_alu_flag(alu_last_instr);
 
          start_comp[i] = 0;
          so_gpr[i] = &tmp[i];
@@ -412,13 +415,9 @@ VertexShader::do_scan_instruction(nir_instr *instr)
 
    switch (intr->intrinsic) {
    case nir_intrinsic_load_input: {
-      int vtx_register =
-         nir_intrinsic_base(intr) + nir_intrinsic_io_semantics(intr).num_slots;
+      int vtx_register = nir_intrinsic_base(intr) + 1;
       if (m_last_vertex_attribute_register < vtx_register)
          m_last_vertex_attribute_register = vtx_register;
-      if (nir_intrinsic_io_semantics(intr).num_slots > 1)
-         m_input_array_ranges[nir_intrinsic_base(intr) + 1] =
-            nir_intrinsic_io_semantics(intr).num_slots;
       return true;
    }
    case nir_intrinsic_store_output: {
@@ -440,10 +439,7 @@ VertexShader::do_scan_instruction(nir_instr *instr)
       break;
    }
    case nir_intrinsic_load_vertex_id:
-   case nir_intrinsic_load_vertex_id_zero_base:
       m_sv_values.set(es_vertexid);
-      break;
-   case nir_intrinsic_load_first_vertex:
       break;
    case nir_intrinsic_load_instance_id:
       m_sv_values.set(es_instanceid);
@@ -453,15 +449,6 @@ VertexShader::do_scan_instruction(nir_instr *instr)
       break;
    case nir_intrinsic_load_tcs_rel_patch_id_r600:
       m_sv_values.set(es_rel_patch_id);
-      break;
-   case nir_intrinsic_load_base_instance:
-      m_sv_values.set(es_base_instance);
-      break;
-   case nir_intrinsic_load_base_vertex:
-      m_sv_values.set(es_base_vertex);
-      break;
-   case nir_intrinsic_load_draw_id:
-      m_sv_values.set(es_draw_id);
       break;
    default:
       return false;
@@ -473,38 +460,27 @@ VertexShader::do_scan_instruction(nir_instr *instr)
 bool
 VertexShader::load_input(nir_intrinsic_instr *intr)
 {
-   unsigned range_base = nir_intrinsic_base(intr) + 1;
+   unsigned driver_location = nir_intrinsic_base(intr);
    unsigned location = nir_intrinsic_io_semantics(intr).location;
    auto& vf = value_factory();
 
-   if (location >= VERT_ATTRIB_MAX) {
-      fprintf(stderr, "r600-NIR: Unimplemented load_deref for %d\n", location);
-      return false;
-   }
-
-   for (auto [start, array] : m_input_arrays) {
-      if (range_base >= start && range_base < start + array->size()) {
-         auto addr = vf.src(intr->src[0], 0);
-         for (unsigned i = 0; i < intr->def.num_components; ++i) {
-            auto src = array->element(0, addr, i);
-            auto dst = vf.dest(intr->def, i, pin_free);
-            emit_instruction(new AluInstr(op1_mov, dst, src, AluInstr::write));
-         }
-         return true;
+   AluInstr *ir = nullptr;
+   if (location < VERT_ATTRIB_MAX) {
+      for (unsigned i = 0; i < intr->def.num_components; ++i) {
+         auto src = vf.allocate_pinned_register(driver_location + 1, i);
+         src->set_flag(Register::ssa);
+         vf.inject_value(intr->def, i, src);
       }
-   }
+      if (ir)
+         ir->set_alu_flag(alu_last_instr);
 
-   /* We didn't find an array so inject the value and add the register lazily */
-   for (unsigned i = 0; i < intr->def.num_components; ++i) {
-      auto src = vf.allocate_pinned_register(range_base, i);
-      src->set_flag(Register::ssa);
-      vf.inject_value(intr->def, i, src);
+      ShaderInput input(driver_location);
+      input.set_gpr(driver_location + 1);
+      add_input(input);
+      return true;
    }
-
-   ShaderInput input(range_base - 1);
-   input.set_gpr(range_base);
-   add_input(input);
-   return true;
+   fprintf(stderr, "r600-NIR: Unimplemented load_deref for %d\n", location);
+   return false;
 }
 
 int
@@ -527,29 +503,6 @@ VertexShader::do_allocate_reserved_registers()
       m_rel_vertex_id = value_factory().allocate_pinned_register(0, 1);
    }
 
-   if (m_sv_values.test(es_base_instance)) {
-      m_draw_parameters_enabled = true;
-   }
-
-   if (m_sv_values.test(es_base_vertex)) {
-      m_draw_parameters_enabled = true;
-   }
-
-   if (m_sv_values.test(es_draw_id)) {
-      m_draw_parameters_enabled = true;
-   }
-
-   for (auto [start, size] : m_input_array_ranges) {
-      auto array = value_factory().allocate_pinned_array(start, size, 4);
-      m_input_arrays[start] = array;
-
-      for (int i = 0; i < size; ++i) {
-         ShaderInput input(start + i - 1);
-         input.set_gpr(start + i);
-         add_input(input);
-      }
-   }
-
    return m_last_vertex_attribute_register + 1;
 }
 
@@ -564,7 +517,6 @@ VertexShader::process_stage_intrinsic(nir_intrinsic_instr *intr)
 {
    switch (intr->intrinsic) {
    case nir_intrinsic_load_vertex_id:
-   case nir_intrinsic_load_vertex_id_zero_base:
       return emit_simple_mov(intr->def, 0, m_vertex_id);
    case nir_intrinsic_load_instance_id:
       return emit_simple_mov(intr->def, 0, m_instance_id);
@@ -652,6 +604,8 @@ VertexExportForGS::do_store_output(const store_loc& store_info,
                         AluInstr::write);
       m_parent->emit_instruction(ir);
    }
+   if (ir)
+      ir->set_alu_flag(alu_last_instr);
 
    m_parent->emit_instruction(new MemRingOutInstr(
       cf_mem_ring, MemRingOutInstr::mem_write, value, ring_offset >> 2, 4, nullptr));

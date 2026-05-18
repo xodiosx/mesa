@@ -4,24 +4,22 @@
 use crate::ir::*;
 
 use compiler::bitset::BitSet;
-use compiler::dataflow::BackwardDataflow;
-use rustc_hash::{FxHashMap, FxHashSet};
-use std::cmp::{max, min, Ord, Ordering};
+use std::cell::RefCell;
+use std::cmp::{max, Ord, Ordering};
+use std::collections::{hash_set, HashMap, HashSet};
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct LiveSet {
     live: PerRegFile<u32>,
-    set: FxHashSet<SSAValue>,
+    set: HashSet<SSAValue>,
 }
 
 impl LiveSet {
     pub fn new() -> LiveSet {
-        Default::default()
-    }
-
-    pub fn clear(&mut self) {
-        self.live = Default::default();
-        self.set.clear();
+        LiveSet {
+            live: Default::default(),
+            set: HashSet::new(),
+        }
     }
 
     pub fn contains(&self, ssa: &SSAValue) -> bool {
@@ -41,7 +39,7 @@ impl LiveSet {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &SSAValue> {
+    pub fn iter(&self) -> hash_set::Iter<SSAValue> {
         self.set.iter()
     }
 
@@ -110,8 +108,6 @@ impl LiveSet {
 impl FromIterator<SSAValue> for LiveSet {
     fn from_iter<T: IntoIterator<Item = SSAValue>>(iter: T) -> Self {
         let mut set = LiveSet::new();
-        let iter = iter.into_iter();
-        set.set.reserve(iter.size_hint().0);
         for ssa in iter {
             set.insert(ssa);
         }
@@ -121,8 +117,6 @@ impl FromIterator<SSAValue> for LiveSet {
 
 impl Extend<SSAValue> for LiveSet {
     fn extend<T: IntoIterator<Item = SSAValue>>(&mut self, iter: T) {
-        let iter = iter.into_iter();
-        self.set.reserve(iter.size_hint().0);
         for ssa in iter {
             self.insert(ssa);
         }
@@ -157,7 +151,7 @@ pub trait BlockLiveness {
         let vec_dst_live = live;
 
         // Use a hash set because sources may occur more than once
-        let mut killed: FxHashSet<_> = Default::default();
+        let mut killed = HashSet::new();
         instr.for_each_ssa_use(|ssa| {
             if !self.is_live_after_ip(ssa, ip) {
                 killed.insert(*ssa);
@@ -233,61 +227,69 @@ pub trait Liveness {
     }
 }
 
-#[derive(Default)]
 pub struct SimpleBlockLiveness {
-    defs: BitSet<SSAValue>,
-    uses: BitSet<SSAValue>,
-    last_use: FxHashMap<SSAValue, usize>,
-    live_in: BitSet<SSAValue>,
-    live_out: BitSet<SSAValue>,
+    defs: BitSet,
+    uses: BitSet,
+    last_use: HashMap<u32, usize>,
+    live_in: BitSet,
+    live_out: BitSet,
 }
 
 impl SimpleBlockLiveness {
     fn new() -> Self {
-        Default::default()
+        Self {
+            defs: BitSet::new(),
+            uses: BitSet::new(),
+            last_use: HashMap::new(),
+            live_in: BitSet::new(),
+            live_out: BitSet::new(),
+        }
     }
 
     fn add_def(&mut self, ssa: SSAValue) {
-        self.defs.insert(ssa);
+        self.defs.insert(ssa.idx().try_into().unwrap());
     }
 
     fn add_use(&mut self, ssa: SSAValue, ip: usize) {
-        self.uses.insert(ssa);
-        self.last_use.insert(ssa, ip);
+        self.uses.insert(ssa.idx().try_into().unwrap());
+        self.last_use.insert(ssa.idx(), ip);
     }
 }
 
 impl BlockLiveness for SimpleBlockLiveness {
     fn is_live_after_ip(&self, val: &SSAValue, ip: usize) -> bool {
-        if self.live_out.contains(*val) {
+        if self.live_out.get(val.idx().try_into().unwrap()) {
             true
-        } else if let Some(last_use_ip) = self.last_use.get(val) {
-            *last_use_ip > ip
         } else {
-            false
+            if let Some(last_use_ip) = self.last_use.get(&val.idx()) {
+                *last_use_ip > ip
+            } else {
+                false
+            }
         }
     }
 
     fn is_live_in(&self, val: &SSAValue) -> bool {
-        self.live_in.contains(*val)
+        self.live_in.get(val.idx().try_into().unwrap())
     }
 
     fn is_live_out(&self, val: &SSAValue) -> bool {
-        self.live_out.contains(*val)
+        self.live_out.get(val.idx().try_into().unwrap())
     }
 }
 
 pub struct SimpleLiveness {
-    ssa_block_ip: FxHashMap<SSAValue, (usize, usize)>,
+    ssa_block_ip: HashMap<SSAValue, (usize, usize)>,
     blocks: Vec<SimpleBlockLiveness>,
 }
 
 impl SimpleLiveness {
     pub fn for_function(func: &Function) -> SimpleLiveness {
         let mut l = SimpleLiveness {
-            ssa_block_ip: Default::default(),
+            ssa_block_ip: HashMap::new(),
             blocks: Vec::new(),
         };
+        let mut live_in = Vec::new();
 
         for (bi, b) in func.blocks.iter().enumerate() {
             let mut bl = SimpleBlockLiveness::new();
@@ -303,37 +305,36 @@ impl SimpleLiveness {
             }
 
             l.blocks.push(bl);
+            live_in.push(BitSet::new());
         }
         assert!(l.blocks.len() == func.blocks.len());
+        assert!(live_in.len() == func.blocks.len());
 
-        let mut live_in: Vec<BitSet<SSAValue>> =
-            (0..func.blocks.len()).map(|_| Default::default()).collect();
-        let mut live_out: Vec<BitSet<SSAValue>> =
-            (0..func.blocks.len()).map(|_| Default::default()).collect();
-        BackwardDataflow {
-            cfg: &func.blocks,
-            block_in: &mut live_in[..],
-            block_out: &mut live_out[..],
-            transfer: |block_idx, _, live_in, live_out| {
-                let bl = &l.blocks[block_idx];
-                live_in.union_with(
-                    (live_out.s(..) | bl.uses.s(..)) - bl.defs.s(..),
-                )
-            },
-            join: |live_out, succ_live_in| {
-                *live_out |= succ_live_in.s(..);
-            },
+        let num_ssa = usize::try_from(func.ssa_alloc.max_idx() + 1).unwrap();
+        let mut tmp = BitSet::new();
+        tmp.reserve(num_ssa);
+
+        let mut to_do = true;
+        while to_do {
+            to_do = false;
+            for (b_idx, bl) in l.blocks.iter_mut().enumerate().rev() {
+                // Compute live-out
+                for sb_idx in func.blocks.succ_indices(b_idx) {
+                    to_do |= bl.live_out.union_with(&live_in[*sb_idx]);
+                }
+
+                tmp.clear();
+                tmp.set_words(0..num_ssa, |w| {
+                    (bl.live_out.get_word(w) | bl.uses.get_word(w))
+                        & !bl.defs.get_word(w)
+                });
+
+                to_do |= live_in[b_idx].union_with(&tmp);
+            }
         }
-        .solve();
 
-        for ((bl, b_live_in), b_live_out) in l
-            .blocks
-            .iter_mut()
-            .zip(live_in.into_iter())
-            .zip(live_out.into_iter())
-        {
+        for (bl, b_live_in) in l.blocks.iter_mut().zip(live_in.into_iter()) {
             bl.live_in = b_live_in;
-            bl.live_out = b_live_out;
         }
 
         l
@@ -408,14 +409,14 @@ impl SSAUseDef {
 
 pub struct NextUseBlockLiveness {
     num_instrs: usize,
-    ssa_map: FxHashMap<SSAValue, SSAUseDef>,
+    ssa_map: HashMap<SSAValue, SSAUseDef>,
 }
 
 impl NextUseBlockLiveness {
     fn new(num_instrs: usize) -> Self {
         Self {
             num_instrs: num_instrs,
-            ssa_map: Default::default(),
+            ssa_map: HashMap::new(),
         }
     }
 
@@ -550,50 +551,54 @@ impl NextUseLiveness {
             }
 
             debug_assert!(bi == blocks.len());
-            blocks.push(bl);
+            blocks.push(RefCell::new(bl));
         }
 
-        let mut live_out: Vec<FxHashMap<SSAValue, usize>> =
-            (0..func.blocks.len()).map(|_| Default::default()).collect();
-        BackwardDataflow {
-            cfg: &func.blocks,
-            block_in: &mut blocks[..],
-            block_out: &mut live_out[..],
-            transfer: |_block_idx, _block, live_in, live_out| {
-                let num_instrs = live_in.num_instrs;
-                let mut changed = false;
+        let mut to_do = true;
+        while to_do {
+            to_do = false;
+            for (b_idx, b) in func.blocks.iter().enumerate().rev() {
+                let num_instrs = b.instrs.len();
+                let mut bl = blocks[b_idx].borrow_mut();
 
-                for (&ssa, &first_use_ip) in live_out.iter() {
-                    changed |= live_in
-                        .entry_mut(ssa)
-                        .add_successor_use(num_instrs, first_use_ip);
-                }
-                changed
-            },
-            join: |live_out, succ_live_in| {
-                if live_out.capacity() == 0 {
-                    live_out.reserve(succ_live_in.ssa_map.len());
-                }
+                // Compute live-out
+                for sb_idx in func.blocks.succ_indices(b_idx) {
+                    if *sb_idx == b_idx {
+                        for entry in bl.ssa_map.values_mut() {
+                            if entry.defined {
+                                continue;
+                            }
 
-                for (&ssa, entry) in succ_live_in.ssa_map.iter() {
-                    if entry.defined {
-                        continue;
+                            let Some(first_use_ip) = entry.uses.first() else {
+                                continue;
+                            };
+
+                            to_do |= entry
+                                .add_successor_use(num_instrs, *first_use_ip);
+                        }
+                    } else {
+                        let sbl = blocks[*sb_idx].borrow();
+                        for (ssa, entry) in sbl.ssa_map.iter() {
+                            if entry.defined {
+                                continue;
+                            }
+
+                            let Some(first_use_ip) = entry.uses.first() else {
+                                continue;
+                            };
+
+                            to_do |= bl
+                                .entry_mut(*ssa)
+                                .add_successor_use(num_instrs, *first_use_ip);
+                        }
                     }
-
-                    let Some(&first_use_ip) = entry.uses.first() else {
-                        continue;
-                    };
-
-                    live_out
-                        .entry(ssa)
-                        .and_modify(|val| *val = min(*val, first_use_ip))
-                        .or_insert(first_use_ip);
                 }
-            },
+            }
         }
-        .solve();
 
-        NextUseLiveness { blocks }
+        NextUseLiveness {
+            blocks: blocks.into_iter().map(|bl| bl.into_inner()).collect(),
+        }
     }
 }
 

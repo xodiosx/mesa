@@ -30,16 +30,11 @@
 #define LP_BLD_DEBUG_H
 
 
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdbool.h>
+#include "gallivm/lp_bld.h"
 
-#include "util/detect_os.h"
+#include "util/compiler.h"
+#include "util/u_string.h"
 
-#include <llvm-c/Core.h>
-#include <llvm-c/DebugInfo.h>
-
-struct gallivm_state;
 
 #define GALLIVM_DEBUG_TGSI          (1 << 0)
 #define GALLIVM_DEBUG_IR            (1 << 1)
@@ -47,7 +42,6 @@ struct gallivm_state;
 #define GALLIVM_DEBUG_PERF          (1 << 3)
 #define GALLIVM_DEBUG_GC            (1 << 4)
 #define GALLIVM_DEBUG_DUMP_BC       (1 << 5)
-#define GALLIVM_DEBUG_SYMBOLS       (1 << 8)
 
 #define GALLIVM_PERF_BRILINEAR       (1 << 0)
 #define GALLIVM_PERF_RHO_APPROX      (1 << 1)
@@ -96,21 +90,6 @@ lp_disassemble(LLVMValueRef func, const void *code);
 
 void
 lp_profile(LLVMValueRef func, const void *code);
-
-
-LLVMMetadataRef
-lp_bld_debug_info_type(struct gallivm_state *gallivm, LLVMTypeRef type);
-
-
-void
-lp_function_add_debug_info(struct gallivm_state *gallivm, LLVMValueRef func, LLVMTypeRef func_type);
-
-
-#if DETECT_OS_ANDROID
-#define LP_NIR_SHADER_DUMP_DIR "/data/local/tmp/nir_shaders"
-#else
-#define LP_NIR_SHADER_DUMP_DIR "/tmp/nir_shaders"
-#endif
 
 
 #ifdef __cplusplus

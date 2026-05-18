@@ -565,33 +565,39 @@ vc4_nir_lower_blend_instr(struct vc4_compile *c, nir_builder *b,
 }
 
 static bool
-vc4_nir_lower_blend_impl(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+vc4_nir_lower_blend_block(nir_block *block, struct vc4_compile *c)
 {
-        struct vc4_compile *c = data;
+        nir_foreach_instr_safe(instr, block) {
+                if (instr->type != nir_instr_type_intrinsic)
+                        continue;
+                nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+                if (intr->intrinsic != nir_intrinsic_store_output)
+                        continue;
 
-        if (intr->intrinsic != nir_intrinsic_store_output)
-                return false;
+                unsigned loc = nir_intrinsic_io_semantics(intr).location;
 
-        unsigned loc = nir_intrinsic_io_semantics(intr).location;
+                if (loc != FRAG_RESULT_COLOR &&
+                    loc != FRAG_RESULT_DATA0) {
+                        continue;
+                }
 
-        if (loc != FRAG_RESULT_COLOR &&
-            loc != FRAG_RESULT_DATA0) {
-                return false;
+                nir_builder b = nir_builder_at(nir_before_instr(&intr->instr));
+                vc4_nir_lower_blend_instr(c, &b, intr);
         }
-
-        b->cursor = nir_before_instr(&intr->instr);
-
-        vc4_nir_lower_blend_instr(c, b, intr);
-
         return true;
 }
 
-bool
+void
 vc4_nir_lower_blend(nir_shader *s, struct vc4_compile *c)
 {
-        bool progress =
-                nir_shader_intrinsics_pass(s, vc4_nir_lower_blend_impl,
-                                           nir_metadata_control_flow, c);
+        nir_foreach_function_impl(impl, s) {
+                nir_foreach_block(block, impl) {
+                        vc4_nir_lower_blend_block(block, c);
+                }
+
+                nir_metadata_preserve(impl,
+                                      nir_metadata_control_flow);
+        }
 
         /* If we didn't do alpha-to-coverage on the output color, we still
          * need to pass glSampleMask() through.
@@ -601,8 +607,5 @@ vc4_nir_lower_blend(nir_shader *s, struct vc4_compile *c)
                 nir_builder b = nir_builder_at(nir_after_impl(impl));
 
                 vc4_nir_store_sample_mask(c, &b, nir_load_sample_mask_in(&b));
-                progress = true;
         }
-
-        return progress;
 }

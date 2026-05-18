@@ -100,13 +100,13 @@ fd5_launch_grid(struct fd_context *ctx,
    if (!v)
       return;
 
-   if (ctx->dirty_shader[MESA_SHADER_COMPUTE] & FD_DIRTY_SHADER_PROG)
+   if (ctx->dirty_shader[PIPE_SHADER_COMPUTE] & FD_DIRTY_SHADER_PROG)
       cs_program_emit(ctx, ring, v);
 
    fd5_emit_cs_state(ctx, ring, v);
    fd5_emit_cs_consts(v, ring, ctx, info);
 
-   util_dynarray_foreach (&ctx->global_bindings, struct pipe_resource *, res)
+   u_foreach_bit (i, ctx->global_bindings.enabled_mask)
       nglobal++;
 
    if (nglobal > 0) {
@@ -117,8 +117,10 @@ fd5_launch_grid(struct fd_context *ctx,
        * payload:
        */
       OUT_PKT7(ring, CP_NOP, 2 * nglobal);
-      util_dynarray_foreach (&ctx->global_bindings, struct pipe_resource *, res)
-         OUT_RELOC(ring, fd_resource(*res)->bo, 0, 0, 0);
+      u_foreach_bit (i, ctx->global_bindings.enabled_mask) {
+         struct pipe_resource *prsc = ctx->global_bindings.buf[i];
+         OUT_RELOC(ring, fd_resource(prsc)->bo, 0, 0, 0);
+      }
    }
 
    const unsigned *local_size =

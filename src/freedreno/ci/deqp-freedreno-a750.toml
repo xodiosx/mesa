@@ -2,6 +2,7 @@
 [[deqp]]
 deqp = "/deqp-gles/modules/gles2/deqp-gles2"
 caselists = ["/deqp-gles/mustpass/gles2-main.txt"]
+skips = ["install/freedreno-a6xx-skips.txt"]
 deqp_args = [
     "--deqp-surface-width=256", "--deqp-surface-height=256",
     "--deqp-surface-type=pbuffer", "--deqp-visibility=hidden",
@@ -13,6 +14,7 @@ renderer_check = "FD750"
 [[deqp]]
 deqp = "/deqp-gles/modules/gles3/deqp-gles3"
 caselists = ["/deqp-gles/mustpass/gles3-main.txt"]
+skips = ["install/freedreno-a6xx-skips.txt"]
 deqp_args = [
     "--deqp-surface-width=256", "--deqp-surface-height=256",
     "--deqp-surface-type=pbuffer", "--deqp-visibility=hidden",
@@ -22,6 +24,7 @@ deqp_args = [
 [[deqp]]
 deqp = "/deqp-gles/modules/gles31/deqp-gles31"
 caselists = ["/deqp-gles/mustpass/gles31-main.txt"]
+skips = ["install/freedreno-a6xx-skips.txt"]
 deqp_args = [
     "--deqp-surface-width=256", "--deqp-surface-height=256",
     "--deqp-surface-type=pbuffer", "--deqp-visibility=hidden",
@@ -35,6 +38,7 @@ caselists = [
     "/deqp-gles/mustpass/gles3-khr-main.txt",
     "/deqp-gles/mustpass/gles31-khr-main.txt",
 ]
+skips = ["install/freedreno-a6xx-skips.txt"]
 deqp_args = [
     "--deqp-surface-width=256", "--deqp-surface-height=256",
     "--deqp-surface-type=pbuffer", "--deqp-visibility=hidden",
@@ -49,15 +53,9 @@ deqp = "/deqp-gl/external/openglcts/modules/glcts"
 caselists = [
     "/deqp-gl/mustpass/gl46-main.txt",
 ]
+skips = ["install/freedreno-a6xx-skips.txt"]
 deqp_args = [
     "--deqp-surface-width=256", "--deqp-surface-height=256",
     "--deqp-surface-type=pbuffer", "--deqp-visibility=hidden",
     "--deqp-gl-config-name=rgba8888d24s8ms0",
 ]
-
-[[piglit]]
-piglit_folder = "/piglit"
-profile = "cl"
-process_isolation = true
-  [piglit.env]
-  RUSTICL_ENABLE = "msm"

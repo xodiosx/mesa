@@ -517,9 +517,18 @@ do_clip_tri(struct draw_stage *stage,
       }
 
       /* swap in/out lists */
-      SWAP(inlist, outlist);
-      SWAP(inEdges, outEdges);
-      n = outcount;
+      {
+         struct vertex_header **tmp = inlist;
+         inlist = outlist;
+         outlist = tmp;
+         n = outcount;
+      }
+      {
+         bool *tmp = inEdges;
+         inEdges = outEdges;
+         outEdges = tmp;
+      }
+
    }
 
    /* If constant interpolated, copy provoking vertex attrib to polygon vertex[0]

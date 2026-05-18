@@ -256,7 +256,8 @@ gen_alu(Instruction* instr, delay_ctx& ctx)
       }
    }
 
-   update_alu(ctx, is_valu, is_trans, cycle_info.issue_cycles);
+   update_alu(ctx, is_valu && instr_info.classes[(int)instr->opcode] != instr_class::wmma, is_trans,
+              cycle_info.issue_cycles);
 }
 
 void

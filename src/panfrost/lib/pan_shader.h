@@ -26,11 +26,52 @@
 #define __PAN_SHADER_H__
 
 #include "compiler/nir/nir.h"
-#include "genxml/gen_macros.h"
+#include "panfrost/compiler/bifrost/disassemble.h"
+#include "panfrost/compiler/valhall/disassemble.h"
+#include "panfrost/midgard/disassemble.h"
+#include "panfrost/util/pan_ir.h"
+#include "panfrost/util/pan_lower_framebuffer.h"
 #include "panfrost/lib/pan_props.h"
-#include "panfrost/compiler/pan_compiler.h"
+#include "genxml/gen_macros.h"
+
+void bifrost_preprocess_nir(nir_shader *nir, unsigned gpu_id);
+void midgard_preprocess_nir(nir_shader *nir, unsigned gpu_id);
+
+static inline void
+pan_shader_preprocess(nir_shader *nir, unsigned gpu_id)
+{
+   if (pan_arch(gpu_id) >= 6)
+      bifrost_preprocess_nir(nir, gpu_id);
+   else
+      midgard_preprocess_nir(nir, gpu_id);
+}
+
+static inline void
+pan_shader_disassemble(FILE *fp, const void *code, size_t size, unsigned gpu_id,
+                       bool verbose)
+{
+   if (pan_arch(gpu_id) >= 9)
+      disassemble_valhall(fp, (const uint64_t *)code, size, verbose);
+   else if (pan_arch(gpu_id) >= 6)
+      disassemble_bifrost(fp, code, size, verbose);
+   else
+      disassemble_midgard(fp, code, size, gpu_id, verbose);
+}
+
+uint8_t pan_raw_format_mask_midgard(enum pipe_format *formats);
 
 #ifdef PAN_ARCH
+const nir_shader_compiler_options *GENX(pan_shader_get_compiler_options)(void);
+
+void GENX(pan_shader_compile)(nir_shader *nir,
+                              struct panfrost_compile_inputs *inputs,
+                              struct util_dynarray *binary,
+                              struct pan_shader_info *info);
+
+#if PAN_ARCH >= 6 && PAN_ARCH <= 7
+enum mali_register_file_format
+   GENX(pan_fixup_blend_type)(nir_alu_type T_size, enum pipe_format format);
+#endif
 
 #if PAN_ARCH >= 9
 static inline enum mali_shader_stage
@@ -64,7 +105,7 @@ pan_depth_source(const struct pan_shader_info *info)
                                 : MALI_DEPTH_SOURCE_FIXED_FUNCTION;
 }
 
-#if PAN_ARCH < 9
+#if PAN_ARCH <= 7
 #if PAN_ARCH <= 5
 static inline void
 pan_shader_prepare_midgard_rsd(const struct pan_shader_info *info,
@@ -93,7 +134,7 @@ pan_shader_prepare_midgard_rsd(const struct pan_shader_info *info,
 #define pan_preloads(reg) (preload & BITFIELD64_BIT(reg))
 
 static void
-pan_make_preload(mesa_shader_stage stage, uint64_t preload,
+pan_make_preload(gl_shader_stage stage, uint64_t preload,
                  struct MALI_PRELOAD *out)
 {
    switch (stage) {
@@ -200,7 +241,7 @@ pan_shader_prepare_bifrost_rsd(const struct pan_shader_info *info,
 
 static inline void
 pan_shader_prepare_rsd(const struct pan_shader_info *shader_info,
-                       uint64_t shader_ptr, struct MALI_RENDERER_STATE *rsd)
+                       mali_ptr shader_ptr, struct MALI_RENDERER_STATE *rsd)
 {
 #if PAN_ARCH <= 5
    shader_ptr |= shader_info->midgard.first_tag;

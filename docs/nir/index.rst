@@ -12,4 +12,3 @@ stack.
 
    alu
    tex
-   unit-testing

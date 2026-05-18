@@ -12,14 +12,12 @@ static const driOptionDescription anv_dri_options[] = {
       DRI_CONF_ADAPTIVE_SYNC(true)
       DRI_CONF_VK_X11_OVERRIDE_MIN_IMAGE_COUNT(0)
       DRI_CONF_VK_X11_STRICT_IMAGE_COUNT(false)
-      DRI_CONF_VK_WSI_DISABLE_UNORDERED_SUBMITS(false)
+      DRI_CONF_VK_KHR_PRESENT_WAIT(false)
       DRI_CONF_VK_XWAYLAND_WAIT_READY(false)
       DRI_CONF_ANV_ASSUME_FULL_SUBGROUPS(0)
       DRI_CONF_ANV_ASSUME_FULL_SUBGROUPS_WITH_BARRIER(false)
-      DRI_CONF_ANV_ASSUME_FULL_SUBGROUPS_WITH_SHARED_MEMORY(false)
       DRI_CONF_ANV_DISABLE_FCV(false)
       DRI_CONF_ANV_ENABLE_BUFFER_COMP(false)
-      DRI_CONF_ANV_DISABLE_DRM_AUX_MODIFIERS(false)
       DRI_CONF_ANV_EXTERNAL_MEMORY_IMPLICIT_SYNC(true)
       DRI_CONF_ANV_FORCE_GUC_LOW_LATENCY(false)
       DRI_CONF_ANV_SAMPLE_MASK_OUT_OPENGL_BEHAVIOUR(false)
@@ -34,11 +32,7 @@ static const driOptionDescription anv_dri_options[] = {
       DRI_CONF_ANV_QUERY_COPY_WITH_SHADER_THRESHOLD(6)
       DRI_CONF_ANV_FORCE_INDIRECT_DESCRIPTORS(false)
       DRI_CONF_SHADER_SPILLING_RATE(11)
-      DRI_CONFIG_INTEL_TBIMR(true)
-      DRI_CONFIG_INTEL_VF_DISTRIBUTION(true)
-      DRI_CONFIG_INTEL_TE_DISTRIBUTION(true)
-      DRI_CONFIG_INTEL_STORAGE_CACHE_POLICY_WT(false)
-      DRI_CONF_ANV_LARGE_WORKGROUP_NON_COHERENT_IMAGE_WORKAROUND(false)
+      DRI_CONF_OPT_B(intel_tbimr, true, "Enable TBIMR tiled rendering")
       DRI_CONF_ANV_COMPRESSION_CONTROL_ENABLED(false)
       DRI_CONF_ANV_FAKE_NONLOCAL_MEMORY(false)
       DRI_CONF_OPT_E(intel_stack_id, 512, 256, 2048,
@@ -52,42 +46,23 @@ static const driOptionDescription anv_dri_options[] = {
 
    DRI_CONF_SECTION_DEBUG
       DRI_CONF_ALWAYS_FLUSH_CACHE(false)
-      DRI_CONF_VK_LOWER_TERMINATE_TO_DISCARD(false)
       DRI_CONF_VK_WSI_FORCE_BGRA8_UNORM_FIRST(false)
       DRI_CONF_VK_WSI_FORCE_SWAPCHAIN_TO_CURRENT_EXTENT(false)
       DRI_CONF_VK_X11_IGNORE_SUBOPTIMAL(false)
       DRI_CONF_LIMIT_TRIG_INPUT_RANGE(false)
-#if DETECT_OS_ANDROID && ANDROID_API_LEVEL >= 35
-      DRI_CONF_ANV_EMULATE_READ_WITHOUT_FORMAT(true)
-#else
-      DRI_CONF_ANV_EMULATE_READ_WITHOUT_FORMAT(false)
-#endif
+      DRI_CONF_ANV_MESH_CONV_PRIM_ATTRS_TO_VERT_ATTRS(-2)
       DRI_CONF_FORCE_VK_VENDOR()
       DRI_CONF_FAKE_SPARSE(false)
-      DRI_CONF_CUSTOM_BORDER_COLORS_WITHOUT_FORMAT(!DETECT_OS_ANDROID)
 #if DETECT_OS_ANDROID && ANDROID_API_LEVEL >= 34
       DRI_CONF_VK_REQUIRE_ASTC(true)
 #else
       DRI_CONF_VK_REQUIRE_ASTC(false)
 #endif
-      DRI_CONF_ANV_VF_COMPONENT_PACKING(true)
    DRI_CONF_SECTION_END
 
    DRI_CONF_SECTION_QUALITY
       DRI_CONF_PP_LOWER_DEPTH_RANGE_RATE()
    DRI_CONF_SECTION_END
-};
-
-static const struct debug_control debug_control[] = {
-   { "bindless",     ANV_DEBUG_BINDLESS},
-   { "no-gpl",       ANV_DEBUG_NO_GPL},
-   { "no-sparse",    ANV_DEBUG_NO_SPARSE},
-   { "sparse-trtt",  ANV_DEBUG_SPARSE_TRTT},
-   { "video-decode", ANV_DEBUG_VIDEO_DECODE},
-   { "video-encode", ANV_DEBUG_VIDEO_ENCODE},
-   { "shader-hash",  ANV_DEBUG_SHADER_HASH},
-   { "no-slab",      ANV_DEBUG_NO_SLAB},
-   { NULL,    0 }
 };
 
 VkResult anv_EnumerateInstanceVersion(
@@ -109,7 +84,6 @@ static const struct vk_instance_extension_table instance_extensions = {
 #ifdef ANV_USE_WSI_PLATFORM
    .KHR_get_surface_capabilities2            = true,
    .KHR_surface                              = true,
-   .KHR_surface_maintenance1                 = true,
    .KHR_surface_protected_capabilities       = true,
    .EXT_surface_maintenance1                 = true,
    .EXT_swapchain_colorspace                 = true,
@@ -166,8 +140,6 @@ anv_init_dri_options(struct anv_instance *instance)
        driQueryOptioni(&instance->dri_options, "anv_assume_full_subgroups");
     instance->assume_full_subgroups_with_barrier =
        driQueryOptionb(&instance->dri_options, "anv_assume_full_subgroups_with_barrier");
-    instance->assume_full_subgroups_with_shared_memory =
-       driQueryOptionb(&instance->dri_options, "anv_assume_full_subgroups_with_shared_memory");
     instance->limit_trig_input_range =
        driQueryOptionb(&instance->dri_options, "limit_trig_input_range");
     instance->sample_mask_out_opengl_behaviour =
@@ -180,8 +152,8 @@ anv_init_dri_options(struct anv_instance *instance)
        driQueryOptionb(&instance->dri_options, "no_16bit");
     instance->intel_enable_wa_14018912822 =
        driQueryOptionb(&instance->dri_options, "intel_enable_wa_14018912822");
-    instance->emulate_read_without_format =
-       driQueryOptionb(&instance->dri_options, "anv_emulate_read_without_format");
+    instance->mesh_conv_prim_attrs_to_vert_attrs =
+       driQueryOptioni(&instance->dri_options, "anv_mesh_conv_prim_attrs_to_vert_attrs");
     instance->fp64_workaround_enabled =
        driQueryOptionb(&instance->dri_options, "fp64_workaround_enabled");
     instance->generated_indirect_threshold =
@@ -197,12 +169,6 @@ anv_init_dri_options(struct anv_instance *instance)
     instance->has_fake_sparse =
        driQueryOptionb(&instance->dri_options, "fake_sparse");
     instance->enable_tbimr = driQueryOptionb(&instance->dri_options, "intel_tbimr");
-    instance->enable_vf_distribution =
-       driQueryOptionb(&instance->dri_options, "intel_vf_distribution");
-    instance->enable_te_distribution =
-       driQueryOptionb(&instance->dri_options, "intel_te_distribution");
-    instance->large_workgroup_non_coherent_image_workaround =
-       driQueryOptionb(&instance->dri_options, "anv_large_workgroup_non_coherent_image_workaround");
     instance->disable_fcv =
        driQueryOptionb(&instance->dri_options, "anv_disable_fcv");
     instance->enable_buffer_comp =
@@ -216,27 +182,6 @@ anv_init_dri_options(struct anv_instance *instance)
     instance->anv_upper_bound_descriptor_pool_sampler =
        driQueryOptionb(&instance->dri_options,
                        "anv_upper_bound_descriptor_pool_sampler");
-    instance->custom_border_colors_without_format =
-       driQueryOptionb(&instance->dri_options,
-                       "custom_border_colors_without_format");
-    instance->vf_component_packing =
-       driQueryOptionb(&instance->dri_options, "anv_vf_component_packing");
-    instance->lower_terminate_to_discard =
-       driQueryOptionb(&instance->dri_options, "vk_lower_terminate_to_discard");
-    instance->disable_xe2_drm_ccs_modifiers =
-       driQueryOptionb(&instance->dri_options, "anv_disable_drm_ccs_modifiers");
-
-    if (instance->vk.app_info.engine_name &&
-        !strcmp(instance->vk.app_info.engine_name, "DXVK")) {
-        /* Since 2.3.1+, DXVK uses the application version to signal D3D9. */
-        const bool is_d3d9 = instance->vk.app_info.app_version & 0x1;
-
-        /* This driconf bit enables D3D10+ behaviour for texture coordinate
-         * rounding. As D3D9 wants the Vulkan behaviour instead, apply the
-         * workaround only to D3D10+.
-         */
-        instance->force_filter_addr_rounding &= !is_d3d9;
-    }
 
     instance->stack_ids = driQueryOptioni(&instance->dri_options, "intel_stack_id");
     switch (instance->stack_ids) {
@@ -292,9 +237,6 @@ VkResult anv_CreateInstance(
    VG(VALGRIND_CREATE_MEMPOOL(instance, 0, false));
 
    anv_init_dri_options(instance);
-
-   instance->debug = parse_debug_string(os_get_option("ANV_DEBUG"),
-                                        debug_control);
 
    intel_driver_ds_init();
 

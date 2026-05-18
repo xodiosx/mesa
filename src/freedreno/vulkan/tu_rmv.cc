@@ -11,7 +11,6 @@
 #include "tu_device.h"
 #include "tu_event.h"
 #include "tu_image.h"
-#include "tu_queue.h"
 #include "tu_query_pool.h"
 
 #include <cstdio>
@@ -66,7 +65,7 @@ tu_rmv_fill_device_info(struct tu_device *device,
     */
    snprintf(info->device_name, sizeof(info->device_name), "%s (0x%" PRIx64 ")",
       physical_device->name, physical_device->dev_id.chip_id);
-   info->pcie_family_id = info->pcie_revision_id = info->pcie_device_id = ~0;
+   info->pcie_family_id = info->pcie_revision_id = info->pcie_device_id = 0;
 
    /* TODO: provide relevant information here. */
    info->vram_type = VK_RMV_MEMORY_TYPE_LPDDR5;
@@ -279,7 +278,7 @@ tu_rmv_log_buffer_bind(struct tu_device *device, struct tu_buffer *buffer)
 
    tu_rmv_emit_resource_bind_locked(device,
                                     tu_rmv_get_resource_id_locked(device, buffer),
-                                    buffer->bo ? buffer->vk.device_address : 0,
+                                    buffer->bo ? buffer->iova : 0,
                                     buffer->vk.size);
 
    simple_mtx_unlock(&device->vk.memory_trace_data.token_mtx);
@@ -339,8 +338,8 @@ tu_rmv_log_image_bind(struct tu_device *device, struct tu_image *image)
 {
    simple_mtx_lock(&device->vk.memory_trace_data.token_mtx);
 
-   uint64_t address = image->iova;
-   uint64_t size = image->iova ? image->total_size : 0;
+   uint64_t address = image->bo ? image->iova : 0;
+   uint64_t size = image->bo ? image->total_size : 0;
    tu_rmv_emit_resource_bind_locked(device,
                                     tu_rmv_get_resource_id_locked(device, image),
                                     address, size);
@@ -395,11 +394,6 @@ void
 tu_rmv_log_query_pool_create(struct tu_device *device,
                              struct tu_query_pool *query_pool)
 {
-   if (query_pool->vk.query_type != VK_QUERY_TYPE_OCCLUSION &&
-       query_pool->vk.query_type != VK_QUERY_TYPE_PIPELINE_STATISTICS &&
-       query_pool->vk.query_type != VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT)
-      return;
-
    simple_mtx_lock(&device->vk.memory_trace_data.token_mtx);
 
    struct vk_rmv_resource_create_token token = {
@@ -519,8 +513,10 @@ tu_rmv_log_event_create(struct tu_device *device,
    vk_rmv_emit_token(&device->vk.memory_trace_data,
                      VK_RMV_TOKEN_TYPE_RESOURCE_CREATE, &token);
 
-   tu_rmv_emit_resource_bind_locked(device, token.resource_id,
-                                    event->bo.iova, event->bo.size);
+   if (event->bo) {
+      tu_rmv_emit_resource_bind_locked(device, token.resource_id,
+                                       event->bo->iova, event->bo->size);
+   }
 
    simple_mtx_unlock(&device->vk.memory_trace_data.token_mtx);
 }

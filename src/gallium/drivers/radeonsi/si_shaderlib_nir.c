@@ -5,29 +5,17 @@
  */
 
 #include "gallium/auxiliary/nir/pipe_nir.h"
+#define AC_SURFACE_INCLUDE_NIR
 #include "ac_surface.h"
-#include "ac_nir_surface.h"
 #include "si_pipe.h"
 #include "si_query.h"
 #include "aco_interface.h"
 #include "nir_format_convert.h"
 #include "ac_nir_helpers.h"
-#include "nir/nir_serialize.h"
 
 void *si_create_shader_state(struct si_context *sctx, nir_shader *nir)
 {
-   static blake3_hash zeros;
-
-   if (!memcmp(nir->info.source_blake3, zeros, sizeof(blake3_hash))) {
-      struct blob blob = {};
-
-      blob_init(&blob);
-      nir_serialize(&blob, nir, false);
-      _mesa_blake3_compute(blob.data, blob.size, nir->info.source_blake3);
-      blob_finish(&blob);
-   }
-
-   sctx->b.screen->finalize_nir(sctx->b.screen, nir, true);
+   sctx->b.screen->finalize_nir(sctx->b.screen, nir);
    return pipe_shader_from_nir(&sctx->b, nir);
 }
 
@@ -38,7 +26,7 @@ static void unpack_2x16(nir_builder *b, nir_def *src, nir_def **x, nir_def **y)
    *y = nir_ushr_imm(b, src, 16);
 }
 
-void *si_create_dcc_retile_cs(struct si_context *sctx, const struct radeon_surf *surf)
+void *si_create_dcc_retile_cs(struct si_context *sctx, struct radeon_surf *surf)
 {
    nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_COMPUTE, sctx->screen->nir_options,
                                                   "dcc_retile");
@@ -144,7 +132,7 @@ void *si_create_clear_buffer_rmw_cs(struct si_context *sctx)
 
    /* address = address * 16; (byte offset, loading one vec4 per thread) */
    address = nir_ishl_imm(&b, address, 4);
-
+   
    nir_def *zero = nir_imm_int(&b, 0);
    nir_def *data = nir_load_ssbo(&b, 4, 32, zero, address, .align_mul = 4);
 
@@ -176,7 +164,6 @@ void *si_create_passthrough_tcs(struct si_context *sctx)
 
    nir_shader *tcs = nir_create_passthrough_tcs_impl(sctx->screen->nir_options, locations,
                                                      info->num_outputs, sctx->patch_vertices);
-   NIR_PASS(_, tcs, nir_lower_system_values);
 
    return si_create_shader_state(sctx, tcs);
 }
@@ -313,6 +300,10 @@ void *si_get_blitter_vs(struct si_context *sctx, enum blitter_attrib_type type, 
       vs = num_layers > 1 ? &sctx->vs_blit_pos_layered : &sctx->vs_blit_pos;
       vs_blit_property = SI_VS_BLIT_SGPRS_POS;
       break;
+   case UTIL_BLITTER_ATTRIB_COLOR:
+      vs = num_layers > 1 ? &sctx->vs_blit_color_layered : &sctx->vs_blit_color;
+      vs_blit_property = SI_VS_BLIT_SGPRS_POS_COLOR;
+      break;
    case UTIL_BLITTER_ATTRIB_TEXCOORD_XY:
    case UTIL_BLITTER_ATTRIB_TEXCOORD_XYZW:
       assert(num_layers == 1);
@@ -337,26 +328,33 @@ void *si_get_blitter_vs(struct si_context *sctx, enum blitter_attrib_type type, 
    /* Tell the shader to load VS inputs from SGPRs: */
    b.shader->info.vs.blit_sgprs_amd = vs_blit_property;
    b.shader->info.vs.window_space_position = true;
-   b.shader->info.io_lowered = true;
 
-   nir_def *pos = nir_load_input(&b, 4, 32, nir_imm_int(&b, 0),
-                                 .io_semantics.location = VERT_ATTRIB_GENERIC0);
-   nir_store_output(&b, pos, nir_imm_int(&b, 0),
-                    .io_semantics.location = VARYING_SLOT_POS);
+   const struct glsl_type *vec4 = glsl_vec4_type();
+
+   nir_copy_var(&b,
+                nir_create_variable_with_location(b.shader, nir_var_shader_out,
+                                                  VARYING_SLOT_POS, vec4),
+                nir_create_variable_with_location(b.shader, nir_var_shader_in,
+                                                  VERT_ATTRIB_GENERIC0, vec4));
 
    if (type != UTIL_BLITTER_ATTRIB_NONE) {
-      nir_def *attr = nir_load_input(&b, 4, 32, nir_imm_int(&b, 0),
-                                     .io_semantics.location = VERT_ATTRIB_GENERIC1);
-      nir_store_output(&b, attr, nir_imm_int(&b, 0),
-                       .io_semantics.location = VARYING_SLOT_VAR0);
+      nir_copy_var(&b,
+                   nir_create_variable_with_location(b.shader, nir_var_shader_out,
+                                                     VARYING_SLOT_VAR0, vec4),
+                   nir_create_variable_with_location(b.shader, nir_var_shader_in,
+                                                     VERT_ATTRIB_GENERIC1, vec4));
    }
 
    if (num_layers > 1) {
-      nir_store_output(&b, nir_load_instance_id(&b), nir_imm_int(&b, 0),
-                       .io_semantics.location = VARYING_SLOT_LAYER);
-   }
+      nir_variable *out_layer =
+         nir_create_variable_with_location(b.shader, nir_var_shader_out,
+                                           VARYING_SLOT_LAYER, glsl_int_type());
+      out_layer->data.interpolation = INTERP_MODE_NONE;
 
-   NIR_PASS(_, b.shader, nir_recompute_io_bases, nir_var_shader_in | nir_var_shader_out);
+      nir_copy_var(&b, out_layer,
+                   nir_create_variable_with_location(b.shader, nir_var_system_value,
+                                                     SYSTEM_VALUE_INSTANCE_ID, glsl_int_type()));
+   }
 
    *vs = si_create_shader_state(sctx, b.shader);
    return *vs;
@@ -502,7 +500,10 @@ void *si_create_query_result_cs(struct si_context *sctx)
             nir_def *result_index = nir_load_var(&b, outer_loop_iter);
             nir_def *is_result_index_out_of_bound =
                nir_uge(&b, result_index, nir_channel(&b, buff_0, 2));
-            nir_break_if(&b, is_result_index_out_of_bound);
+            nir_if *if_out_of_bound = nir_push_if(&b, is_result_index_out_of_bound); {
+               nir_jump(&b, nir_jump_break);
+            }
+            nir_pop_if(&b, if_out_of_bound);
 
             /* Load fence and check result availability.
              *    pitch = i * result_stride;
@@ -521,7 +522,10 @@ void *si_create_query_result_cs(struct si_context *sctx)
              *       break;
              *    }
              */
-            nir_break_if(&b, nir_i2b(&b, bitmask));
+            nir_if *if_result_available = nir_push_if(&b, nir_i2b(&b, bitmask)); {
+               nir_jump(&b, nir_jump_break);
+            }
+            nir_pop_if(&b, if_result_available);
 
             /* Inner loop iterator.
              *    uint32_t i = 0;
@@ -598,7 +602,10 @@ void *si_create_query_result_cs(struct si_context *sctx)
                /* } while (i < pair_count);
                */
                nir_def *is_pair_count_exceeded = nir_uge(&b, i, nir_channel(&b, buff_1, 2));
-               nir_break_if(&b, is_pair_count_exceeded);
+               nir_if *if_pair_count_exceeded = nir_push_if(&b, is_pair_count_exceeded); {
+                  nir_jump(&b, nir_jump_break);
+               }
+               nir_pop_if(&b, if_pair_count_exceeded);
             }
             nir_pop_loop(&b, loop_inner);
 
@@ -821,7 +828,10 @@ void *gfx11_create_sh_query_result_cs(struct si_context *sctx)
     */
    nir_loop *loop_outer = nir_push_loop(&b); {
       nir_def *condition = nir_load_var(&b, result_remaining);
-      nir_break_if(&b, nir_ieq(&b, condition, zero));
+      nir_if *if_not_condition = nir_push_if(&b, nir_ieq(&b, condition, zero)); {
+         nir_jump(&b, nir_jump_break);
+      }
+      nir_pop_if(&b, if_not_condition);
 
       /* result_remaining--; */
       condition = nir_iadd(&b, condition, minus_one);
@@ -841,7 +851,10 @@ void *gfx11_create_sh_query_result_cs(struct si_context *sctx)
       nir_def *is_zero = nir_ieq(&b, fence, zero);
       nir_def *y_value = nir_isub(&b, zero, nir_b2i32(&b, is_zero));
       nir_store_var(&b, acc_missing, y_value, 0x1);
-      nir_break_if(&b, is_zero);
+      nir_if *if_ssbo_zero = nir_push_if(&b, is_zero); {
+         nir_jump(&b, nir_jump_break);
+      }
+      nir_pop_if(&b, if_ssbo_zero);
 
       /* stream_offset = base_offset + offset; */
       nir_def *s_offset = nir_iadd(&b, b_offset, nir_channel(&b, buff_0, 1));
@@ -910,7 +923,10 @@ void *gfx11_create_sh_query_result_cs(struct si_context *sctx)
             loop_count = nir_iadd(&b, loop_count, minus_one);
             nir_store_var(&b, count, loop_count, 0x1);
 
-            nir_break_if(&b, nir_ieq(&b, loop_count, zero));
+            nir_if *if_zero = nir_push_if(&b, nir_ieq(&b, loop_count, zero)); {
+               nir_jump(&b, nir_jump_break);
+            }
+            nir_pop_if(&b, if_zero);
          }
          nir_pop_loop(&b, loop_inner); /* Inner loop end */
       }

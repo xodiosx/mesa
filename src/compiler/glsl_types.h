@@ -63,9 +63,6 @@ enum glsl_base_type {
    GLSL_TYPE_INT,
    GLSL_TYPE_FLOAT,
    GLSL_TYPE_FLOAT16,
-   GLSL_TYPE_BFLOAT16,
-   GLSL_TYPE_FLOAT_E4M3FN,
-   GLSL_TYPE_FLOAT_E5M2,
    GLSL_TYPE_DOUBLE,
    GLSL_TYPE_UINT8,
    GLSL_TYPE_INT8,
@@ -102,15 +99,12 @@ static unsigned glsl_base_type_bit_size(enum glsl_base_type type)
       return 32;
 
    case GLSL_TYPE_FLOAT16:
-   case GLSL_TYPE_BFLOAT16:
    case GLSL_TYPE_UINT16:
    case GLSL_TYPE_INT16:
       return 16;
 
    case GLSL_TYPE_UINT8:
    case GLSL_TYPE_INT8:
-   case GLSL_TYPE_FLOAT_E4M3FN:
-   case GLSL_TYPE_FLOAT_E5M2:
       return 8;
 
    case GLSL_TYPE_DOUBLE:
@@ -158,16 +152,6 @@ static inline bool glsl_base_type_is_integer(enum glsl_base_type type)
           type == GLSL_TYPE_IMAGE;
 }
 
-static inline bool glsl_base_type_is_float(enum glsl_base_type type)
-{
-   return type == GLSL_TYPE_FLOAT ||
-          type == GLSL_TYPE_FLOAT16 ||
-          type == GLSL_TYPE_BFLOAT16 ||
-          type == GLSL_TYPE_FLOAT_E4M3FN ||
-          type == GLSL_TYPE_FLOAT_E5M2 ||
-          type == GLSL_TYPE_DOUBLE;
-}
-
 static inline unsigned int
 glsl_base_type_get_bit_size(const enum glsl_base_type base_type)
 {
@@ -183,15 +167,12 @@ glsl_base_type_get_bit_size(const enum glsl_base_type base_type)
       return 32;
 
    case GLSL_TYPE_FLOAT16:
-   case GLSL_TYPE_BFLOAT16:
    case GLSL_TYPE_UINT16:
    case GLSL_TYPE_INT16:
       return 16;
 
    case GLSL_TYPE_UINT8:
    case GLSL_TYPE_INT8:
-   case GLSL_TYPE_FLOAT_E4M3FN:
-   case GLSL_TYPE_FLOAT_E5M2:
       return 8;
 
    case GLSL_TYPE_DOUBLE:
@@ -203,7 +184,7 @@ glsl_base_type_get_bit_size(const enum glsl_base_type base_type)
       return 64;
 
    default:
-      UNREACHABLE("unknown base type");
+      unreachable("unknown base type");
    }
 
    return 0;
@@ -251,12 +232,6 @@ glsl_signed_base_type_of(enum glsl_base_type type)
    }
 }
 
-/* Change integer types to be signed or unsigned.  Other types remain
- * unchanged.
- */
-enum glsl_base_type
-glsl_apply_signedness_to_base_type(enum glsl_base_type type, bool signedness);
-
 int
 glsl_get_sampler_dim_coordinate_components(enum glsl_sampler_dim dim);
 
@@ -286,13 +261,6 @@ enum {
    GLSL_PRECISION_HIGH,
    GLSL_PRECISION_MEDIUM,
    GLSL_PRECISION_LOW
-};
-
-enum {
-   GLSL_PIXEL_LOCAL_STORAGE_NONE = 0,
-   GLSL_PIXEL_LOCAL_STORAGE_IN,
-   GLSL_PIXEL_LOCAL_STORAGE_OUT,
-   GLSL_PIXEL_LOCAL_STORAGE_INOUT
 };
 
 enum glsl_cmat_use {
@@ -474,11 +442,6 @@ struct glsl_struct_field {
          unsigned precision:2;
 
          /**
-          * Pixel local storage qualifier
-          */
-         unsigned pixel_local_storage:2;
-
-         /**
           * Memory qualifiers, applicable to buffer variables defined in shader
           * storage buffer objects (SSBOs)
           */
@@ -496,12 +459,6 @@ struct glsl_struct_field {
          unsigned explicit_xfb_buffer:1;
 
          unsigned implicit_sized_array:1;
-
-         /**
-          * For interface blocks, 1 if this variable is a per-primitive input or output
-          * (as in ir_variable::patch). 0 otherwise.
-          */
-         unsigned per_primitive:1;
       };
       unsigned flags;
    };
@@ -581,7 +538,7 @@ glsl_type_is_struct_or_ifc(const glsl_type *t)
 static inline bool
 glsl_type_is_packed(const glsl_type *t)
 {
-   return (t->packed != 0);
+   return t->packed;
 }
 
 static inline bool
@@ -659,21 +616,9 @@ glsl_type_is_float_16_32_64(const glsl_type *t)
 }
 
 static inline bool
-glsl_type_is_bfloat_16(const glsl_type *t)
+glsl_type_is_float_32_64(const glsl_type *t)
 {
-   return t->base_type == GLSL_TYPE_BFLOAT16;
-}
-
-static inline bool
-glsl_type_is_e4m3fn(const glsl_type *t)
-{
-   return t->base_type == GLSL_TYPE_FLOAT_E4M3FN;
-}
-
-static inline bool
-glsl_type_is_e5m2(const glsl_type *t)
-{
-   return t->base_type == GLSL_TYPE_FLOAT_E5M2;
+   return glsl_type_is_float(t) || glsl_type_is_double(t);
 }
 
 static inline bool
@@ -741,14 +686,14 @@ static inline bool
 glsl_matrix_type_is_row_major(const glsl_type *t)
 {
    assert((glsl_type_is_matrix(t) && t->explicit_stride) || glsl_type_is_interface(t));
-   return (t->interface_row_major != 0);
+   return t->interface_row_major;
 }
 
 static inline bool
 glsl_sampler_type_is_shadow(const glsl_type *t)
 {
    assert(glsl_type_is_sampler(t));
-   return (t->sampler_shadow != 0);
+   return t->sampler_shadow;
 }
 
 static inline bool
@@ -757,14 +702,14 @@ glsl_sampler_type_is_array(const glsl_type *t)
    assert(glsl_type_is_sampler(t) ||
           glsl_type_is_texture(t) ||
           glsl_type_is_image(t));
-   return (t->sampler_array != 0);
+   return t->sampler_array;
 }
 
 static inline bool
 glsl_struct_type_is_packed(const glsl_type *t)
 {
    assert(glsl_type_is_struct(t));
-   return (t->packed != 0);
+   return t->packed;
 }
 
 /**
@@ -992,9 +937,6 @@ static inline const glsl_type *glsl_int8_t_type(void) { return &glsl_type_builti
 static inline const glsl_type *glsl_uint8_t_type(void) { return &glsl_type_builtin_uint8_t; }
 static inline const glsl_type *glsl_bool_type(void) { return &glsl_type_builtin_bool; }
 static inline const glsl_type *glsl_atomic_uint_type(void) { return &glsl_type_builtin_atomic_uint; }
-static inline const glsl_type *glsl_bfloat16_t_type(void) { return &glsl_type_builtin_bfloat16_t; }
-static inline const glsl_type *glsl_e4m3fn_t_type(void) { return &glsl_type_builtin_e4m3fn_t; }
-static inline const glsl_type *glsl_e5m2_t_type(void) { return &glsl_type_builtin_e5m2_t; }
 
 static inline const glsl_type *
 glsl_floatN_t_type(unsigned bit_size)
@@ -1004,17 +946,7 @@ glsl_floatN_t_type(unsigned bit_size)
    case 32: return &glsl_type_builtin_float;
    case 64: return &glsl_type_builtin_double;
    default:
-      UNREACHABLE("Unsupported bit size");
-   }
-}
-
-static inline const glsl_type *
-glsl_bfloatN_t_type(unsigned bit_size)
-{
-   switch (bit_size) {
-   case 16: return &glsl_type_builtin_bfloat16_t;
-   default:
-      UNREACHABLE("Unsupported bit size");
+      unreachable("Unsupported bit size");
    }
 }
 
@@ -1027,7 +959,7 @@ glsl_intN_t_type(unsigned bit_size)
    case 32: return &glsl_type_builtin_int;
    case 64: return &glsl_type_builtin_int64_t;
    default:
-      UNREACHABLE("Unsupported bit size");
+      unreachable("Unsupported bit size");
    }
 }
 
@@ -1040,15 +972,12 @@ glsl_uintN_t_type(unsigned bit_size)
    case 32: return &glsl_type_builtin_uint;
    case 64: return &glsl_type_builtin_uint64_t;
    default:
-      UNREACHABLE("Unsupported bit size");
+      unreachable("Unsupported bit size");
    }
 }
 
 const glsl_type *glsl_vec_type(unsigned components);
 const glsl_type *glsl_f16vec_type(unsigned components);
-const glsl_type *glsl_bf16vec_type(unsigned components);
-const glsl_type *glsl_e4m3fnvec_type(unsigned components);
-const glsl_type *glsl_e5m2vec_type(unsigned components);
 const glsl_type *glsl_dvec_type(unsigned components);
 const glsl_type *glsl_ivec_type(unsigned components);
 const glsl_type *glsl_uvec_type(unsigned components);
@@ -1213,7 +1142,7 @@ glsl_texture_type_to_sampler(const glsl_type *t, bool is_shadow)
 {
    assert(glsl_type_is_texture(t));
    return glsl_sampler_type((enum glsl_sampler_dim)t->sampler_dimensionality,
-                            is_shadow, (t->sampler_array != 0),
+                            is_shadow, t->sampler_array,
                             (enum glsl_base_type)t->sampled_type);
 }
 
@@ -1222,7 +1151,7 @@ glsl_sampler_type_to_texture(const glsl_type *t)
 {
    assert(glsl_type_is_sampler(t) && !glsl_type_is_bare_sampler(t));
    return glsl_texture_type((enum glsl_sampler_dim)t->sampler_dimensionality,
-                            (t->sampler_array != 0),
+                            t->sampler_array,
                             (enum glsl_base_type)t->sampled_type);
 }
 
@@ -1243,7 +1172,7 @@ unsigned glsl_type_get_image_count(const glsl_type *t);
  *
  * This is the underlying recursive type_size function for
  * count_attribute_slots() (vertex inputs and varyings) but also for
- * gallium's !pipe_caps.packed_uniforms case.
+ * gallium's !PIPE_CAP_PACKED_UNIFORMS case.
  */
 unsigned glsl_count_vec4_slots(const glsl_type *t, bool is_gl_vertex_input, bool is_bindless);
 
@@ -1251,7 +1180,7 @@ unsigned glsl_count_vec4_slots(const glsl_type *t, bool is_gl_vertex_input, bool
  * Calculate the number of vec4 slots required to hold this type.
  *
  * This is the underlying recursive type_size function for
- * gallium's pipe_caps.packed_uniforms case.
+ * gallium's PIPE_CAP_PACKED_UNIFORMS case.
  */
 unsigned glsl_count_dword_slots(const glsl_type *t, bool is_bindless);
 
@@ -1401,10 +1330,10 @@ glsl_get_explicit_interface_type(const glsl_type *t, bool supports_std430)
 {
    enum glsl_interface_packing packing = glsl_get_internal_ifc_packing(t, supports_std430);
    if (packing == GLSL_INTERFACE_PACKING_STD140) {
-      return glsl_get_explicit_std140_type(t, (t->interface_row_major != 0));
+      return glsl_get_explicit_std140_type(t, t->interface_row_major);
    } else {
       assert(packing == GLSL_INTERFACE_PACKING_STD430);
-      return glsl_get_explicit_std430_type(t, (t->interface_row_major != 0));
+      return glsl_get_explicit_std430_type(t, t->interface_row_major);
    }
 }
 

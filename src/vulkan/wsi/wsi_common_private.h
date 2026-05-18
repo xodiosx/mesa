@@ -41,6 +41,8 @@ struct wsi_swapchain;
 #define WSI_DEBUG_LINEAR      (1ull << 3)
 #define WSI_DEBUG_DXGI        (1ull << 4)
 #define WSI_DEBUG_NOWLTS      (1ull << 5)
+#define WSI_DEBUG_BLIT        (1ull << 8)
+#define WSI_DEBUG_FORCESYNC   (1ull << 9)
 
 extern uint64_t WSI_DEBUG;
 
@@ -48,7 +50,7 @@ enum wsi_image_type {
    WSI_IMAGE_TYPE_CPU,
    WSI_IMAGE_TYPE_DRM,
    WSI_IMAGE_TYPE_DXGI,
-   WSI_IMAGE_TYPE_METAL,
+   WSI_IMAGE_TYPE_ANDROID,
 };
 
 struct wsi_base_image_params {
@@ -65,7 +67,6 @@ struct wsi_drm_image_params {
    struct wsi_base_image_params base;
 
    bool same_gpu;
-   /* See wsi_image_info.explicit_sync. */
    bool explicit_sync;
 
    uint32_t num_modifier_lists;
@@ -87,23 +88,12 @@ struct wsi_image_info {
    VkExternalMemoryImageCreateInfo ext_mem;
    VkImageFormatListCreateInfo format_list;
    VkImageDrmFormatModifierListCreateInfoEXT drm_mod_list;
-   VkColorSpaceKHR color_space;
+#ifdef __TERMUX__
+   struct AHardwareBuffer_Desc *ahardware_buffer_desc;
+#endif
 
    enum wsi_image_type image_type;
-
-   /**
-    * If set, the WSI backend and the WSI device support timeline-based explicit
-    * synchronization.  The device check requires non-emulated timeline
-    * semaphores, so they can be exported as an opaque fd.
-    *
-    * The present will take in the explicit_sync[WSI_ES_ACQUIRE] timeline point
-    * and not present until that completes, and sets up the
-    * explicit_sync[WSI_ES_RELEASE] timeline point for when the image is done
-    * being used by the compositor (whether that's a GPU composite completing,
-    * or the scanned-out frame being flipped away from).
-    */
    bool explicit_sync;
-
    bool prime_use_linear_modifier;
 
    /* Not really part of VkImageCreateInfo but needed to figure out the
@@ -134,9 +124,7 @@ struct wsi_image_info {
 
 enum wsi_explicit_sync_timelines
 {
-   /** Timeline point that must be passed before the display can start reading from the image */
    WSI_ES_ACQUIRE,
-   /** Timeline point that indicates that the display is done reading from this image. */
    WSI_ES_RELEASE,
 
    WSI_ES_COUNT,
@@ -164,10 +152,6 @@ struct wsi_image {
       VkImage image;
       VkDeviceMemory memory;
       VkCommandBuffer *cmd_buffers;
-      /* Whether the backing memory of the blit dst buffer is shared directly
-       * with the compositor instead of being mapped via vkMapMemory locally.
-       */
-      bool to_foreign_queue;
    } blit;
    /* Whether or not the image has been acquired
     * on the CPU side via acquire_next_image.
@@ -188,6 +172,9 @@ struct wsi_image {
    int dma_buf_fd;
 #endif
    void *cpu_map;
+#ifdef __TERMUX__
+   struct AHardwareBuffer *ahardware_buffer;
+#endif
 };
 
 struct wsi_swapchain {
@@ -195,29 +182,13 @@ struct wsi_swapchain {
 
    const struct wsi_device *wsi;
 
-   VkSwapchainCreateFlagsKHR create_flags;
-
    VkDevice device;
    VkAllocationCallbacks alloc;
    VkFence* fences;
    VkPresentModeKHR present_mode;
-   /**
-    * Timeline for presents completing according to VK_KHR_present_wait.  The
-    * present should complete as close as possible (before or after!) to the
-    * first pixel being scanned out.
-    */
    VkSemaphore present_id_timeline;
 
    int signal_dma_buf_from_semaphore;
-   /**
-    * Optional semaphore for implicit-sync swapchains.  It will be signaled by
-    * the pre-present vkQueueSubmit2, and its syncobj will get imported into the
-    * image's dma-buf before being presented.
-    *
-    * If not set (due to older kernels missing sync-file import/export), for
-    * implicit-sync swapchains, then you have to support
-    * create_sync_for_memory().
-    */
    VkSemaphore dma_buf_semaphore;
 
    struct wsi_image_info image_info;
@@ -234,7 +205,7 @@ struct wsi_swapchain {
        * The created queue will be stored here and will be used to execute the
        * buffer blit instead of using the present queue.
        */
-      struct vk_queue *queue;
+      VkQueue queue;
    } blit;
 
    bool capture_key_pressed;
@@ -256,16 +227,11 @@ struct wsi_swapchain {
    VkResult (*wait_for_present)(struct wsi_swapchain *swap_chain,
                                 uint64_t present_id,
                                 uint64_t timeout);
-   VkResult (*wait_for_present2)(struct wsi_swapchain *swap_chain,
-                                 uint64_t present_id,
-                                 uint64_t timeout);
    VkResult (*release_images)(struct wsi_swapchain *swap_chain,
                               uint32_t count,
                               const uint32_t *indices);
    void (*set_present_mode)(struct wsi_swapchain *swap_chain,
                             VkPresentModeKHR mode);
-   void (*set_hdr_metadata)(struct wsi_swapchain *swap_chain,
-                            const VkHdrMetadataEXT* pMetadata);
 };
 
 bool
@@ -409,10 +375,6 @@ wsi_drm_wait_for_explicit_sync_release(struct wsi_swapchain *chain,
                                        struct wsi_image **images,
                                        uint64_t rel_timeout_ns,
                                        uint32_t *image_index);
-
-VkResult
-wsi_drm_init_swapchain_implicit_sync(struct wsi_swapchain *chain);
-
 #endif
 
 struct wsi_interface {
@@ -494,21 +456,16 @@ void wsi_headless_finish_wsi(struct wsi_device *wsi_device,
 VK_DEFINE_NONDISP_HANDLE_CASTS(wsi_swapchain, base, VkSwapchainKHR,
                                VK_OBJECT_TYPE_SWAPCHAIN_KHR)
 
-#if defined(VK_USE_PLATFORM_METAL_EXT)
-struct wsi_metal_image_params {
-   struct wsi_base_image_params base;
-   /* Software implementations like lavapipe cannot render to an MTLTexture
-    * directly and therefore require a blit
-    */
-   bool can_render_to_texture;
-};
+enum wsi_swapchain_blit_type
+wsi_get_android_blit_type(const struct wsi_device *wsi,
+                      const struct wsi_base_image_params *params,
+                                   VkDevice device);
 
-VkResult
-wsi_metal_configure_image(const struct wsi_swapchain *chain,
-                          const VkSwapchainCreateInfoKHR *pCreateInfo,
-                          const struct wsi_metal_image_params *params,
-                          struct wsi_image_info *info);
-#endif /* defined(VK_USE_PLATFORM_METAL_EXT) */
+VkResult wsi_configure_android_image(
+   const struct wsi_swapchain *chain,
+   const VkSwapchainCreateInfoKHR *pCreateInfo,
+   const struct wsi_base_image_params *params,
+   struct wsi_image_info *info);
 
 #ifdef __cplusplus
 }

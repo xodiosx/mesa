@@ -26,12 +26,11 @@
 
 #include "blorp_priv.h"
 #include "dev/intel_device_info.h"
-#include "common/intel_common.h"
 #include "common/intel_compute_slm.h"
 #include "common/intel_sample_positions.h"
 #include "common/intel_l3_config.h"
 #include "genxml/gen_macros.h"
-#include "compiler/brw/brw_compiler.h"
+#include "intel/compiler/brw_compiler.h"
 
 /**
  * This file provides the blorp pipeline setup and execution functionality.
@@ -252,7 +251,7 @@ _blorp_combine_address(struct blorp_batch *batch, void *location,
 static void
 emit_urb_config(struct blorp_batch *batch,
                 const struct blorp_params *params,
-                struct intel_urb_config *urb_cfg)
+                UNUSED enum intel_urb_deref_block_size *deref_block_size)
 {
    /* Once vertex fetcher has written full VUE entries with complete
     * header the space requirement is as follows per vertex (in bytes):
@@ -272,36 +271,26 @@ emit_urb_config(struct blorp_batch *batch,
    /* The URB size is expressed in units of 64 bytes (512 bits) */
    const unsigned vs_entry_size = DIV_ROUND_UP(total_needed, 64);
 
-   *urb_cfg = (struct intel_urb_config) {
+   struct intel_urb_config urb_cfg = {
       .size = { vs_entry_size, 1, 1, 1 },
    };
 
    bool constrained;
    intel_get_urb_config(batch->blorp->compiler->brw->devinfo,
                         blorp_get_l3_config(batch),
-                        false, false, urb_cfg, &constrained);
+                        false, false, &urb_cfg,
+                        deref_block_size, &constrained);
 
    /* Tell drivers about the config. */
-   blorp_pre_emit_urb_config(batch, urb_cfg);
+   blorp_pre_emit_urb_config(batch, &urb_cfg);
 
    for (int i = 0; i <= MESA_SHADER_GEOMETRY; i++) {
-#if GFX_VER >= 12
-      blorp_emit(batch, GENX(3DSTATE_URB_ALLOC_VS), urb) {
-         urb._3DCommandSubOpcode            += i;
-         urb.VSURBEntryAllocationSize        = urb_cfg->size[i] - 1;
-         urb.VSURBStartingAddressSlice0      = urb_cfg->start[i];
-         urb.VSURBStartingAddressSliceN      = urb_cfg->start[i];
-         urb.VSNumberofURBEntriesSlice0      = urb_cfg->entries[i];
-         urb.VSNumberofURBEntriesSliceN      = urb_cfg->entries[i];
-      }
-#else
       blorp_emit(batch, GENX(3DSTATE_URB_VS), urb) {
          urb._3DCommandSubOpcode      += i;
-         urb.VSURBStartingAddress      = urb_cfg->start[i];
-         urb.VSURBEntryAllocationSize  = urb_cfg->size[i] - 1;
-         urb.VSNumberofURBEntries      = urb_cfg->entries[i];
+         urb.VSURBStartingAddress      = urb_cfg.start[i];
+         urb.VSURBEntryAllocationSize  = urb_cfg.size[i] - 1;
+         urb.VSNumberofURBEntries      = urb_cfg.entries[i];
       }
-#endif
    }
 
    if (batch->blorp->config.use_mesh_shading) {
@@ -593,18 +582,6 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
       }
    }
 
-   if (batch->flags & BLORP_BATCH_EMIT_3DSTATE_VF) {
-      blorp_emit(batch, GENX(3DSTATE_VF), vf) {
-#if GFX_VERx10 >= 125
-         /* Blorp shaders have no requirements that we need to disable geometry
-          * distribution.
-          */
-         vf.GeometryDistributionEnable =
-            (batch->flags & BLORP_BATCH_DISABLE_VF_DISTRIBUTION) ? false : true;
-#endif
-      }
-   }
-
    blorp_emit(batch, GENX(3DSTATE_VF_TOPOLOGY), topo) {
       topo.PrimitiveTopologyType = _3DPRIM_RECTLIST;
    }
@@ -624,9 +601,9 @@ blorp_emit_cc_viewport(struct blorp_batch *batch)
    } else {
       blorp_emit_dynamic(batch, GENX(CC_VIEWPORT), vp, 32, &cc_vp_offset) {
          vp.MinimumDepth = batch->blorp->config.use_unrestricted_depth_range ?
-                           -FLT_MAX : 0.0f;
+                           -FLT_MAX : 0.0;
          vp.MaximumDepth = batch->blorp->config.use_unrestricted_depth_range ?
-                           FLT_MAX : 1.0f;
+                           FLT_MAX : 1.0;
       }
    }
 
@@ -689,8 +666,6 @@ blorp_emit_vs_config(struct blorp_batch *batch,
 
    blorp_emit(batch, GENX(3DSTATE_VS), vs) {
       if (vs_prog_data) {
-         assert(vs_prog_data->base.base.total_scratch == 0);
-
          vs.Enable = true;
 
          vs.KernelStartPointer = params->vs_prog_kernel;
@@ -708,10 +683,6 @@ blorp_emit_vs_config(struct blorp_batch *batch,
 #if GFX_VER < 20
          vs.SIMD8DispatchEnable = true;
 #endif
-
-#if GFX_VER >= 30
-         vs.RegistersPerThread = ptl_register_blocks(vs_prog_data->base.base.grf_used);
-#endif
       }
    }
 }
@@ -719,7 +690,7 @@ blorp_emit_vs_config(struct blorp_batch *batch,
 static void
 blorp_emit_sf_config(struct blorp_batch *batch,
                      const struct blorp_params *params,
-                     const struct intel_urb_config *urb_cfg)
+                     UNUSED enum intel_urb_deref_block_size urb_deref_block_size)
 {
    const struct brw_wm_prog_data *prog_data = params->wm_prog_data;
 
@@ -744,7 +715,7 @@ blorp_emit_sf_config(struct blorp_batch *batch,
 
    blorp_emit(batch, GENX(3DSTATE_SF), sf) {
 #if GFX_VER >= 12
-      sf.DerefBlockSize = urb_cfg->deref_block_size;
+      sf.DerefBlockSize = urb_deref_block_size;
 #endif
    }
 
@@ -829,7 +800,7 @@ blorp_emit_ps_config(struct blorp_batch *batch,
          ps.RenderTargetFastClearEnable = true;
          break;
       default:
-         UNREACHABLE("Invalid fast clear op");
+         unreachable("Invalid fast clear op");
       }
 
 #if GFX_VERx10 == 120
@@ -887,8 +858,6 @@ blorp_emit_ps_config(struct blorp_batch *batch,
 #endif
 
       if (prog_data) {
-         assert(prog_data->base.total_scratch == 0);
-
          intel_set_ps_dispatch_state(&ps, devinfo, prog_data,
                                      params->num_samples,
                                      0 /* msaa_flags */);
@@ -909,10 +878,6 @@ blorp_emit_ps_config(struct blorp_batch *batch,
 #if GFX_VER < 20
          ps.KernelStartPointer2 = params->wm_prog_kernel +
                                   brw_wm_prog_data_prog_offset(prog_data, ps, 2);
-#endif
-
-#if GFX_VER >= 30
-         ps.RegistersPerThread = ptl_register_blocks(prog_data->base.grf_used);
 #endif
       }
    }
@@ -991,9 +956,6 @@ blorp_emit_blend_state(struct blorp_batch *batch,
             .WriteDisableGreen = params->color_write_disable & 2,
             .WriteDisableBlue = params->color_write_disable & 4,
             .WriteDisableAlpha = params->color_write_disable & 8,
-#if GFX_VER >= 30
-            .SimpleFloatBlendEnable = true,
-#endif
          };
          GENX(BLEND_STATE_ENTRY_pack)(NULL, pos, &entry);
          pos += GENX(BLEND_STATE_ENTRY_length);
@@ -1058,7 +1020,7 @@ blorp_emit_depth_stencil_state(struct blorp_batch *batch,
             ds.DepthTestEnable = false;
             break;
          case ISL_AUX_OP_PARTIAL_RESOLVE:
-            UNREACHABLE("Invalid HIZ op");
+            unreachable("Invalid HIZ op");
          }
       }
 
@@ -1098,8 +1060,8 @@ static void
 blorp_emit_pipeline(struct blorp_batch *batch,
                     const struct blorp_params *params)
 {
-   struct intel_urb_config urb_cfg;
-   emit_urb_config(batch, params, &urb_cfg);
+   enum intel_urb_deref_block_size urb_deref_block_size;
+   emit_urb_config(batch, params, &urb_deref_block_size);
 
    if (params->wm_prog_data) {
       blorp_emit_blend_state(batch, params);
@@ -1153,7 +1115,7 @@ blorp_emit_pipeline(struct blorp_batch *batch,
       clip.PerspectiveDivideDisable = true;
    }
 
-   blorp_emit_sf_config(batch, params, &urb_cfg);
+   blorp_emit_sf_config(batch, params, urb_deref_block_size);
    blorp_emit_ps_config(batch, params);
 
    blorp_emit_cc_viewport(batch);
@@ -1265,7 +1227,7 @@ blorp_emit_surface_state(struct blorp_batch *batch,
 
    if (aux_usage != ISL_AUX_USAGE_NONE && surface->clear_color_addr.buffer) {
 #if GFX_VER >= 10
-      assert(util_is_aligned(surface->clear_color_addr.offset, 64));
+      assert((surface->clear_color_addr.offset & 0x3f) == 0);
       uint32_t *clear_addr = state + isl_dev->ss.clear_color_state_offset;
       blorp_surface_reloc(batch, state_offset +
                           isl_dev->ss.clear_color_state_offset,
@@ -1494,18 +1456,6 @@ blorp_emit_gfx8_hiz_op(struct blorp_batch *batch,
    if (params->depth.enabled && params->hiz_op == ISL_AUX_OP_FAST_CLEAR)
       blorp_emit_cc_viewport(batch);
 
-   /* Make sure to disable fragment shader, a previous draw might have enabled
-    * a SIMD32 shader and we could be dispatching threads here with MSAA 16x
-    * which does not support SIMD32.
-    *
-    * dEQP-VK.pipeline.monolithic.multisample.misc.clear_attachments.
-    * r8g8b8a8_unorm_r16g16b16a16_sfloat_r32g32b32a32_uint_d16_unorm.
-    * 16x.ds_resolve_sample_zero.sub_framebuffer
-    * exercises this case.
-    */
-   blorp_emit(batch, GENX(3DSTATE_PS), ps);
-   blorp_emit(batch, GENX(3DSTATE_PS_EXTRA), psx);
-
    /* According to the SKL PRM formula for WM_INT::ThreadDispatchEnable, the
     * 3DSTATE_WM::ForceThreadDispatchEnable field can force WM thread dispatch
     * even when WM_HZ_OP is active.  However, WM thread dispatch is normally
@@ -1559,7 +1509,7 @@ blorp_emit_gfx8_hiz_op(struct blorp_batch *batch,
          break;
       case ISL_AUX_OP_PARTIAL_RESOLVE:
       case ISL_AUX_OP_NONE:
-         UNREACHABLE("Invalid HIZ op");
+         unreachable("Invalid HIZ op");
       }
 
       hzp.NumberofMultisamples = ffs(params->num_samples) - 1;
@@ -1586,20 +1536,6 @@ blorp_emit_gfx8_hiz_op(struct blorp_batch *batch,
    }
 
    blorp_emit(batch, GENX(3DSTATE_WM_HZ_OP), hzp);
-
-#if GFX_VER >= 20
-   /* Xe2-3 Bspec 56469 (r52926):
-    *
-    *  "8. 3DSTATE_WM_HZ_OP w/ none of the clear/resolve bits set
-    *  followed by similar PC as 7 to commit this state."
-    *
-    * "7" refers to step 7 of the WM_HZ_OP command sequence.
-    */
-   blorp_emit(batch, GENX(PIPE_CONTROL), pc) {
-      pc.PostSyncOperation = WriteImmediateData;
-      pc.Address = blorp_get_workaround_address(batch);
-   }
-#endif
 
    blorp_measure_end(batch, params);
 }
@@ -1656,7 +1592,7 @@ blorp_get_compute_push_const(struct blorp_batch *batch,
 {
    const struct brw_cs_prog_data *cs_prog_data = params->cs_prog_data;
    const unsigned push_const_size =
-      align(brw_cs_push_const_total_size(cs_prog_data, threads), 64);
+      ALIGN(brw_cs_push_const_total_size(cs_prog_data, threads), 64);
    assert(cs_prog_data->push.cross_thread.size +
           cs_prog_data->push.per_thread.size == sizeof(params->wm_inputs));
 
@@ -1727,43 +1663,10 @@ blorp_exec_compute(struct blorp_batch *batch, const struct blorp_params *params)
    uint32_t group_x1 = DIV_ROUND_UP(params->x1, cs_prog_data->local_size[0]);
    uint32_t group_y1 = DIV_ROUND_UP(params->y1, cs_prog_data->local_size[1]);
    assert(params->num_layers >= 1);
-   uint32_t group_z1 = params->num_samples * params->num_layers;
+   uint32_t group_z1 = params->dst.z_offset + params->num_layers;
    assert(cs_prog_data->local_size[2] == 1);
 
 #if GFX_VERx10 >= 125
-
-/* Not need with VRT enabled */
-#if GFX_VERx10 < 300
-   uint8_t pixel_async_compute_thread_limit, z_pass_async_compute_thread_limit,
-           np_z_async_throttle_settings;
-   bool slm_or_barrier_enabled = prog_data->total_shared != 0 || cs_prog_data->uses_barrier;
-
-   intel_compute_engine_async_threads_limit(devinfo, dispatch.threads,
-                                            slm_or_barrier_enabled,
-                                            &pixel_async_compute_thread_limit,
-                                            &z_pass_async_compute_thread_limit,
-                                            &np_z_async_throttle_settings);
-   blorp_emit(batch, GENX(STATE_COMPUTE_MODE), cm) {
-#if GFX_VER >= 20
-      cm.AsyncComputeThreadLimit = pixel_async_compute_thread_limit;
-      cm.ZPassAsyncComputeThreadLimit = z_pass_async_compute_thread_limit;
-      cm.ZAsyncThrottlesettings = np_z_async_throttle_settings;
-      cm.AsyncComputeThreadLimitMask = 0x7;
-      cm.ZPassAsyncComputeThreadLimitMask = 0x7;
-      cm.ZAsyncThrottlesettingsMask = 0x3;
-#else
-      cm.PixelAsyncComputeThreadLimit = pixel_async_compute_thread_limit;
-      cm.ZPassAsyncComputeThreadLimit = z_pass_async_compute_thread_limit;
-      cm.PixelAsyncComputeThreadLimitMask = 0x7;
-      cm.ZPassAsyncComputeThreadLimitMask = 0x7;
-      if (intel_device_info_is_mtl_or_arl(devinfo)) {
-         cm.ZAsyncThrottlesettings = np_z_async_throttle_settings;
-         cm.ZAsyncThrottlesettingsMask = 0x3;
-      }
-#endif
-   }
-#endif /* GFX_VERx10 < 300 */
-
    uint32_t surfaces_offset = blorp_setup_binding_table(batch, params);
 
    uint32_t samplers_offset =
@@ -1791,25 +1694,12 @@ blorp_exec_compute(struct blorp_batch *batch, const struct blorp_params *params)
       .IndirectDataStartAddress       = push_const_offset,
       .IndirectDataLength             = push_const_size,
 
-      /* Send number of layers as inline register parameter to copy 2D MSAA
-       * array image/texture properly.
-       */
-      .EmitInlineParameter            = true,
-      .InlineData                     = {
-         [BLORP_INLINE_PARAM_THREAD_GROUP_ID_Z_DIMENSION / 4 + 0] = params->num_layers,
-      },
-
 #if GFX_VERx10 >= 125
       .GenerateLocalID                = cs_prog_data->generate_local_id != 0,
       .EmitLocal                      = cs_prog_data->generate_local_id,
       .WalkOrder                      = cs_prog_data->walk_order,
       .TileLayout = cs_prog_data->walk_order == INTEL_WALK_ORDER_YXZ ?
                     TileY32bpe : Linear,
-#endif
-#if GFX_VER >= 30
-      /* HSD 14016252163 */
-      .DispatchWalkOrder = cs_prog_data->uses_sampler ? MortonWalk : LinearWalk,
-      .ThreadGroupBatchSize = cs_prog_data->uses_sampler ? TG_BATCH_4 : TG_BATCH_1,
 #endif
 
       .InterfaceDescriptor = (struct GENX(INTERFACE_DESCRIPTOR_DATA)) {
@@ -1819,8 +1709,6 @@ blorp_exec_compute(struct blorp_batch *batch, const struct blorp_params *params)
          .BindingTableEntryCount = params->src.enabled ? 2 : 1,
          .BindingTablePointer = surfaces_offset,
          .NumberofThreadsinGPGPUThreadGroup = dispatch.threads,
-         .ThreadGroupDispatchSize =
-            intel_compute_threads_group_dispatch_size(dispatch.threads),
          .SharedLocalMemorySize =
             intel_compute_slm_encode_size(GFX_VER, prog_data->total_shared),
          .PreferredSLMAllocationSize =
@@ -1829,9 +1717,6 @@ blorp_exec_compute(struct blorp_batch *batch, const struct blorp_params *params)
                                                          dispatch.group_size,
                                                          dispatch.simd_size),
          .NumberOfBarriers = cs_prog_data->uses_barrier,
-#if GFX_VER >= 30
-         .RegistersPerThread = ptl_register_blocks(prog_data->grf_used),
-#endif
       },
    };
 
@@ -1839,6 +1724,7 @@ blorp_exec_compute(struct blorp_batch *batch, const struct blorp_params *params)
    blorp_emit(batch, GENX(COMPUTE_WALKER), cw) {
       cw.body = body;
    }
+
 #else
 
    /* The MEDIA_VFE_STATE documentation for Gfx8+ says:
@@ -1868,7 +1754,7 @@ blorp_exec_compute(struct blorp_batch *batch, const struct blorp_params *params)
       vfe.URBEntryAllocationSize = 2;
 
       const uint32_t vfe_curbe_allocation =
-         align(cs_prog_data->push.per_thread.regs * dispatch.threads +
+         ALIGN(cs_prog_data->push.per_thread.regs * dispatch.threads +
                cs_prog_data->push.cross_thread.regs, 2);
       vfe.CURBEAllocationSize = vfe_curbe_allocation;
    }
@@ -1962,7 +1848,7 @@ xy_bcb_tiling(const struct isl_surf *surf)
       return XY_TILE_Y;
 #endif
    default:
-      UNREACHABLE("Invalid tiling for XY_BLOCK_COPY_BLT");
+      unreachable("Invalid tiling for XY_BLOCK_COPY_BLT");
    }
 }
 
@@ -1977,7 +1863,7 @@ xy_color_depth(const struct isl_format_layout *fmtl)
    case  16: return XY_BPP_16_BIT;
    case   8: return XY_BPP_8_BIT;
    default:
-      UNREACHABLE("Invalid bpp");
+      unreachable("Invalid bpp");
    }
 }
 #endif
@@ -1998,7 +1884,7 @@ xy_bcb_surf_dim(const struct isl_surf *surf)
    case ISL_SURF_DIM_3D:
       return XY_SURFTYPE_3D;
    default:
-      UNREACHABLE("Invalid dimensionality for XY_BLOCK_COPY_BLT");
+      unreachable("Invalid dimensionality for XY_BLOCK_COPY_BLT");
    }
 }
 
@@ -2021,7 +1907,7 @@ xy_aux_mode(const struct blorp_surface_info *info)
    case ISL_AUX_USAGE_NONE:
       return XY_NONE;
    default:
-      UNREACHABLE("Unsupported aux mode");
+      unreachable("Unsupported aux mode");
    }
 }
 #endif // GFX_VER < 20
@@ -2032,7 +1918,7 @@ blorp_xy_block_copy_blt(struct blorp_batch *batch,
                         const struct blorp_params *params)
 {
 #if GFX_VER < 12
-   UNREACHABLE("Blitter is only supported on Gfx12+");
+   unreachable("Blitter is only supported on Gfx12+");
 #else
    UNUSED const struct isl_device *isl_dev = batch->blorp->isl_dev;
 
@@ -2091,12 +1977,7 @@ blorp_xy_block_copy_blt(struct blorp_batch *batch,
       blt.ColorDepth = xy_color_depth(fmtl);
 
       blt.DestinationPitch = (dst_surf->row_pitch_B / dst_pitch_unit) - 1;
-#if GFX_VERx10 >= 200
-      blt.DestinationMOCSindex = MOCS_GET_INDEX(params->dst.addr.mocs);
-      blt.DestinationEncryptEn = MOCS_GET_ENCRYPT_EN(params->dst.addr.mocs);
-#else
       blt.DestinationMOCS = params->dst.addr.mocs;
-#endif
       blt.DestinationTiling = xy_bcb_tiling(dst_surf);
       blt.DestinationX1 = dst_x0;
       blt.DestinationY1 = dst_y0;
@@ -2141,12 +2022,7 @@ blorp_xy_block_copy_blt(struct blorp_batch *batch,
       blt.SourceX1 = src_x0;
       blt.SourceY1 = src_y0;
       blt.SourcePitch = (src_surf->row_pitch_B / src_pitch_unit) - 1;
-#if GFX_VERx10 >= 200
-      blt.SourceMOCSindex = MOCS_GET_INDEX(params->src.addr.mocs);
-      blt.SourceEncryptEn = MOCS_GET_ENCRYPT_EN(params->src.addr.mocs);
-#else
       blt.SourceMOCS = params->src.addr.mocs;
-#endif
       blt.SourceTiling = xy_bcb_tiling(src_surf);
       blt.SourceBaseAddress = params->src.addr;
       blt.SourceXOffset = params->src.tile_x_sa;
@@ -2192,7 +2068,7 @@ blorp_xy_fast_color_blit(struct blorp_batch *batch,
                          const struct blorp_params *params)
 {
 #if GFX_VER < 12
-   UNREACHABLE("Blitter is only supported on Gfx12+");
+   unreachable("Blitter is only supported on Gfx12+");
 #else
    UNUSED const struct isl_device *isl_dev = batch->blorp->isl_dev;
    const struct isl_surf *dst_surf = &params->dst.surf;
@@ -2228,12 +2104,6 @@ blorp_xy_fast_color_blit(struct blorp_batch *batch,
 
       blt.DestinationPitch = (dst_surf->row_pitch_B / dst_pitch_unit) - 1;
       blt.DestinationTiling = xy_bcb_tiling(dst_surf);
-#if GFX_VERx10 >= 200
-      blt.DestinationMOCSindex = MOCS_GET_INDEX(params->dst.addr.mocs);
-      blt.DestinationEncryptEn = MOCS_GET_ENCRYPT_EN(params->dst.addr.mocs);
-#else
-      blt.DestinationMOCS = params->dst.addr.mocs;
-#endif
       blt.DestinationX1 = params->x0;
       blt.DestinationY1 = params->y0;
       blt.DestinationX2 = params->x1;
@@ -2274,6 +2144,8 @@ blorp_xy_fast_color_blit(struct blorp_batch *batch,
          blt.DestinationCompressionFormat =
             isl_get_render_compression_format(dst_surf->format);
       }
+
+      blt.DestinationMOCS = params->dst.addr.mocs;
 #endif
    }
 #endif
@@ -2344,9 +2216,9 @@ blorp_init_dynamic_states(struct blorp_context *context)
    blorp_context_upload_dynamic(context, GENX(CC_VIEWPORT), vp, 32,
                                 BLORP_DYNAMIC_STATE_CC_VIEWPORT) {
       vp.MinimumDepth = context->config.use_unrestricted_depth_range ?
-                        -FLT_MAX : 0.0f;
+                        -FLT_MAX : 0.0;
       vp.MaximumDepth = context->config.use_unrestricted_depth_range ?
-                        FLT_MAX : 1.0f;
+                        FLT_MAX : 1.0;
    }
 
    blorp_context_upload_dynamic(context, GENX(COLOR_CALC_STATE), cc, 64,

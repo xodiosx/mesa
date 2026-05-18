@@ -22,28 +22,34 @@
  */
 
 #include "intel_nir.h"
-#include "intel_shader_enums.h"
 #include "compiler/nir/nir_builder.h"
+#include "brw_compiler.h"
 
 static bool
-lower_printf_intrinsics(nir_builder *b, nir_intrinsic_instr *intrin, void *_)
+lower_printf_intrinsics(nir_builder *b, nir_instr *instr, void *cb_data)
 {
-   b->cursor = nir_before_instr(&intrin->instr);
+   if (instr->type != nir_instr_type_intrinsic)
+      return false;
 
+   b->cursor = nir_before_instr(instr);
+
+   nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
    switch (intrin->intrinsic) {
    case nir_intrinsic_load_printf_buffer_address:
-      nir_def_replace(
+      nir_def_rewrite_uses(
          &intrin->def,
          nir_pack_64_2x32_split(
             b,
             nir_load_reloc_const_intel(b, BRW_SHADER_RELOC_PRINTF_BUFFER_ADDR_LOW),
             nir_load_reloc_const_intel(b, BRW_SHADER_RELOC_PRINTF_BUFFER_ADDR_HIGH)));
+      nir_instr_remove(instr);
       return true;
 
-   case nir_intrinsic_load_printf_buffer_size:
-      nir_def_replace(
+   case nir_intrinsic_load_printf_base_identifier:
+      nir_def_rewrite_uses(
          &intrin->def,
-         nir_load_reloc_const_intel(b, BRW_SHADER_RELOC_PRINTF_BUFFER_SIZE));
+         nir_load_reloc_const_intel(b, BRW_SHADER_RELOC_PRINTF_BASE_IDENTIFIER));
+      nir_instr_remove(instr);
       return true;
 
    default:
@@ -54,6 +60,7 @@ lower_printf_intrinsics(nir_builder *b, nir_intrinsic_instr *intrin, void *_)
 bool
 intel_nir_lower_printf(nir_shader *nir)
 {
-   return nir_shader_intrinsics_pass(nir, lower_printf_intrinsics,
-                                     nir_metadata_control_flow, NULL);
+   return nir_shader_instructions_pass(nir, lower_printf_intrinsics,
+                                       nir_metadata_control_flow,
+                                       NULL);
 }

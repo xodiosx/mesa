@@ -35,13 +35,13 @@ struct radv_amdgpu_map_range {
 struct radv_amdgpu_winsys_bo {
    struct radeon_winsys_bo base;
    amdgpu_va_handle va_handle;
-   uint32_t flags;
+   bool is_virtual;
    uint8_t priority;
 
    union {
       /* physical bo */
       struct {
-         ac_drm_bo bo;
+         amdgpu_bo_handle bo;
          uint32_t bo_handle;
 
          void *cpu_map;

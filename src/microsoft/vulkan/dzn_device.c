@@ -315,13 +315,11 @@ try_create_device_factory(struct util_dl_library *d3d12_mod)
       /* It's possible there's a D3D12Core.dll next to the .exe, for development/testing purposes. If so, we'll be notified
       * by environment variables what the relative path is and the version to use.
       */
-      char *d3d12core_relative_path = os_get_option_dup("DZN_AGILITY_RELATIVE_PATH");
-      char *d3d12core_sdk_version = os_get_option_dup("DZN_AGILITY_SDK_VERSION");
+      const char *d3d12core_relative_path = getenv("DZN_AGILITY_RELATIVE_PATH");
+      const char *d3d12core_sdk_version = getenv("DZN_AGILITY_SDK_VERSION");
       if (d3d12core_relative_path && d3d12core_sdk_version) {
          ID3D12SDKConfiguration_SetSDKVersion(sdk_config, atoi(d3d12core_sdk_version), d3d12core_relative_path);
       }
-      free(d3d12core_relative_path);
-      free(d3d12core_sdk_version);
       ID3D12SDKConfiguration_Release(sdk_config);
    }
 #endif
@@ -513,7 +511,7 @@ dzn_physical_device_init_memory(struct dzn_physical_device *pdev)
     *   (as determined in an implementation-specific manner) ; or
     * - the propertyFlags members of Y includes VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD or
     *   VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD and X does not
-    * See: https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceMemoryProperties.html
+    * See: https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPhysicalDeviceMemoryProperties.html
    */
 
    mem->memoryHeapCount = 0;
@@ -1189,7 +1187,7 @@ dzn_get_most_capable_format_for_casting(VkFormat format, VkImageCreateFlags crea
    case 8: return DXGI_FORMAT_R32G32_FLOAT;
    case 12: return DXGI_FORMAT_R32G32B32_FLOAT;
    case 16: return DXGI_FORMAT_R32G32B32A32_FLOAT;
-   default: UNREACHABLE("Unsupported format bit size");;
+   default: unreachable("Unsupported format bit size");;
    }
 }
 
@@ -1557,7 +1555,7 @@ dzn_physical_device_get_image_format_properties(struct dzn_physical_device *pdev
       properties->imageFormatProperties.maxExtent.depth = max_extent;
       break;
    default:
-      UNREACHABLE("bad VkImageType");
+      unreachable("bad VkImageType");
    }
 
    /* From the Vulkan 1.0 spec, section 34.1.1. Supported Sample Counts:
@@ -1801,7 +1799,7 @@ dzn_instance_create(const VkInstanceCreateInfo *pCreateInfo,
    instance->vk.physical_devices.enumerate = dzn_enumerate_physical_devices;
    instance->vk.physical_devices.destroy = dzn_physical_device_destroy;
    instance->debug_flags =
-      parse_debug_string(os_get_option("DZN_DEBUG"), dzn_debug_options);
+      parse_debug_string(getenv("DZN_DEBUG"), dzn_debug_options);
 
 #ifdef _WIN32
    if (instance->debug_flags & DZN_DEBUG_DEBUGGER) {
@@ -1838,13 +1836,13 @@ dzn_instance_create(const VkInstanceCreateInfo *pCreateInfo,
    instance->d3d12_mod = util_dl_open(UTIL_DL_PREFIX "d3d12" UTIL_DL_EXT);
    if (!instance->d3d12_mod) {
       dzn_instance_destroy(instance, pAllocator);
-      return vk_error(NULL, VK_ERROR_INCOMPATIBLE_DRIVER);
+      return vk_error(NULL, VK_ERROR_INITIALIZATION_FAILED);
    }
 
    instance->d3d12.serialize_root_sig = d3d12_get_serialize_root_sig(instance->d3d12_mod);
    if (!instance->d3d12.serialize_root_sig) {
       dzn_instance_destroy(instance, pAllocator);
-      return vk_error(NULL, VK_ERROR_INCOMPATIBLE_DRIVER);
+      return vk_error(NULL, VK_ERROR_INITIALIZATION_FAILED);
    }
 
    instance->factory = try_create_device_factory(instance->d3d12_mod);
@@ -1891,6 +1889,12 @@ dzn_GetInstanceProcAddr(VkInstance _instance,
                                     &dzn_instance_entrypoints,
                                     pName);
 }
+
+/* Windows will use a dll definition file to avoid build errors. */
+#ifdef _WIN32
+#undef PUBLIC
+#define PUBLIC
+#endif
 
 PUBLIC VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
 vk_icdGetInstanceProcAddr(VkInstance instance,
@@ -2118,6 +2122,16 @@ dzn_queue_init(struct dzn_queue *queue,
 }
 
 static VkResult
+dzn_device_create_sync_for_memory(struct vk_device *device,
+                                  VkDeviceMemory memory,
+                                  bool signal_memory,
+                                  struct vk_sync **sync_out)
+{
+   return vk_sync_create(device, &vk_sync_dummy_type,
+                         0, 1, sync_out);
+}
+
+static VkResult
 dzn_device_query_init(struct dzn_device *device)
 {
    /* FIXME: create the resource in the default heap */
@@ -2284,6 +2298,7 @@ dzn_device_create(struct dzn_physical_device *pdev,
     * whole struct.
     */
    device->vk.command_dispatch_table = &device->cmd_dispatch;
+   device->vk.create_sync_for_memory = dzn_device_create_sync_for_memory;
    device->vk.check_status = dzn_device_check_status;
 
    device->dev = pdev->dev;
@@ -2406,7 +2421,7 @@ dzn_device_create(struct dzn_physical_device *pdev,
          }
 
          mtx_init(&device->device_heaps[type].lock, mtx_plain);
-         device->device_heaps[type].slot_freelist = UTIL_DYNARRAY_INIT;
+         util_dynarray_init(&device->device_heaps[type].slot_freelist, NULL);
          device->device_heaps[type].next_alloc_slot = 0;
       }
    }
@@ -3461,7 +3476,7 @@ dzn_sampler_translate_addr_mode(VkSamplerAddressMode in)
    case VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE: return D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
    case VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER: return D3D12_TEXTURE_ADDRESS_MODE_BORDER;
    case VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE: return D3D12_TEXTURE_ADDRESS_MODE_MIRROR_ONCE;
-   default: UNREACHABLE("Invalid address mode");
+   default: unreachable("Invalid address mode");
    }
 }
 
@@ -3569,7 +3584,7 @@ dzn_sampler_create(struct dzn_device *device,
          sampler->desc.Flags = D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR;
          break;
       default:
-         UNREACHABLE("Unsupported border color");
+         unreachable("Unsupported border color");
       }
    }
 
@@ -3641,7 +3656,7 @@ dzn_device_descriptor_heap_free_slot(struct dzn_device *device,
       return;
 
    mtx_lock(&heap->lock);
-   util_dynarray_append(&heap->slot_freelist, slot);
+   util_dynarray_append(&heap->slot_freelist, int, slot);
    mtx_unlock(&heap->lock);
 }
 
@@ -3670,7 +3685,7 @@ dzn_CreateSamplerYcbcrConversion(VkDevice device,
                                  const VkAllocationCallbacks *pAllocator,
                                  VkSamplerYcbcrConversion *pYcbcrConversion)
 {
-   UNREACHABLE("Ycbcr sampler conversion is not supported");
+   unreachable("Ycbcr sampler conversion is not supported");
    return VK_SUCCESS;
 }
 
@@ -3679,7 +3694,7 @@ dzn_DestroySamplerYcbcrConversion(VkDevice device,
                                   VkSamplerYcbcrConversion YcbcrConversion,
                                   const VkAllocationCallbacks *pAllocator)
 {
-   UNREACHABLE("Ycbcr sampler conversion is not supported");
+   unreachable("Ycbcr sampler conversion is not supported");
 }
 
 VKAPI_ATTR VkDeviceAddress VKAPI_CALL

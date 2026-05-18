@@ -58,5 +58,7 @@ agx_nir_lower_point_size(nir_shader *nir, bool insert_write)
       .write_mask = nir_component_mask(1), .src_type = nir_type_float32);
 
    nir->info.outputs_written |= VARYING_BIT_PSIZ;
-   return nir_progress(true, b.impl, nir_metadata_control_flow);
+   nir_metadata_preserve(b.impl, nir_metadata_control_flow);
+
+   return true;
 }

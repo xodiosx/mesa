@@ -1,8 +1,7 @@
 # Copyright 2018 Google LLC
 # SPDX-License-Identifier: MIT
 from .common.codegen import CodeGen, VulkanWrapperGenerator
-from .common.vulkantypes import VulkanAPI, makeVulkanTypeSimple, iterateVulkanType, VulkanTypeInfo,\
-    VulkanType
+from .common.vulkantypes import VulkanAPI, iterateVulkanType, VulkanType
 
 from .reservedmarshaling import VulkanReservedMarshalingCodegen
 from .transform import TransformCodegen
@@ -22,8 +21,6 @@ global_state_prefix = "this->on_"
 
 READ_STREAM = "readStream"
 WRITE_STREAM = "vkStream"
-
-SNAPSHOT_API_CALL_HANDLE_VARNAME = "snapshotApiCallHandle"
 
 # Driver workarounds for APIs that don't work well multithreaded
 driver_workarounds_global_lock_apis = [
@@ -246,19 +243,6 @@ def emit_decode_parameters(typeInfo, api, cgen, globalWrapped=False):
 
     emit_call_log(api, cgen)
 
-def emit_snapshot_call(api, cgen):
-    apiForSnapshot = \
-        api.withCustomReturnType(makeVulkanTypeSimple(False, "void", 0, "void"))
-    customParamsSnapshot = ["pool", SNAPSHOT_API_CALL_HANDLE_VARNAME, "nullptr", "0"]
-    retTypeName = api.getRetTypeExpr()
-    if retTypeName != "void":
-        retVar = api.getRetVarExpr()
-        customParamsSnapshot.append(retVar)
-    customParamsSnapshot.append("(VkCommandBuffer)(boxed_dispatchHandle)")
-    customParamsSnapshot = customParamsSnapshot + list(map(lambda p: p.paramName, api.parameters[1:]))
-    cgen.beginIf("snapshotsEnabled()")
-    cgen.vkApiCall(apiForSnapshot, customPrefix="this->snapshot()->", customParameters=customParamsSnapshot)
-    cgen.endIf()
 
 def emit_dispatch_call(api, cgen):
 
@@ -277,23 +261,20 @@ def emit_dispatch_call(api, cgen):
 
     cgen.vkApiCall(api, customPrefix="vk->", customParameters=customParams,
                     checkForDeviceLost=True, globalStatePrefix=global_state_prefix,
-                    checkDispatcher="CC_LIKELY(vk)")
-
-    emit_snapshot_call(api, cgen)
+                    checkForOutOfMemory=True)
 
     if api.name in driver_workarounds_global_lock_apis:
         cgen.stmt("unlock()")
 
 
 def emit_global_state_wrapped_call(api, cgen, context=False):
-    customParams = ["pool", SNAPSHOT_API_CALL_HANDLE_VARNAME, "(VkCommandBuffer)(boxed_dispatchHandle)"] + \
+    customParams = ["pool", "(VkCommandBuffer)(boxed_dispatchHandle)"] + \
         list(map(lambda p: p.paramName, api.parameters[1:]))
     if context:
         customParams += ["context"];
     cgen.vkApiCall(api, customPrefix=global_state_prefix,
                    customParameters=customParams, checkForDeviceLost=True,
-                   globalStatePrefix=global_state_prefix, checkDispatcher="CC_LIKELY(vk)")
-    emit_snapshot_call(api, cgen)
+                   checkForOutOfMemory=True, globalStatePrefix=global_state_prefix)
 
 
 def emit_default_decoding(typeInfo, api, cgen):
@@ -335,8 +316,6 @@ custom_decodes = {
     "vkCmdBeginRenderPass" : emit_global_state_wrapped_decoding,
     "vkCmdBeginRenderPass2" : emit_global_state_wrapped_decoding,
     "vkCmdBeginRenderPass2KHR" : emit_global_state_wrapped_decoding,
-    "vkCmdSetEvent" : emit_global_state_wrapped_decoding,
-    "vkCmdResetEvent" : emit_global_state_wrapped_decoding,
 }
 
 
@@ -352,22 +331,19 @@ class VulkanSubDecoder(VulkanWrapperGenerator):
 
         self.module.appendImpl(
             "#define MAX_PACKET_LENGTH %s\n" % MAX_PACKET_LENGTH)
-        self.module.appendImpl(
-            "#define CC_LIKELY(exp)    (__builtin_expect( !!(exp), true ))\n")
-        self.module.appendImpl(
-            "#define CC_UNLIKELY(exp)  (__builtin_expect( !!(exp), false ))\n")
 
         self.module.appendImpl(
-            "size_t subDecode(VulkanMemReadingStream* readStream, VulkanDispatch* vk, VkSnapshotApiCallHandle %s, void* boxed_dispatchHandle, void* dispatchHandle, VkDeviceSize subDecodeDataSize, const void* pSubDecodeData, const VkDecoderContext& context)\n" % SNAPSHOT_API_CALL_HANDLE_VARNAME)
+            "size_t subDecode(VulkanMemReadingStream* readStream, VulkanDispatch* vk, void* boxed_dispatchHandle, void* dispatchHandle, VkDeviceSize dataSize, const void* pData, const VkDecoderContext& context)\n")
 
         self.cgen.beginBlock()  # function body
 
+        self.cgen.stmt("auto& metricsLogger = *context.metricsLogger")
         self.cgen.stmt("uint32_t count = 0")
-        self.cgen.stmt("unsigned char *buf = (unsigned char *)pSubDecodeData")
-        self.cgen.stmt("gfxstream::base::BumpPool* pool = readStream->pool()")
-        self.cgen.stmt("unsigned char *ptr = (unsigned char *)pSubDecodeData")
+        self.cgen.stmt("unsigned char *buf = (unsigned char *)pData")
+        self.cgen.stmt("android::base::BumpPool* pool = readStream->pool()")
+        self.cgen.stmt("unsigned char *ptr = (unsigned char *)pData")
         self.cgen.stmt(
-            "const unsigned char* const end = (const unsigned char*)buf + subDecodeDataSize")
+            "const unsigned char* const end = (const unsigned char*)buf + dataSize")
         self.cgen.stmt(
             "VkDecoderGlobalState* globalstate = VkDecoderGlobalState::get()")
 
@@ -379,7 +355,8 @@ class VulkanSubDecoder(VulkanWrapperGenerator):
         self.cgen.line("""
         // packetLen should be at least 8 (op code and packet length) and should not be excessively large
         if (packetLen < 8 || packetLen > MAX_PACKET_LENGTH) {
-            GFXSTREAM_WARNING("Bad packet length %d detected, subdecode may fail", packetLen);
+            WARN("Bad packet length %d detected, subdecode may fail", packetLen);
+            metricsLogger.logMetricEvent(MetricEventBadPacketLength{ .len = packetLen });
         }
         """)
         self.cgen.stmt("if (end - ptr < packetLen) return ptr - (unsigned char*)buf")
@@ -418,7 +395,7 @@ class VulkanSubDecoder(VulkanWrapperGenerator):
         self.cgen.line("default:")
         self.cgen.beginBlock()
         self.cgen.stmt(
-            "GFXSTREAM_FATAL(\"Unrecognized opcode %\" PRIu32, opcode)")
+            "GFXSTREAM_ABORT(::emugl::FatalError(::emugl::ABORT_REASON_OTHER)) << \"Unrecognized opcode \" << opcode")
         self.cgen.endBlock()
 
         self.cgen.endBlock()  # switch stmt

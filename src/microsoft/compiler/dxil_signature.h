@@ -148,11 +148,6 @@ struct dxil_psv_runtime_info_2 {
    uint32_t num_threads_z;
 };
 
-struct dxil_psv_runtime_info_3 {
-   struct dxil_psv_runtime_info_2 psv2;
-   uint32_t entry_function_name;
-};
-
 struct dxil_mdnode;
 struct dxil_module;
 

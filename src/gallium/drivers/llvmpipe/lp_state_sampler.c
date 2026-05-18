@@ -67,14 +67,14 @@ llvmpipe_create_sampler_state(struct pipe_context *pipe,
 
 static void
 llvmpipe_bind_sampler_states(struct pipe_context *pipe,
-                             mesa_shader_stage shader,
+                             enum pipe_shader_type shader,
                              unsigned start,
                              unsigned num,
                              void **samplers)
 {
    struct llvmpipe_context *llvmpipe = llvmpipe_context(pipe);
 
-   assert(shader < MESA_SHADER_MESH_STAGES);
+   assert(shader < PIPE_SHADER_MESH_TYPES);
    assert(start + num <= ARRAY_SIZE(llvmpipe->samplers[shader]));
 
    draw_flush(llvmpipe->draw);
@@ -97,29 +97,29 @@ llvmpipe_bind_sampler_states(struct pipe_context *pipe,
    }
 
    switch (shader) {
-   case MESA_SHADER_VERTEX:
-   case MESA_SHADER_GEOMETRY:
-   case MESA_SHADER_TESS_CTRL:
-   case MESA_SHADER_TESS_EVAL:
+   case PIPE_SHADER_VERTEX:
+   case PIPE_SHADER_GEOMETRY:
+   case PIPE_SHADER_TESS_CTRL:
+   case PIPE_SHADER_TESS_EVAL:
       draw_set_samplers(llvmpipe->draw,
                         shader,
                         llvmpipe->samplers[shader],
                         llvmpipe->num_samplers[shader]);
       break;
-   case MESA_SHADER_COMPUTE:
+   case PIPE_SHADER_COMPUTE:
       llvmpipe->cs_dirty |= LP_CSNEW_SAMPLER;
       break;
-   case MESA_SHADER_FRAGMENT:
+   case PIPE_SHADER_FRAGMENT:
       llvmpipe->dirty |= LP_NEW_SAMPLER;
       break;
-   case MESA_SHADER_TASK:
+   case PIPE_SHADER_TASK:
       llvmpipe->dirty |= LP_NEW_TASK_SAMPLER;
       break;
-   case MESA_SHADER_MESH:
+   case PIPE_SHADER_MESH:
       llvmpipe->dirty |= LP_NEW_MESH_SAMPLER;
       break;
    default:
-      UNREACHABLE("Illegal shader type");
+      unreachable("Illegal shader type");
       break;
    }
 }
@@ -127,10 +127,11 @@ llvmpipe_bind_sampler_states(struct pipe_context *pipe,
 
 static void
 llvmpipe_set_sampler_views(struct pipe_context *pipe,
-                           mesa_shader_stage shader,
+                           enum pipe_shader_type shader,
                            unsigned start,
                            unsigned num,
                            unsigned unbind_num_trailing_slots,
+                           bool take_ownership,
                            struct pipe_sampler_view **views)
 {
    struct llvmpipe_context *llvmpipe = llvmpipe_context(pipe);
@@ -138,7 +139,7 @@ llvmpipe_set_sampler_views(struct pipe_context *pipe,
 
    assert(num <= PIPE_MAX_SHADER_SAMPLER_VIEWS);
 
-   assert(shader < MESA_SHADER_MESH_STAGES);
+   assert(shader < PIPE_SHADER_MESH_TYPES);
    assert(start + num <= ARRAY_SIZE(llvmpipe->sampler_views[shader]));
 
    draw_flush(llvmpipe->draw);
@@ -163,7 +164,14 @@ llvmpipe_set_sampler_views(struct pipe_context *pipe,
       if (view)
          llvmpipe_flush_resource(pipe, view->texture, 0, true, false, false, "sampler_view");
 
-      pipe_sampler_view_reference(&llvmpipe->sampler_views[shader][start + i], view);
+      if (take_ownership) {
+         pipe_sampler_view_reference(&llvmpipe->sampler_views[shader][start + i],
+                                     NULL);
+         llvmpipe->sampler_views[shader][start + i] = view;
+      } else {
+         pipe_sampler_view_reference(&llvmpipe->sampler_views[shader][start + i],
+                                     view);
+      }
    }
 
    for (; i < num + unbind_num_trailing_slots; i++) {
@@ -180,32 +188,32 @@ llvmpipe_set_sampler_views(struct pipe_context *pipe,
    }
 
    switch (shader) {
-   case MESA_SHADER_VERTEX:
-   case MESA_SHADER_GEOMETRY:
-   case MESA_SHADER_TESS_CTRL:
-   case MESA_SHADER_TESS_EVAL:
+   case PIPE_SHADER_VERTEX:
+   case PIPE_SHADER_GEOMETRY:
+   case PIPE_SHADER_TESS_CTRL:
+   case PIPE_SHADER_TESS_EVAL:
       draw_set_sampler_views(llvmpipe->draw,
                              shader,
                              llvmpipe->sampler_views[shader],
                              llvmpipe->num_sampler_views[shader]);
       break;
-   case MESA_SHADER_COMPUTE:
+   case PIPE_SHADER_COMPUTE:
       llvmpipe->cs_dirty |= LP_CSNEW_SAMPLER_VIEW;
       break;
-   case MESA_SHADER_FRAGMENT:
+   case PIPE_SHADER_FRAGMENT:
       llvmpipe->dirty |= LP_NEW_SAMPLER_VIEW;
       lp_setup_set_fragment_sampler_views(llvmpipe->setup,
-                                          llvmpipe->num_sampler_views[MESA_SHADER_FRAGMENT],
-                                          llvmpipe->sampler_views[MESA_SHADER_FRAGMENT]);
+                                          llvmpipe->num_sampler_views[PIPE_SHADER_FRAGMENT],
+                                          llvmpipe->sampler_views[PIPE_SHADER_FRAGMENT]);
       break;
-   case MESA_SHADER_TASK:
+   case PIPE_SHADER_TASK:
       llvmpipe->dirty |= LP_NEW_TASK_SAMPLER_VIEW;
       break;
-   case MESA_SHADER_MESH:
+   case PIPE_SHADER_MESH:
       llvmpipe->dirty |= LP_NEW_MESH_SAMPLER_VIEW;
       break;
    default:
-      UNREACHABLE("Illegal shader type");
+      unreachable("Illegal shader type");
       break;
    }
 }
@@ -290,7 +298,7 @@ static void
 prepare_shader_sampling(struct llvmpipe_context *lp,
                         unsigned num,
                         struct pipe_sampler_view **views,
-                        mesa_shader_stage shader_type)
+                        enum pipe_shader_type shader_type)
 {
    uint32_t row_stride[PIPE_MAX_TEXTURE_LEVELS];
    uint32_t img_stride[PIPE_MAX_TEXTURE_LEVELS];
@@ -390,7 +398,7 @@ llvmpipe_prepare_vertex_sampling(struct llvmpipe_context *lp,
                                  unsigned num,
                                  struct pipe_sampler_view **views)
 {
-   prepare_shader_sampling(lp, num, views, MESA_SHADER_VERTEX);
+   prepare_shader_sampling(lp, num, views, PIPE_SHADER_VERTEX);
 }
 
 
@@ -402,7 +410,7 @@ llvmpipe_prepare_geometry_sampling(struct llvmpipe_context *lp,
                                    unsigned num,
                                    struct pipe_sampler_view **views)
 {
-   prepare_shader_sampling(lp, num, views, MESA_SHADER_GEOMETRY);
+   prepare_shader_sampling(lp, num, views, PIPE_SHADER_GEOMETRY);
 }
 
 
@@ -414,7 +422,7 @@ llvmpipe_prepare_tess_ctrl_sampling(struct llvmpipe_context *lp,
                                     unsigned num,
                                     struct pipe_sampler_view **views)
 {
-   prepare_shader_sampling(lp, num, views, MESA_SHADER_TESS_CTRL);
+   prepare_shader_sampling(lp, num, views, PIPE_SHADER_TESS_CTRL);
 }
 
 
@@ -426,13 +434,13 @@ llvmpipe_prepare_tess_eval_sampling(struct llvmpipe_context *lp,
                                     unsigned num,
                                     struct pipe_sampler_view **views)
 {
-   prepare_shader_sampling(lp, num, views, MESA_SHADER_TESS_EVAL);
+   prepare_shader_sampling(lp, num, views, PIPE_SHADER_TESS_EVAL);
 }
 
 
 void
 llvmpipe_cleanup_stage_sampling(struct llvmpipe_context *ctx,
-                                mesa_shader_stage stage)
+                                enum pipe_shader_type stage)
 {
    assert(ctx);
    assert(stage < ARRAY_SIZE(ctx->num_sampler_views));
@@ -458,7 +466,7 @@ static void
 prepare_shader_images(struct llvmpipe_context *lp,
                       unsigned num,
                       struct pipe_image_view *views,
-                      mesa_shader_stage shader_type)
+                      enum pipe_shader_type shader_type)
 {
    assert(num <= PIPE_MAX_SHADER_SAMPLER_VIEWS);
    if (!num)
@@ -549,7 +557,7 @@ llvmpipe_prepare_vertex_images(struct llvmpipe_context *lp,
                                unsigned num,
                                struct pipe_image_view *views)
 {
-   prepare_shader_images(lp, num, views, MESA_SHADER_VERTEX);
+   prepare_shader_images(lp, num, views, PIPE_SHADER_VERTEX);
 }
 
 
@@ -561,7 +569,7 @@ llvmpipe_prepare_geometry_images(struct llvmpipe_context *lp,
                                  unsigned num,
                                  struct pipe_image_view *views)
 {
-   prepare_shader_images(lp, num, views, MESA_SHADER_GEOMETRY);
+   prepare_shader_images(lp, num, views, PIPE_SHADER_GEOMETRY);
 }
 
 
@@ -573,7 +581,7 @@ llvmpipe_prepare_tess_ctrl_images(struct llvmpipe_context *lp,
                                   unsigned num,
                                   struct pipe_image_view *views)
 {
-   prepare_shader_images(lp, num, views, MESA_SHADER_TESS_CTRL);
+   prepare_shader_images(lp, num, views, PIPE_SHADER_TESS_CTRL);
 }
 
 
@@ -585,13 +593,13 @@ llvmpipe_prepare_tess_eval_images(struct llvmpipe_context *lp,
                                   unsigned num,
                                   struct pipe_image_view *views)
 {
-   prepare_shader_images(lp, num, views, MESA_SHADER_TESS_EVAL);
+   prepare_shader_images(lp, num, views, PIPE_SHADER_TESS_EVAL);
 }
 
 
 void
 llvmpipe_cleanup_stage_images(struct llvmpipe_context *ctx,
-                              mesa_shader_stage stage)
+                              enum pipe_shader_type stage)
 {
    assert(ctx);
    assert(stage < ARRAY_SIZE(ctx->num_images));
@@ -621,7 +629,5 @@ llvmpipe_init_sampler_funcs(struct llvmpipe_context *llvmpipe)
    llvmpipe->pipe.create_sampler_view = llvmpipe_create_sampler_view;
    llvmpipe->pipe.set_sampler_views = llvmpipe_set_sampler_views;
    llvmpipe->pipe.sampler_view_destroy = llvmpipe_sampler_view_destroy;
-   llvmpipe->pipe.sampler_view_release = u_default_sampler_view_release;
-   llvmpipe->pipe.resource_release = u_default_resource_release;
    llvmpipe->pipe.delete_sampler_state = llvmpipe_delete_sampler_state;
 }

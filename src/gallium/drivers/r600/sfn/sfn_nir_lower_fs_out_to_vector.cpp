@@ -132,7 +132,12 @@ NirLowerIOToVector::run(nir_function_impl *impl)
    create_new_io_vars(impl->function->shader);
 
    bool progress = vectorize_block(&b, nir_start_block(impl));
-   return nir_progress(progress, impl, nir_metadata_control_flow);
+   if (progress) {
+      nir_metadata_preserve(impl, nir_metadata_control_flow);
+   } else {
+      nir_metadata_preserve(impl, nir_metadata_all);
+   }
+   return progress;
 }
 
 void
@@ -444,9 +449,10 @@ NirLowerFSOutToVector::create_combined_vector(nir_builder *b,
       op = nir_op_vec4;
       break;
    default:
-      UNREACHABLE("combined vector must have 2 to 4 components");
+      unreachable("combined vector must have 2 to 4 components");
    }
    nir_alu_instr *instr = nir_alu_instr_create(b->shader, op);
+   instr->exact = b->exact;
 
    int i = 0;
    unsigned k = 0;

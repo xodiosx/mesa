@@ -59,7 +59,9 @@ wrap_in_if(nir_builder *b, nir_intrinsic_instr *instr, nir_def *valid)
 }
 
 static void
-lower_buffer_load(nir_builder *b, nir_intrinsic_instr *instr)
+lower_buffer_load(nir_builder *b,
+                  nir_intrinsic_instr *instr,
+                  const nir_lower_robust_access_options *opts)
 {
    uint32_t type_sz = instr->def.bit_size / 8;
    nir_def *size;
@@ -108,10 +110,21 @@ lower_buffer_shared(nir_builder *b, nir_intrinsic_instr *instr)
                   nir_imm_int(b, b->shader->info.shared_size));
 }
 
-static void
-lower_image(nir_builder *b, nir_intrinsic_instr *instr, bool deref)
+static bool
+lower_image(nir_builder *b,
+            nir_intrinsic_instr *instr,
+            const nir_lower_robust_access_options *opts, bool deref)
 {
    enum glsl_sampler_dim dim = nir_intrinsic_image_dim(instr);
+   bool atomic = (instr->intrinsic == nir_intrinsic_image_atomic ||
+                  instr->intrinsic == nir_intrinsic_image_atomic_swap ||
+                  instr->intrinsic == nir_intrinsic_image_deref_atomic ||
+                  instr->intrinsic == nir_intrinsic_image_deref_atomic_swap);
+   if (!opts->lower_image &&
+       !(opts->lower_buffer_image && dim == GLSL_SAMPLER_DIM_BUF) &&
+       !(opts->lower_image_atomic && atomic))
+      return false;
+
    uint32_t num_coords = nir_image_intrinsic_coord_components(instr);
    bool is_array = nir_intrinsic_image_array(instr);
    nir_def *coord = instr->src[1].ssa;
@@ -125,7 +138,7 @@ lower_image(nir_builder *b, nir_intrinsic_instr *instr, bool deref)
                                   instr->src[0].ssa, nir_imm_int(b, 0),
                                   .image_array = is_array, .image_dim = dim);
    if (deref) {
-      nir_def_as_intrinsic(size)->intrinsic =
+      nir_instr_as_intrinsic(size->parent_instr)->intrinsic =
          nir_intrinsic_image_deref_size;
    }
 
@@ -143,7 +156,7 @@ lower_image(nir_builder *b, nir_intrinsic_instr *instr, bool deref)
       nir_def *samples = nir_image_samples(b, 32, instr->src[0].ssa,
                                            .image_array = is_array, .image_dim = dim);
       if (deref) {
-         nir_def_as_intrinsic(samples)->intrinsic =
+         nir_instr_as_intrinsic(samples->parent_instr)->intrinsic =
             nir_intrinsic_image_deref_samples;
       }
 
@@ -152,74 +165,77 @@ lower_image(nir_builder *b, nir_intrinsic_instr *instr, bool deref)
 
    /* Only execute if coordinates are in-bounds. Otherwise, return zero. */
    wrap_in_if(b, instr, in_bounds);
+   return true;
 }
 
-struct pass_opts {
-   nir_intrin_filter_cb filter;
-   const void *data;
-};
-
 static bool
-lower(nir_builder *b, nir_intrinsic_instr *intr, void *_opts)
+lower(nir_builder *b, nir_instr *instr, void *_opts)
 {
-   const struct pass_opts *opts = _opts;
-   if (!opts->filter(intr, opts->data))
+   const nir_lower_robust_access_options *opts = _opts;
+   if (instr->type != nir_instr_type_intrinsic)
       return false;
 
-   b->cursor = nir_before_instr(&intr->instr);
+   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+   b->cursor = nir_before_instr(instr);
 
    switch (intr->intrinsic) {
    case nir_intrinsic_image_load:
    case nir_intrinsic_image_store:
    case nir_intrinsic_image_atomic:
    case nir_intrinsic_image_atomic_swap:
-      lower_image(b, intr, false);
-      return true;
+      return lower_image(b, intr, opts, false);
 
    case nir_intrinsic_image_deref_load:
    case nir_intrinsic_image_deref_store:
    case nir_intrinsic_image_deref_atomic:
    case nir_intrinsic_image_deref_atomic_swap:
-      lower_image(b, intr, true);
-      return true;
+      return lower_image(b, intr, opts, true);
 
    case nir_intrinsic_load_ubo:
+      if (opts->lower_ubo) {
+         lower_buffer_load(b, intr, opts);
+         return true;
+      }
+      return false;
+
    case nir_intrinsic_load_ssbo:
-      lower_buffer_load(b, intr);
-      return true;
+      if (opts->lower_ssbo) {
+         lower_buffer_load(b, intr, opts);
+         return true;
+      }
+      return false;
    case nir_intrinsic_store_ssbo:
-      lower_buffer_store(b, intr);
-      return true;
+      if (opts->lower_ssbo) {
+         lower_buffer_store(b, intr);
+         return true;
+      }
+      return false;
    case nir_intrinsic_ssbo_atomic:
-   case nir_intrinsic_ssbo_atomic_swap:
-      lower_buffer_atomic(b, intr);
-      return true;
+      if (opts->lower_ssbo) {
+         lower_buffer_atomic(b, intr);
+         return true;
+      }
+      return false;
 
    case nir_intrinsic_store_shared:
    case nir_intrinsic_load_shared:
    case nir_intrinsic_shared_atomic:
    case nir_intrinsic_shared_atomic_swap:
-      /* Vulkan's robustBufferAccess feature is only concerned with buffers that
-       * are bound through descriptor sets, so shared memory is not included,
-       * but this lowering may be useful for debugging.
-       */
-      lower_buffer_shared(b, intr);
-      return true;
+      if (opts->lower_shared) {
+         lower_buffer_shared(b, intr);
+         return true;
+      }
+      return false;
 
    default:
-      UNREACHABLE("driver requested lowering for unsupported intrinsic");
+      return false;
    }
 }
 
-/*
- * Buffer/image robustness lowering with robustBufferAccess/robustImageAccess
- * semantics. This is sufficient for GL, but not for D3D. However, Vulkan
- * drivers get buffer robustness lowered via nir_lower_explicit_io.
- */
 bool
-nir_lower_robust_access(nir_shader *s, nir_intrin_filter_cb filter,
-                        const void *data)
+nir_lower_robust_access(nir_shader *s,
+                        const nir_lower_robust_access_options *opts)
 {
-   struct pass_opts opt = { .filter = filter, .data = data };
-   return nir_shader_intrinsics_pass(s, lower, nir_metadata_none, &opt);
+   return nir_shader_instructions_pass(s, lower, nir_metadata_control_flow,
+                                       (void *)opts);
 }

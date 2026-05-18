@@ -61,9 +61,7 @@ static inline bool
 zink_screen_check_last_finished(struct zink_screen *screen, uint32_t batch_id)
 {
    const uint32_t check_id = (uint32_t)batch_id;
-   /* 0 means an in-flight batch */
-   if (check_id == 0)
-      return false;
+   assert(check_id);
    /* last_finished may have wrapped */
    if (screen->last_finished < UINT_MAX / 2) {
       /* last_finished has wrapped, batch_id has not */
@@ -141,12 +139,6 @@ zink_driverid(const struct zink_screen *screen)
    return screen->info.vk_layered_driver_props.driverID;
 }
 
-static inline bool
-zink_driver_is_venus(const struct zink_screen *screen)
-{
-   return screen->info.driver_props.driverID == VK_DRIVER_ID_MESA_VENUS;
-}
-
 void
 zink_screen_lock_context(struct zink_screen *screen);
 void
@@ -203,11 +195,8 @@ zink_screen_get_pipeline_cache(struct zink_screen *screen, struct zink_program *
 void VKAPI_PTR
 zink_stub_function_not_loaded(void);
 
-/** Requires queue_lock to be held */
 bool
 zink_screen_debug_marker_begin(struct zink_screen *screen, const char *fmt, ...);
-
-/** Requires queue_lock to be held */
 void
 zink_screen_debug_marker_end(struct zink_screen *screen, bool emitted);
 

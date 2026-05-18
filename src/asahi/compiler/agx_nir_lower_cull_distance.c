@@ -123,5 +123,6 @@ agx_nir_lower_cull_distance_fs(nir_shader *s, unsigned nr_distances)
                                            DIV_ROUND_UP(nr_distances, 4));
 
    s->info.fs.uses_discard = true;
-   return nir_progress(true, b->impl, nir_metadata_control_flow);
+   nir_metadata_preserve(b->impl, nir_metadata_control_flow);
+   return true;
 }

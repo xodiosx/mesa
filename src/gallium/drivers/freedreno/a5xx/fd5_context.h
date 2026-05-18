@@ -36,6 +36,9 @@ struct fd5_context {
    /* storage for ctx->last.key: */
    struct ir3_shader_key last_key;
 
+   /* number of active samples-passed queries: */
+   int samples_passed_queries;
+
    /* cached state about current emitted shader program (3d): */
    unsigned max_loc;
 };

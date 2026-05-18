@@ -140,7 +140,7 @@ lower_vs_vertex_conversion_impl(nir_builder *b, nir_instr *instr, void *options)
          return nir_i2f32(b, &intr->def);
 
       default:
-         UNREACHABLE("Unsupported emulated vertex format");
+         unreachable("Unsupported emulated vertex format");
       }
    }
 }

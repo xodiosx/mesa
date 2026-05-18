@@ -4,45 +4,53 @@ include:
 # Run five jobs in parallel each running 1/55th of the test suite
 radv-stoney-vkcts:
   extends:
-    - .lava-x86_64-test-vk
+    - .lava-test-deqp:x86_64
     - .radv-stoney-test:x86_64
   parallel: 5
   variables:
-    DEQP_SUITE: radv
+    DEQP_SUITE: radv-stoney
     DEQP_FRACTION: 18
 
 radv-stoney-angle:
   extends:
-    - .lava-x86_64-test-gl
+    - .lava-test-deqp:x86_64
     - .radv-stoney-test:x86_64
-    - .test-angle
   variables:
     DEQP_SUITE: radv-stoney-angle
-    GPU_VERSION: angle-radv-stoney
+    USE_ANGLE: 1
+    HWCI_START_XORG: 1
+    GPU_VERSION: angle-radv-stoney-aco
     DEQP_FRACTION: 3
 
 radv-stoney-angle-full:
   extends:
     - radv-stoney-angle
-    - .radv-collabora-manual-rules
+    - .radv-valve-manual-rules
   parallel: 2
   variables:
     DEQP_SUITE: radv-stoney-angle-full
-    DEQP_FRACTION: 1
+    JOB_TIMEOUT: 60
 
-radeonsi-stoney-glcts-piglit:
+radeonsi-stoney-gl:
   extends:
-    - .lava-x86_64-test-gl
+    - .lava-test-deqp:x86_64
     - .radeonsi-stoney-test:x86_64
-    - .test-piglit
   parallel: 11
   variables:
     DEQP_SUITE: radeonsi-stoney
     HWCI_START_WESTON: 1
+    DEQP_FRACTION: 2
+
+radeonsi-stoney-gl-full:
+  extends:
+    - radeonsi-stoney-gl
+    - .radeonsi-manual-rules
+  variables:
+    DEQP_FRACTION: 1
 
 radeonsi-stoney-traces:
   extends:
-    - .lava-x86_64-piglit-traces
+    - .lava-piglit-traces:x86_64
     - .radeonsi-stoney-test:x86_64
   variables:
     EGL_PLATFORM: surfaceless
@@ -51,29 +59,28 @@ radeonsi-stoney-traces:
 
 radv-raven-vkcts:
   extends:
-    - .lava-x86_64-test-vk
+    - .lava-test-deqp:x86_64
     - .radv-raven-test:x86_64
     - .lava-asus-CM1400CXA-dalboz:x86_64
   parallel: 9
   variables:
-    DEQP_SUITE: radv
+    DEQP_SUITE: radv-raven
     DEQP_FRACTION: 6
 
 amd-raven-skqp:
   extends:
-    - .lava-x86_64-test-gl
+    - .lava-test-deqp:x86_64
     - .amd-raven-test:x86_64
-    - .lava-hp-x360-14a-cb0001xx-zork:x86_64
+    - .lava-lenovo-TPad-C13-Yoga-zork:x86_64
   variables:
     HWCI_START_WESTON: 1
     DEQP_SUITE: amd-raven-skqp
-  parallel: 2
 
 # Disabled as it was using an older version of Wine, with most of the traces
 # being disabled due to being flaky.
 .radv-raven-traces:
   extends:
-    - .lava-x86_64-piglit-traces
+    - .lava-piglit-traces:x86_64
     - .radv-raven-test:x86_64
     - .lava-asus-CM1400CXA-dalboz:x86_64
   variables:
@@ -84,40 +91,33 @@ amd-raven-skqp:
 
 radv-raven-traces-restricted:
   extends:
-    - .lava-x86_64-piglit-traces
+    - .lava-piglit-traces:x86_64
     - .radv-raven-test:x86_64
     - .lava-lenovo-TPad-C13-Yoga-zork:x86_64
-    - .radv-collabora-restricted-rules
+    - .radv-collabora-rules-restricted
   variables:
     HWCI_START_WESTON: 1
-    ANGLE_TRACE_FILES_TAG: "2025-03-28"
-    PIGLIT_REPLAY_ANGLE_ARCH: x64
+    PIGLIT_REPLAY_ANGLE_TAG: "2023-02-10-1"
     PIGLIT_TRACES_FILE: restricted-traces-amd.yml
     PIGLIT_REPLAY_DEVICE_NAME: "vk-${GPU_VERSION}"
     PIGLIT_REPLAY_EXTRA_ARGS: --keep-image --minio_bucket=${S3_TRACIE_PRIVATE_BUCKET} --jwt-file=${S3_JWT_FILE}
-    FDO_CI_CONCURRENT: 5  # Run the 10 traces in 2 sets of 5 to avoid OOMs
-  allow_failure: true
+    FDO_CI_CONCURRENT: 10
 
 radeonsi-raven-piglit:
   extends:
-    - .lava-x86_64-test-gl
+    - .lava-test-deqp:x86_64
     - .radeonsi-raven-test:x86_64
-    - .test-piglit
     - .lava-lenovo-TPad-C13-Yoga-zork:x86_64
   parallel: 2
-  rules:
-    - !reference [.radeonsi-collabora-rules, rules]
-    - !reference [.rusticl-rules, rules]
   variables:
     DEQP_SUITE: radeonsi-raven
     HWCI_START_WESTON: 1
 
 # lower image opcodes to emulate CDNA compute devices
-radeonsi-raven-cdna-lower-image-piglit:
+radeonsi-raven-cdna-lower-image:
   extends:
-    - .lava-x86_64-test-gl
+    - .lava-test-deqp:x86_64
     - .radeonsi-raven-test:x86_64
-    - .test-piglit
     - .lava-lenovo-TPad-C13-Yoga-zork:x86_64
   variables:
     DEQP_SUITE: radeonsi-raven-cdna
@@ -125,10 +125,10 @@ radeonsi-raven-cdna-lower-image-piglit:
 
 radeonsi-raven-va:
   extends:
-    - .lava-x86_64-test-video
+    - .lava-test-deqp:x86_64
     - .radeonsi-raven-test:x86_64
     - .radeonsi-vaapi-rules
-    - .lava-hp-x360-14a-cb0001xx-zork:x86_64
+    - .lava-asus-CM1400CXA-dalboz:x86_64
   variables:
     HWCI_TEST_SCRIPT: "/install/gtest-runner.sh"
     # While the tests don't need Xorg, it's an easy way to keep DRM open so we don't
@@ -139,203 +139,176 @@ radeonsi-raven-va:
     # allocated if we run at the normal 4 threads.
     # https://github.com/intel/libva-utils/issues/248
     FDO_CI_CONCURRENT: 1
+    # A whole run would be about 25 minutes currently.  Fixing
+    # https://github.com/intel/libva-utils/issues/247 and
+    # https://github.com/google/googletest/issues/3614 would probably help.
+    GTEST_FRACTION: 2
 
-radeonsi-raven-vaapi-fluster:
+radeonsi-raven-va-full:
   extends:
-    - .lava-x86_64-test-video
-    - .radeonsi-raven-test:x86_64
-    - .radeonsi-vaapi-fluster-rules
-    - .lava-hp-x360-14a-cb0001xx-zork:x86_64
+    - radeonsi-raven-va
+    - .radeonsi-vaapi-manual-rules
   variables:
-    DEQP_SUITE: fluster-vaapi
-    GPU_VERSION: radeonsi-raven-fluster
-
-radeonsi-mendocino-glcts-piglit:
-  extends:
-    - .lava-x86_64-test-gl
-    - .lava-dell-latitude-3445-7520c-skyrim:x86_64
-    - .test-piglit
-    - .radeonsi-collabora-rules
-  parallel: 8
-  variables:
-    DEQP_SUITE: radeonsi-mendocino
-    GPU_VERSION: radeonsi-mendocino
-    HWCI_START_WESTON: 1
-
-radv-cezanne-vkcts-asan:
-  extends:
-    - .lava-x86_64-test-asan-vk
-    - .radv-cezanne-test:x86_64
-    - .radv-collabora-rules
-  parallel: 2
-  variables:
-    DEQP_SUITE: radv
-    DEQP_FRACTION: 25
+    JOB_TIMEOUT: 60
+    GTEST_FRACTION: null
 
 ############### VKCTS tests ###############
 
 # VKCTS never finishes on gfx7 due to all the GPU resets and hangs.
 # Hence, disable it for now.
-.radv-kabini-vkcts:
+.vkcts-kabini-valve:
   extends:
-    - .ci-tron-test-radv-vk
+    - .vkcts-test-valve
     - .kabini-test-valve
     - .radv-valve-manual-rules  # Make sure this job is *always* run manually
   timeout: 12h
   variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 710
+    GPU_VERSION: radv-kabini-aco
+    B2C_TIMEOUT_BOOT_MINUTES: 710
+    B2C_TIMEOUT_OVERALL_MINUTES: 710
+    B2C_TIMEOUT_BOOT_RETRIES: 0
 
-radv-tahiti-vkcts:
+# Disabled for now due to Igalia farm issues.
+.vkcts-stoney-valve:
   extends:
-    - .ci-tron-test-radv-vk
+    - .vkcts-test-valve
+    - .radv-valve-manual-rules
+  parallel: 2
+  # The thin clients can't manage a full run in less than an hour
+  # currently.  Interpolation suggests four more thin clients (6
+  # total) would get the runtime under 15 minutes.
+  timeout: 4h 10m
+  variables:
+    GPU_VERSION: radv-stoney-aco
+    # Note, it only has a wee 32g disk!
+    B2C_KERNEL_CMDLINE_EXTRAS: 'b2c.swap=8g'
+    B2C_TIMEOUT_BOOT_MINUTES: 240
+    B2C_TIMEOUT_OVERALL_MINUTES: 240
+    B2C_TIMEOUT_BOOT_RETRIES: 0
+  tags:
+    - farm:$RUNNER_FARM_LOCATION
+    - amdgpu:codename:STONEY
+
+vkcts-tahiti-valve:
+  extends:
+    - .vkcts-test-valve
     - .tahiti-test-valve
     - .radv-valve-manual-rules  # Make sure this job is *always* run manually
-  timeout: 1h
+  timeout: 6h
   variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 50
+    GPU_VERSION: radv-tahiti-aco
+    B2C_TIMEOUT_BOOT_MINUTES: 350
+    B2C_TIMEOUT_OVERALL_MINUTES: 350
+    B2C_TIMEOUT_BOOT_RETRIES: 0
 
-radv-hawaii-vkcts:
+vkcts-polaris10-valve:
   extends:
-    - .ci-tron-test-radv-vk
-    - .hawaii-test-valve
-    - .radv-valve-manual-rules
-  timeout: 1h
-  variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 50
-
-radv-polaris10-vkcts:
-  extends:
-    - .ci-tron-test-radv-vk
+    - .vkcts-test-valve
     - .polaris10-test-valve-kws
     - .radv-valve-manual-rules
-  timeout: 1h 35m
+  timeout: 1h 15m
   variables:
-    CI_TRON_TIMEOUT__BOOT_CYCLE__RETRIES: 4
-    CI_TRON_TIMEOUT__BOOT_CYCLE__MINUTES: 70
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 90
-    RADV_PERFTEST: video_decode,video_encode
-    radv_enable_float16_gfx8: true
+    GPU_VERSION: radv-polaris10-aco
+    B2C_TIMEOUT_BOOT_MINUTES: 70
+    B2C_TIMEOUT_OVERALL_MINUTES: 70
 
-radv-vega10-vkcts:
+vkcts-vega10-valve:
   extends:
-    - .ci-tron-test-radv-vk
+    - .vkcts-test-valve
     - .vega10-test-valve
     - .radv-valve-manual-rules
   timeout: 1h 15m
   variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 70
-    RADV_PERFTEST: transfer_queue,video_decode,video_encode
+    GPU_VERSION: radv-vega10-aco
+    B2C_TIMEOUT_BOOT_MINUTES: 70
+    B2C_TIMEOUT_OVERALL_MINUTES: 70
+    RADV_PERFTEST: transfer_queue
 
-radv-renoir-vkcts:
+vkcts-renoir-valve:
   extends:
-    - .ci-tron-test-radv-vk
+    - .vkcts-test-valve
     - .renoir-test-valve
     - .radv-valve-manual-rules
   timeout: 2h 15m
   variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 130
+    GPU_VERSION: radv-renoir-aco
+    B2C_TIMEOUT_BOOT_MINUTES: 130
+    B2C_TIMEOUT_OVERALL_MINUTES: 130
     RADV_PERFTEST: transfer_queue
-    FDO_CI_CONCURRENT: 12  # HACK: Reduce the memory pressure
 
-radv-navi10-vkcts:
+vkcts-navi10-valve:
   parallel: 2
   extends:
-    - .ci-tron-test-radv-vk
+    - .vkcts-test-valve
     - .navi10-test-valve-kws
     - .radv-valve-manual-rules
   variables:
-    RADV_PERFTEST: transfer_queue,hic
+    GPU_VERSION: radv-navi10-aco
+    RADV_PERFTEST: transfer_queue
 
-radv-navi21-vkcts:
+vkcts-navi21-valve:
   timeout: 35m
   parallel: 3
   extends:
-    - .ci-tron-test-radv-vk
+    - .vkcts-test-valve
     - .navi21-test-valve
     - .radv-valve-rules
   variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 30
-    RADV_PERFTEST: transfer_queue,hic
+    GPU_VERSION: radv-navi21-aco
+    B2C_TIMEOUT_BOOT_MINUTES: 30
+    B2C_TIMEOUT_OVERALL_MINUTES: 30
+    RADV_PERFTEST: transfer_queue
 
-radv-vangogh-vkcts:
+# Disabled due to its extremelly-broken nature
+.vkcts-navi21-llvm-valve:
+  extends:
+    - .vkcts-test-valve
+    - .navi21-test-valve
+    - .radv-valve-manual-rules
+  variables:
+    GPU_VERSION: radv-navi21-llvm
+    RADV_DEBUG: llvm,checkir
+
+vkcts-vangogh-valve:
   parallel: 2
   extends:
-    - .ci-tron-test-radv-vk
+    - .vkcts-test-valve
     - .vangogh-test-valve
     - .radv-valve-manual-rules
-  timeout: 90m
+  timeout: 2h 10m
   variables:
-    RADV_PERFTEST: transfer_queue,hic
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 89
+    GPU_VERSION: radv-vangogh-aco
+    RADV_PERFTEST: transfer_queue
 
-radeonsi-vangogh-glcts:
+glcts-vangogh-valve:
   extends:
-    - .ci-tron-x86_64-test-gl
-    - .ci-tron-test-amdgpu
-    - .test-piglit
+    - .b2c-x86_64-test-gl
+    - .b2c-deqp-test
     - .vangogh-test-valve
-    - .radeonsi-valve-rules
-  timeout: 20m
+    - .radeonsi-valve-manual-rules
+  timeout: 60m
   variables:
     GPU_VERSION: radeonsi-vangogh
     DEQP_SUITE: radeonsi-vangogh
-    DEQP_FRACTION: 6
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 19
 
-radeonsi-vangogh-glcts-full:
-  extends:
-    - radeonsi-vangogh-glcts
-    - .radeonsi-valve-manual-rules
-  timeout: 90m
-  variables:
-    DEQP_FRACTION: 1
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 89
-
-radv-raphael-vkcts:
-  extends:
-    - .ci-tron-test-radv-vk
-    - .raphael-test-valve
-    - .radv-valve-manual-rules
-  timeout: 45m
-  variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 40
-    RADV_PERFTEST: transfer_queue,hic
-
-radv-navi31-vkcts:
-  timeout: 25m
+vkcts-navi31-valve:
   parallel: 2
   extends:
-    - .ci-tron-test-radv-vk
+    - .vkcts-test-valve
     - .navi31-test-valve
     - .radv-valve-rules
   variables:
+    GPU_VERSION: radv-navi31-aco
     RADV_DEBUG: nomeshshader # Disable mesh shaders until task shaders stop hanging
-    RADV_PERFTEST: transfer_queue,hic
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 20
-
-
-radv-gfx1201-vkcts:
-  timeout: 25m
-  parallel: 3
-  extends:
-    - .ci-tron-test-radv-vk
-    - .gfx1201-test-valve
-    - .radv-valve-rules
-  variables:
-    # TODO: Verify that task shaders don't hang.
-    RADV_DEBUG: nomeshshader
-    RADV_PERFTEST: transfer_queue,hic
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 20
+    RADV_PERFTEST: transfer_queue
 
 ############### Fossilize
 radv-fossils:
   extends:
     - .radv-valve-rules
     - .test-vk
-    - .ci-tron-test-radv
+    - .test-radv
     - .fossilize-test
-  rules:
-    - when: never # disabled due to broken job (no git in container)
   script:
     - export LD_PRELOAD=$PWD/install/lib/libamdgpu_noop_drm_shim.so
     # Pitcairn (GFX6)
@@ -359,161 +332,96 @@ radv-fossils:
     # RDNA3 (GFX11)
     - AMDGPU_GPU_ID="NAVI31"
       ./install/fossilize-runner.sh
-    # RDNA3.5 (STRIX1)
-    - AMDGPU_GPU_ID="STRIX1"
+    # RDNA3.5 (GFX1150)
+    - AMDGPU_GPU_ID="GFX1150"
       ./install/fossilize-runner.sh
 
 ############### vkd3d-proton
 
-radv-raven-vkd3d:
+vkd3d-tahiti-valve:
   extends:
-    - .lava-x86_64-test-vk
-    - .test-vkd3d-proton
-    - .radv-raven-test:x86_64
-    - .lava-hp-x360-14a-cb0001xx-zork:x86_64
-  variables:
-    GPU_VERSION: radv-raven
-    # Random tests fail/crash when trying to run them in parallel
-    FDO_CI_CONCURRENT: 1
-
-radv-tahiti-vkd3d:
-  extends:
-    - .ci-tron-test-radv-vk
-    - .test-vkd3d-proton
+    - .b2c-test-radv-vk
+    - .b2c-vkd3d-proton-test
     - .tahiti-test-valve
     - .radv-valve-manual-rules
-  timeout: 10m
   variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 8
+    GPU_VERSION: radv-tahiti
     # Random tests fail/crash when trying to run them in parallel
     FDO_CI_CONCURRENT: 1
 
-radv-hawaii-vkd3d:
+vkd3d-polaris10-valve:
   extends:
-    - .ci-tron-test-radv-vk
-    - .test-vkd3d-proton
-    - .hawaii-test-valve
-    - .radv-valve-manual-rules
-  timeout: 10m
-  variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 8
-    # Random tests fail/crash when trying to run them in parallel
-    FDO_CI_CONCURRENT: 1
-
-radv-polaris10-vkd3d:
-  extends:
-    - .ci-tron-test-radv-vk
-    - .test-vkd3d-proton
+    - .b2c-test-radv-vk
+    - .b2c-vkd3d-proton-test
     - .polaris10-test-valve-kws
     - .radv-valve-manual-rules
-  timeout: 10m
   variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 8
+    GPU_VERSION: radv-polaris10
     # Random tests fail/crash when trying to run them in parallel
     FDO_CI_CONCURRENT: 1
 
-radv-vega10-vkd3d:
+vkd3d-vega10-valve:
   extends:
-    - .ci-tron-test-radv-vk
-    - .test-vkd3d-proton
+    - .b2c-test-radv-vk
+    - .b2c-vkd3d-proton-test
     - .vega10-test-valve
     - .radv-valve-manual-rules
-  timeout: 10m
   variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 8
+    GPU_VERSION: radv-vega10
     # Random tests fail/crash when trying to run them in parallel
     FDO_CI_CONCURRENT: 1
 
-radv-renoir-vkd3d:
+vkd3d-renoir-valve:
   extends:
-    - .ci-tron-test-radv-vk
-    - .test-vkd3d-proton
+    - .b2c-test-radv-vk
+    - .b2c-vkd3d-proton-test
     - .renoir-test-valve
     - .radv-valve-manual-rules
-  timeout: 10m
   variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 8
+    GPU_VERSION: radv-renoir
     # Random tests fail/crash when trying to run them in parallel
     FDO_CI_CONCURRENT: 1
 
-radv-navi10-vkd3d:
+vkd3d-navi10-valve:
   extends:
-    - .ci-tron-test-radv-vk
-    - .test-vkd3d-proton
+    - .b2c-test-radv-vk
+    - .b2c-vkd3d-proton-test
     - .navi10-test-valve-mupuf
     - .radv-valve-manual-rules
-  timeout: 10m
   variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 8
+    GPU_VERSION: radv-navi10
     # Random tests fail/crash when trying to run them in parallel
     FDO_CI_CONCURRENT: 1
 
-radv-navi21-vkd3d:
+vkd3d-navi21-valve:
   extends:
-    - .ci-tron-test-radv-vk
-    - .test-vkd3d-proton
+    - .b2c-test-radv-vk
+    - .b2c-vkd3d-proton-test
     - .navi21-test-valve
     - .radv-valve-manual-rules
-  timeout: 10m
   variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 8
+    GPU_VERSION: radv-navi21
     # Random tests fail/crash when trying to run them in parallel
     FDO_CI_CONCURRENT: 1
 
-radv-vangogh-vkd3d:
+vkd3d-vangogh-valve:
   extends:
-    - .ci-tron-test-radv-vk
-    - .test-vkd3d-proton
+    - .b2c-test-radv-vk
+    - .b2c-vkd3d-proton-test
     - .vangogh-test-valve
     - .radv-valve-manual-rules
-  timeout: 10m
   variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 8
+    GPU_VERSION: radv-vangogh
     # Random tests fail/crash when trying to run them in parallel
     FDO_CI_CONCURRENT: 1
 
-radv-raphael-vkd3d:
+vkd3d-navi31-valve:
   extends:
-    - .ci-tron-test-radv-vk
-    - .test-vkd3d-proton
-    - .raphael-test-valve
-    - .radv-valve-manual-rules
-  timeout: 10m
-  variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 8
-    # Random tests fail/crash when trying to run them in parallel
-    FDO_CI_CONCURRENT: 1
-
-radv-navi31-vkd3d:
-  extends:
-    - .ci-tron-test-radv-vk
-    - .test-vkd3d-proton
+    - .b2c-test-radv-vk
+    - .b2c-vkd3d-proton-test
     - .navi31-test-valve
     - .radv-valve-manual-rules
-  timeout: 10m
   variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 8
+    GPU_VERSION: radv-navi31
     # Random tests fail/crash when trying to run them in parallel
     FDO_CI_CONCURRENT: 1
-
-radv-gfx1201-vkd3d:
-  extends:
-    - .ci-tron-test-radv-vk
-    - .test-vkd3d-proton
-    - .gfx1201-test-valve
-    - .radv-valve-manual-rules
-  timeout: 10m
-  variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 8
-    # Random tests fail/crash when trying to run them in parallel
-    FDO_CI_CONCURRENT: 1
-
-.radv-kabini-vkd3d:
-  extends:
-    - .ci-tron-test-radv-vk
-    - .test-vkd3d-proton
-    - .kabini-test-valve
-    - .radv-valve-manual-rules
-  timeout: 10m
-  variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 8

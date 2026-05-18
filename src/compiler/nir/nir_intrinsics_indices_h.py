@@ -55,11 +55,7 @@ nir_intrinsic_set_${name}(nir_intrinsic_instr *instr, ${data_type} val)
    assert(info->index_map[${enum}] > 0);
 % if "struct" in data_type:
    STATIC_ASSERT(sizeof(instr->const_index[0]) == sizeof(val));
-   /* NOTE: gcc has a a false positive here, silenced with the pragmas */
-   PRAGMA_DIAGNOSTIC_PUSH
-   PRAGMA_DIAGNOSTIC_IGNORED_GCC(-Wstringop-overflow)
    memcpy(&instr->const_index[info->index_map[${enum}] - 1], &val, sizeof(val));
-   PRAGMA_DIAGNOSTIC_POP
 % else:
    instr->const_index[info->index_map[${enum}] - 1] = val;
 % endif
@@ -73,8 +69,7 @@ nir_intrinsic_has_${name}(const nir_intrinsic_instr *instr)
 }
 % endfor
 
-#endif /* _NIR_INTRINSICS_INDICES_ */
-"""
+#endif /* _NIR_INTRINSICS_INDICES_ */"""
 
 from nir_intrinsics import INTR_INDICES
 from mako.template import Template
@@ -84,12 +79,13 @@ import os
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--out', required=True,
-                        help='Output H file')
+    parser.add_argument('--outdir', required=True,
+                        help='Directory to put the generated files in')
 
     args = parser.parse_args()
 
-    with open(args.out, 'w', encoding='utf-8') as f:
+    path = os.path.join(args.outdir, 'nir_intrinsics_indices.h')
+    with open(path, 'w', encoding='utf-8') as f:
         f.write(Template(template).render(INTR_INDICES=INTR_INDICES))
 
 if __name__ == '__main__':

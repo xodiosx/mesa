@@ -308,7 +308,7 @@ vbo_get_minmax_index_mapped(unsigned count, unsigned index_size,
       break;
    }
    default:
-      UNREACHABLE("not reached");
+      unreachable("not reached");
    }
 }
 

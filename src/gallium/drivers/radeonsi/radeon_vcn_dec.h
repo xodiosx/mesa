@@ -20,13 +20,13 @@
 #define RADEON_DEC_ERR(fmt, args...)                                                             \
    do {                                                                                          \
       dec->error = true;                                                                         \
-      mesa_loge("%s:%d %s VCN - " fmt, __FILE__, __LINE__, __func__, ##args);           \
+      fprintf(stderr, "EE %s:%d %s VCN - " fmt, __FILE__, __LINE__, __func__, ##args);           \
    } while(0)
 
 struct rvcn_dec_dynamic_dpb_t2 {
    struct list_head list;
    uint8_t index;
-   struct pipe_resource *buf;
+   struct pipe_video_buffer *vbuf;
 };
 
 struct jpeg_registers {
@@ -71,6 +71,8 @@ struct radeon_decoder {
    unsigned frame_number;
    unsigned db_alignment;
    unsigned dpb_size;
+   unsigned last_width;
+   unsigned last_height;
    unsigned max_width;
    unsigned max_height;
    unsigned addr_gfx_mode;
@@ -88,13 +90,12 @@ struct radeon_decoder {
    bool vcn_dec_sw_ring;
    struct rvcn_sq_var sq;
 
-   struct si_resource **msg_fb_it_probs_buffers;
+   struct rvid_buffer *msg_fb_it_probs_buffers;
    unsigned num_dec_bufs;
-   struct si_resource **bs_buffers;
-   struct si_resource *dpb;
-   struct si_resource *ctx;
-   struct si_resource *sessionctx;
-   struct si_resource *subsample;
+   struct rvid_buffer *bs_buffers;
+   struct rvid_buffer dpb;
+   struct rvid_buffer ctx;
+   struct rvid_buffer sessionctx;
 
    unsigned bs_size;
    unsigned cur_buffer;
@@ -102,6 +103,7 @@ struct radeon_decoder {
    unsigned h264_valid_ref_num[17];
    unsigned h264_valid_poc_num[34];
    unsigned av1_version;
+   bool show_frame;
    unsigned ref_idx;
    bool tmz_ctx;
    struct {
@@ -115,8 +117,7 @@ struct radeon_decoder {
    enum {
       DPB_MAX_RES = 0,
       DPB_DYNAMIC_TIER_1,
-      DPB_DYNAMIC_TIER_2,
-      DPB_DYNAMIC_TIER_3,
+      DPB_DYNAMIC_TIER_2
    } dpb_type;
 
    struct {
@@ -129,33 +130,30 @@ struct radeon_decoder {
       unsigned ref_size;
       unsigned num_refs;
       uint8_t ref_list[16];
-      struct {
-         uint8_t index;
-         struct pipe_video_buffer *buf;
-      } bufs[16];
    } ref_codec;
 
    struct list_head dpb_ref_list;
    struct list_head dpb_unref_list;
 
-   bool (*send_cmd)(struct radeon_decoder *dec, struct pipe_video_buffer *target,
+   void (*send_cmd)(struct radeon_decoder *dec, struct pipe_video_buffer *target,
                     struct pipe_picture_desc *picture);
    /* Additional contexts for mJPEG */
    struct radeon_cmdbuf *jcs;
    struct radeon_winsys_ctx **jctx;
    unsigned cb_idx;
    unsigned njctx;
+   struct pipe_fence_handle *prev_fence;
+   struct pipe_fence_handle *destroy_fence;
 
    bool error;
 
    struct pipe_context *ectx;
-   struct pipe_video_codec *vpe;
 };
 
-bool send_cmd_dec(struct radeon_decoder *dec, struct pipe_video_buffer *target,
+void send_cmd_dec(struct radeon_decoder *dec, struct pipe_video_buffer *target,
                   struct pipe_picture_desc *picture);
 
-bool send_cmd_jpeg(struct radeon_decoder *dec, struct pipe_video_buffer *target,
+void send_cmd_jpeg(struct radeon_decoder *dec, struct pipe_video_buffer *target,
                    struct pipe_picture_desc *picture);
 
 struct pipe_video_codec *radeon_create_decoder(struct pipe_context *context,

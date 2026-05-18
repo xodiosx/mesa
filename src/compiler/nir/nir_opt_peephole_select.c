@@ -25,6 +25,7 @@
 #include "nir.h"
 #include "nir_builder.h"
 #include "nir_control_flow.h"
+#include "nir_search_helpers.h"
 
 /*
  * Implements a small peephole optimization that looks for
@@ -57,12 +58,13 @@
 
 static bool
 block_check_for_allowed_instrs(nir_block *block, unsigned *count,
-                               const nir_opt_peephole_select_options *options)
+                               unsigned limit, bool indirect_load_ok,
+                               bool expensive_alu_ok)
 {
-   bool alu_ok = options->limit != 0;
+   bool alu_ok = limit != 0;
 
    /* Used on non-control-flow HW to flatten all IFs. */
-   if (options->limit == ~0) {
+   if (limit == ~0) {
       nir_foreach_instr(instr, block) {
          switch (instr->type) {
          case nir_instr_type_alu:
@@ -71,6 +73,7 @@ block_check_for_allowed_instrs(nir_block *block, unsigned *count,
          case nir_instr_type_phi:
          case nir_instr_type_undef:
          case nir_instr_type_tex:
+         case nir_instr_type_debug_info:
             break;
 
          case nir_instr_type_intrinsic: {
@@ -78,12 +81,10 @@ block_check_for_allowed_instrs(nir_block *block, unsigned *count,
             switch (intr->intrinsic) {
             case nir_intrinsic_terminate:
             case nir_intrinsic_terminate_if:
-            case nir_intrinsic_demote:
-            case nir_intrinsic_demote_if:
                /* For non-CF hardware, we need to be able to move discards up
                 * and flatten, so let them pass.
                 */
-               break;
+               continue;
             default:
                if (!nir_intrinsic_can_reorder(intr))
                   return false;
@@ -92,8 +93,8 @@ block_check_for_allowed_instrs(nir_block *block, unsigned *count,
          }
 
          case nir_instr_type_call:
-         case nir_instr_type_cmat_call:
          case nir_instr_type_jump:
+         case nir_instr_type_parallel_copy:
             return false;
          }
       }
@@ -117,7 +118,7 @@ block_check_for_allowed_instrs(nir_block *block, unsigned *count,
                 * because that flow control may be trying to avoid invalid
                 * loads.
                 */
-               if (!options->indirect_load_ok && nir_deref_instr_has_indirect(deref))
+               if (!indirect_load_ok && nir_deref_instr_has_indirect(deref))
                   return false;
 
                break;
@@ -130,23 +131,17 @@ block_check_for_allowed_instrs(nir_block *block, unsigned *count,
 
          case nir_intrinsic_load_ubo:
          case nir_intrinsic_load_ubo_vec4:
-         case nir_intrinsic_load_ssbo:
-         case nir_intrinsic_load_interpolated_input:
-         case nir_intrinsic_load_per_vertex_input:
-         case nir_intrinsic_load_input_vertex:
-            if (!options->indirect_load_ok && !nir_src_is_const(intrin->src[1]))
+            if (!indirect_load_ok && !nir_src_is_const(intrin->src[1]))
                return false;
-            if (!nir_instr_can_speculate(&intrin->instr))
+            if (!(nir_intrinsic_access(intrin) & ACCESS_CAN_SPECULATE))
                return false;
             break;
 
          case nir_intrinsic_load_global_constant:
          case nir_intrinsic_load_constant_agx:
-         case nir_intrinsic_load_input:
-         case nir_intrinsic_load_constant:
-            if (!options->indirect_load_ok && !nir_src_is_const(intrin->src[0]))
+            if (!indirect_load_ok && !nir_src_is_const(intrin->src[0]))
                return false;
-            if (!nir_instr_can_speculate(&intrin->instr))
+            if (!(nir_intrinsic_access(intrin) & ACCESS_CAN_SPECULATE))
                return false;
             break;
 
@@ -157,17 +152,12 @@ block_check_for_allowed_instrs(nir_block *block, unsigned *count,
             FALLTHROUGH;
          case nir_intrinsic_load_uniform:
          case nir_intrinsic_load_preamble:
-         case nir_intrinsic_load_scalar_arg_amd:
-         case nir_intrinsic_load_vector_arg_amd:
          case nir_intrinsic_load_helper_invocation:
          case nir_intrinsic_is_helper_invocation:
          case nir_intrinsic_load_front_face:
          case nir_intrinsic_load_view_index:
          case nir_intrinsic_load_layer_id:
          case nir_intrinsic_load_frag_coord:
-         case nir_intrinsic_load_pixel_coord:
-         case nir_intrinsic_load_frag_coord_z:
-         case nir_intrinsic_load_frag_coord_w:
          case nir_intrinsic_load_sample_pos:
          case nir_intrinsic_load_sample_pos_or_center:
          case nir_intrinsic_load_sample_id:
@@ -200,19 +190,7 @@ block_check_for_allowed_instrs(nir_block *block, unsigned *count,
          case nir_intrinsic_ddy_fine:
          case nir_intrinsic_ddy_coarse:
          case nir_intrinsic_load_const_ir3:
-         case nir_intrinsic_ballot:
-         case nir_intrinsic_ballot_relaxed:
-         case nir_intrinsic_mbcnt_amd:
-         case nir_intrinsic_load_push_data_intel:
             if (!alu_ok)
-               return false;
-            break;
-
-         case nir_intrinsic_terminate:
-         case nir_intrinsic_terminate_if:
-         case nir_intrinsic_demote:
-         case nir_intrinsic_demote_if:
-            if (!options->discard_ok)
                return false;
             break;
 
@@ -260,7 +238,7 @@ block_check_for_allowed_instrs(nir_block *block, unsigned *count,
          case nir_op_idiv:
          case nir_op_irem:
          case nir_op_udiv:
-            if (!alu_ok || !options->expensive_alu_ok)
+            if (!alu_ok || !expensive_alu_ok)
                return false;
 
             break;
@@ -293,71 +271,15 @@ block_check_for_allowed_instrs(nir_block *block, unsigned *count,
          break;
       }
 
+      case nir_instr_type_debug_info:
+         break;
+
       default:
          return false;
       }
    }
 
    return true;
-}
-
-static nir_opt_peephole_select_options
-get_options_for_if(nir_if *if_stmt,
-                   const nir_opt_peephole_select_options *options)
-{
-   nir_opt_peephole_select_options if_options = *options;
-
-   if (if_stmt->control == nir_selection_control_flatten) {
-      /* Override driver defaults */
-      if_options.limit = UINT_MAX - 1; /* Maximum without unsafe flattening. */
-      if_options.indirect_load_ok = true;
-      if_options.expensive_alu_ok = true;
-   } else if (if_stmt->control == nir_selection_control_dont_flatten) {
-      if_options.limit = 0;
-      if_options.indirect_load_ok = false;
-   }
-
-   return if_options;
-}
-
-/* If we're moving discards or other conditional intrinsics
- * out of the if we need to add the if's condition to it
- */
-static void
-rewrite_intrinsic_conds(nir_instr *instr, nir_def *if_cond, bool is_else)
-{
-   if (instr->type != nir_instr_type_intrinsic)
-      return;
-   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-
-   if (intr->intrinsic != nir_intrinsic_terminate_if &&
-       intr->intrinsic != nir_intrinsic_terminate &&
-       intr->intrinsic != nir_intrinsic_demote_if &&
-       intr->intrinsic != nir_intrinsic_demote &&
-       intr->intrinsic != nir_intrinsic_ballot)
-      return;
-
-   nir_builder b = nir_builder_at(nir_before_instr(instr));
-
-   if (intr->intrinsic == nir_intrinsic_terminate_if ||
-       intr->intrinsic == nir_intrinsic_demote_if ||
-       intr->intrinsic == nir_intrinsic_ballot) {
-      if_cond = nir_b2bN(&b, if_cond, intr->src[0].ssa->bit_size);
-
-      if (is_else)
-         if_cond = nir_inot(&b, if_cond);
-
-      nir_src_rewrite(&intr->src[0], nir_iand(&b, intr->src[0].ssa, if_cond));
-   } else {
-      if (is_else)
-         if_cond = nir_inot(&b, if_cond);
-
-      if (intr->intrinsic == nir_intrinsic_terminate)
-         nir_terminate_if(&b, if_cond);
-      else
-         nir_demote_if(&b, if_cond);
-      nir_instr_remove(instr);
-   }
 }
 
 /**
@@ -383,14 +305,16 @@ rewrite_intrinsic_conds(nir_instr *instr, nir_def *if_cond, bool is_else)
  *
  */
 static bool
-nir_opt_collapse_if(nir_if *if_stmt, nir_shader *shader,
-                    const nir_opt_peephole_select_options *options)
+nir_opt_collapse_if(nir_if *if_stmt, nir_shader *shader, unsigned limit,
+                    bool indirect_load_ok, bool expensive_alu_ok)
 {
    /* the if has to be nested */
    if (if_stmt->cf_node.parent->type != nir_cf_node_if)
       return false;
 
    nir_if *parent_if = nir_cf_node_as_if(if_stmt->cf_node.parent);
+   if (parent_if->control == nir_selection_control_dont_flatten)
+      return false;
 
    /* check if the else block is empty */
    if (!nir_cf_list_is_empty_block(&if_stmt->else_list))
@@ -434,14 +358,20 @@ nir_opt_collapse_if(nir_if *if_stmt, nir_shader *shader,
       }
    }
 
+   if (parent_if->control == nir_selection_control_flatten) {
+      /* Override driver defaults */
+      indirect_load_ok = true;
+      expensive_alu_ok = true;
+   }
+
    /* check if the block before the nested if matches the requirements */
    nir_block *first = nir_if_first_then_block(parent_if);
-   nir_opt_peephole_select_options if_options = get_options_for_if(parent_if, options);
    unsigned count = 0;
-   if (!block_check_for_allowed_instrs(first, &count, &if_options))
+   if (!block_check_for_allowed_instrs(first, &count, limit != 0,
+                                       indirect_load_ok, expensive_alu_ok))
       return false;
 
-   if (count > if_options.limit)
+   if (count > limit && parent_if->control != nir_selection_control_flatten)
       return false;
 
    /* trivialize succeeding phis */
@@ -458,11 +388,7 @@ nir_opt_collapse_if(nir_if *if_stmt, nir_shader *shader,
       }
    }
 
-   /* combine condition with potential demote/terminate */
-   nir_foreach_instr_safe(instr, first)
-      rewrite_intrinsic_conds(instr, parent_if->condition.ssa, false);
-
-   /* combine the if conditions */
+   /* combine the conditions */
    struct nir_builder b = nir_builder_at(nir_before_cf_node(&if_stmt->cf_node));
    nir_def *cond = nir_iand(&b, if_stmt->condition.ssa,
                             parent_if->condition.ssa);
@@ -478,9 +404,36 @@ nir_opt_collapse_if(nir_if *if_stmt, nir_shader *shader,
    return true;
 }
 
+/* If we're moving discards out of the if for non-CF hardware, we need to add
+ * the if's condition to it
+ */
+static void
+rewrite_discard_conds(nir_instr *instr, nir_def *if_cond, bool is_else)
+{
+   if (instr->type != nir_instr_type_intrinsic)
+      return;
+   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+
+   if (intr->intrinsic != nir_intrinsic_terminate_if && intr->intrinsic != nir_intrinsic_terminate)
+      return;
+
+   nir_builder b = nir_builder_at(nir_before_instr(instr));
+
+   if (is_else)
+      if_cond = nir_inot(&b, if_cond);
+
+   if (intr->intrinsic == nir_intrinsic_terminate_if) {
+      nir_src_rewrite(&intr->src[0], nir_iand(&b, intr->src[0].ssa, if_cond));
+   } else {
+      nir_discard_if(&b, if_cond);
+      nir_instr_remove(instr);
+   }
+}
+
 static bool
 nir_opt_peephole_select_block(nir_block *block, nir_shader *shader,
-                              const nir_opt_peephole_select_options *options)
+                              unsigned limit, bool indirect_load_ok,
+                              bool expensive_alu_ok)
 {
    if (nir_cf_node_is_first(&block->cf_node))
       return false;
@@ -503,8 +456,12 @@ nir_opt_peephole_select_block(nir_block *block, nir_shader *shader,
    nir_if *if_stmt = nir_cf_node_as_if(prev_node);
 
    /* first, try to collapse the if */
-   if (nir_opt_collapse_if(if_stmt, shader, options))
+   if (nir_opt_collapse_if(if_stmt, shader, limit,
+                           indirect_load_ok, expensive_alu_ok))
       return true;
+
+   if (if_stmt->control == nir_selection_control_dont_flatten)
+      return false;
 
    nir_block *then_block = nir_if_first_then_block(if_stmt);
    nir_block *else_block = nir_if_first_else_block(if_stmt);
@@ -514,15 +471,21 @@ nir_opt_peephole_select_block(nir_block *block, nir_shader *shader,
        nir_if_last_else_block(if_stmt) != else_block)
       return false;
 
-   nir_opt_peephole_select_options if_options = get_options_for_if(if_stmt, options);
+   if (if_stmt->control == nir_selection_control_flatten) {
+      /* Override driver defaults */
+      indirect_load_ok = true;
+      expensive_alu_ok = true;
+   }
 
    /* ... and those blocks must only contain "allowed" instructions. */
    unsigned count = 0;
-   if (!block_check_for_allowed_instrs(then_block, &count, &if_options) ||
-       !block_check_for_allowed_instrs(else_block, &count, &if_options))
+   if (!block_check_for_allowed_instrs(then_block, &count, limit,
+                                       indirect_load_ok, expensive_alu_ok) ||
+       !block_check_for_allowed_instrs(else_block, &count, limit,
+                                       indirect_load_ok, expensive_alu_ok))
       return false;
 
-   if (count > if_options.limit)
+   if (count > limit && if_stmt->control != nir_selection_control_flatten)
       return false;
 
    /* At this point, we know that the previous CFG node is an if-then
@@ -539,14 +502,14 @@ nir_opt_peephole_select_block(nir_block *block, nir_shader *shader,
       exec_node_remove(&instr->node);
       instr->block = prev_block;
       exec_list_push_tail(&prev_block->instr_list, &instr->node);
-      rewrite_intrinsic_conds(instr, if_stmt->condition.ssa, false);
+      rewrite_discard_conds(instr, if_stmt->condition.ssa, false);
    }
 
    nir_foreach_instr_safe(instr, else_block) {
       exec_node_remove(&instr->node);
       instr->block = prev_block;
       exec_list_push_tail(&prev_block->instr_list, &instr->node);
-      rewrite_intrinsic_conds(instr, if_stmt->condition.ssa, true);
+      rewrite_discard_conds(instr, if_stmt->condition.ssa, true);
    }
 
    nir_foreach_phi_safe(phi, block) {
@@ -578,27 +541,37 @@ nir_opt_peephole_select_block(nir_block *block, nir_shader *shader,
 }
 
 static bool
-nir_opt_peephole_select_impl(nir_function_impl *impl,
-                             const nir_opt_peephole_select_options *options)
+nir_opt_peephole_select_impl(nir_function_impl *impl, unsigned limit,
+                             bool indirect_load_ok, bool expensive_alu_ok)
 {
    nir_shader *shader = impl->function->shader;
    bool progress = false;
 
    nir_foreach_block_safe(block, impl) {
-      progress |= nir_opt_peephole_select_block(block, shader, options);
+      progress |= nir_opt_peephole_select_block(block, shader, limit,
+                                                indirect_load_ok,
+                                                expensive_alu_ok);
    }
 
-   return nir_progress(progress, impl, nir_metadata_none);
+   if (progress) {
+      nir_metadata_preserve(impl, nir_metadata_none);
+   } else {
+      nir_metadata_preserve(impl, nir_metadata_all);
+   }
+
+   return progress;
 }
 
 bool
-nir_opt_peephole_select(nir_shader *shader,
-                        const nir_opt_peephole_select_options *options)
+nir_opt_peephole_select(nir_shader *shader, unsigned limit,
+                        bool indirect_load_ok, bool expensive_alu_ok)
 {
    bool progress = false;
 
    nir_foreach_function_impl(impl, shader) {
-      progress |= nir_opt_peephole_select_impl(impl, options);
+      progress |= nir_opt_peephole_select_impl(impl, limit,
+                                               indirect_load_ok,
+                                               expensive_alu_ok);
    }
 
    return progress;

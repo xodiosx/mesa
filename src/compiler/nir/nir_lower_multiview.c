@@ -143,10 +143,7 @@ shader_only_allowed_outputs_use_view_index(nir_shader *shader,
       /* Peephole select will drop if-blocks that have then and else empty,
        * which will remove the usage of an SSA in the condition.
        */
-      nir_opt_peephole_select_options peephole_select_options = {
-         .limit = 0,
-      };
-      progress |= nir_opt_peephole_select(shader_no_position, &peephole_select_options);
+      progress |= nir_opt_peephole_select(shader_no_position, 0, false, false);
 
       progress |= nir_opt_dce(shader_no_position);
    } while (progress);
@@ -251,7 +248,9 @@ nir_lower_multiview(nir_shader *shader, nir_lower_multiview_options options)
 
    nir_def *loop_index = nir_load_deref(&b, loop_index_deref);
    nir_def *cmp = nir_ige_imm(&b, loop_index, view_count);
-   nir_break_if(&b, cmp);
+   nir_if *loop_check = nir_push_if(&b, cmp);
+   nir_jump(&b, nir_jump_break);
+   nir_pop_if(&b, loop_check);
 
    nir_def *view_index =
       nir_load_deref(&b, nir_build_deref_array(&b, view_index_deref, loop_index));
@@ -304,15 +303,15 @@ nir_lower_multiview(nir_shader *shader, nir_lower_multiview_options options)
 
          case nir_intrinsic_load_deref: {
             nir_variable *var = nir_intrinsic_get_var(intrin, 0);
-            if (var && _mesa_hash_table_search(out_derefs, var)) {
-               UNREACHABLE("Should have lowered I/O to temporaries "
+            if (_mesa_hash_table_search(out_derefs, var)) {
+               unreachable("Should have lowered I/O to temporaries "
                            "so no load_deref on output is expected.");
             }
             break;
          }
 
          case nir_intrinsic_copy_deref:
-            UNREACHABLE("Should have lowered copy_derefs at this point");
+            unreachable("Should have lowered copy_derefs at this point");
             break;
 
          default:
@@ -324,5 +323,6 @@ nir_lower_multiview(nir_shader *shader, nir_lower_multiview_options options)
 
    _mesa_hash_table_destroy(out_derefs, NULL);
 
-   return nir_progress(true, entrypoint, nir_metadata_none);
+   nir_metadata_preserve(entrypoint, nir_metadata_none);
+   return true;
 }

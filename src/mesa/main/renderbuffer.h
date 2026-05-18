@@ -66,9 +66,6 @@ _mesa_reference_renderbuffer(struct gl_renderbuffer **ptr,
       _mesa_reference_renderbuffer_(ptr, rb);
 }
 
-enum pipe_format
-_mesa_renderbuffer_get_format(struct gl_context *ctx, struct gl_renderbuffer *rb);
-
 void
 _mesa_map_renderbuffer(struct gl_context *ctx,
                        struct gl_renderbuffer *rb,
@@ -81,6 +78,9 @@ void
 _mesa_unmap_renderbuffer(struct gl_context *ctx,
                          struct gl_renderbuffer *rb);
 
+void
+_mesa_regen_renderbuffer_surface(struct gl_context *ctx,
+                                 struct gl_renderbuffer *rb);
 void
 _mesa_update_renderbuffer_surface(struct gl_context *ctx,
                                   struct gl_renderbuffer *rb);

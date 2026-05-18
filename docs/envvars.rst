@@ -5,14 +5,6 @@ Normally, no environment variables need to be set. Most of the
 environment variables used by Mesa/Gallium are for debugging purposes,
 but they can sometimes be useful for debugging end-user issues.
 
-Android System Properties
--------------------------
-
-Android (generally) uses system properties rather than environment variables to
-control Mesa/Gallium behavior, although there are some exceptions to this. See
-:ref:`Android System Properties <android-android-system-properties>` for
-details on naming and how to set and get system property values.
-
 LibGL environment variables
 ---------------------------
 
@@ -34,6 +26,14 @@ LibGL environment variables
    if set to ``true``, do not use DrawArrays GLX protocol (for
    debugging)
 
+.. envvar:: LIBGL_DRI2_DISABLE
+
+   disable DRI2 if set to ``true``.
+
+.. envvar:: LIBGL_DRI3_DISABLE
+
+   disable DRI3 if set to ``true``.
+
 .. envvar:: LIBGL_KOPPER_DISABLE
 
    disable Vulkan swapchains with Zink if set to ``true``.
@@ -44,10 +44,9 @@ LibGL environment variables
 
 .. envvar:: LIBGL_KOPPER_DRI2
 
-   if set to ``true``, allow loading Zink even if X11 does not support
-   explicit DRM format modifiers. In general, this should not be used
-   unless you know what you are doing. Some examples of "knowing what you
-   are doing" include:
+   disable DRI3 with Zink if set to ``true``.
+   In general, this should not be used unless you know what you are
+   doing. Some examples of "knowing what you are doing" include:
    - running xrdp
    - using a VK driver which doesn't support modifiers
 
@@ -89,18 +88,10 @@ Core Mesa environment variables
    purposes (e.g. for driconf option matching, logging, artifact storage,
    etc.).
 
-.. envvar:: MESA_LOG_LEVEL
-
-   specifies the maximum log level
-
 .. envvar:: MESA_LOG_FILE
 
    specifies a file name for logging all errors, warnings, etc., rather
    than stderr
-
-.. envvar:: MESA_LOG_PREFIX
-
-   specifies what to to include in the log prefix (linux only) - default is ``tag,level``
 
 .. envvar:: MESA_EXTENSION_OVERRIDE
 
@@ -209,11 +200,10 @@ Core Mesa environment variables
 .. envvar:: MESA_SHADER_CACHE_DIR
 
    if set, determines the directory to be used for the on-disk cache of
-   compiled shader programs. If set then the cache will be stored in
-   ``$MESA_SHADER_CACHE_DIR/mesa_shader_cache``. If this variable is not
-   set, then the cache will be stored in
-   ``$XDG_CACHE_HOME/mesa_shader_cache`` (if that variable is set), or else
-   within ``.cache/mesa_shader_cache`` within the user's home directory.
+   compiled shader programs. If this variable is not set, then the cache
+   will be stored in ``$XDG_CACHE_HOME/mesa_shader_cache_db`` (if that
+   variable is set), or else within ``.cache/mesa_shader_cache_db`` within
+   the user's home directory.
 
 .. envvar:: MESA_SHADER_CACHE_SHOW_STATS
 
@@ -228,21 +218,19 @@ Core Mesa environment variables
    cache DBs via :envvar:`MESA_DISK_CACHE_READ_ONLY_FOZ_DBS` or
    :envvar:`MESA_DISK_CACHE_READ_ONLY_FOZ_DBS_DYNAMIC_LIST`. This
    implementation does not support cache size limits via
-   :envvar:`MESA_SHADER_CACHE_MAX_SIZE`. If :envvar:`MESA_SHADER_CACHE_DIR`
-   is set, the cache will be stored in
-   ``$MESA_SHADER_CACHE_DIR/mesa_shader_cache_sf``, or else within
-   ``$XDG_CACHE_HOME/mesa_shader_cache_sf`` (if that variable is set)
+   :envvar:`MESA_SHADER_CACHE_MAX_SIZE`. If
+   :envvar:`MESA_SHADER_CACHE_DIR` is not set, the cache will be stored
+   in ``$XDG_CACHE_HOME/mesa_shader_cache_sf`` (if that variable is set)
    or else within ``.cache/mesa_shader_cache_sf`` within the user's home
    directory.
 
 .. envvar:: MESA_DISK_CACHE_MULTI_FILE
 
-   if set to 1 (set by default), enables the multi file on-disk
-   shader cache implementation. This implementation increases the overall
-   disk usage.
-   If :envvar:`MESA_SHADER_CACHE_DIR` is set, the cache will be stored in
-   ``$MESA_SHADER_CACHE_DIR/mesa_shader_cache``, or else within
-   ``$XDG_CACHE_HOME/mesa_shader_cache`` (if that variable is set)
+   if set to 1, enables the multi file on-disk shader cache implementation
+   instead of the default Mesa-DB cache implementation.
+   This implementation increases the overall disk usage.
+   If :envvar:`MESA_SHADER_CACHE_DIR` is not set, the cache will be stored
+   in ``$XDG_CACHE_HOME/mesa_shader_cache`` (if that variable is set)
    or else within ``.cache/mesa_shader_cache`` within the user's home
    directory.
 
@@ -256,18 +244,6 @@ Core Mesa environment variables
    ``MESA_DISK_CACHE_SINGLE_FILE=filename1`` refers to ``filename1.foz``
    and ``filename1_idx.foz``. A limit of 8 DBs can be loaded and this limit
    is shared with :envvar:`MESA_DISK_CACHE_READ_ONLY_FOZ_DBS_DYNAMIC_LIST`.
-
-.. envvar:: MESA_DISK_CACHE_DATABASE
-
-   if set to 1, enables the Mesa-DB single file on-disk shader cache
-   implementation instead of the default multi-file cache implementation.
-   Like :envvar:`MESA_DISK_CACHE_SINGLE_FILE`, Mesa-DB reduces overall
-   disk usage but Mesa-DB supports cache size limits via
-   :envvar:`MESA_SHADER_CACHE_MAX_SIZE`. If
-   :envvar:`MESA_SHADER_CACHE_DIR` is not set, the cache will be stored
-   in ``$XDG_CACHE_HOME/mesa_shader_cache_db`` (if that variable is set)
-   or else within ``.cache/mesa_shader_cache_db`` within the user's home
-   directory.
 
 .. envvar:: MESA_DISK_CACHE_DATABASE_NUM_PARTS
 
@@ -321,14 +297,6 @@ Core Mesa environment variables
 
    see :ref:`Experimenting with Shader Replacements <replacement>`
 
-.. envvar:: MESA_SPIRV_DUMP_PATH
-
-   see :ref:`SPIR-V Shader Capture <spirv_capture>`
-
-.. envvar:: MESA_SPIRV_READ_PATH
-
-   see :ref:`SPIR-V Shader Replacement <spirv_replacement>`
-
 .. envvar:: MESA_VK_VERSION_OVERRIDE
 
    changes the Vulkan physical device version as returned in
@@ -356,11 +324,6 @@ Core Mesa environment variables
    causes the Vulkan driver to call abort() immediately after detecting a
    lost device.  This is extremely useful when testing as it prevents the
    test suite from continuing on with a lost device.
-
-.. envvar:: MESA_VK_VALIDATE_SHADER_BINARIES
-
-   enables extra validation of shader and pipeline binaries to ensure
-   consistency of driver binaries.
 
 .. envvar:: MESA_VK_ENABLE_SUBMIT_THREAD
 
@@ -557,10 +520,6 @@ Intel driver environment variables
       use color in output
    ``cs``
       dump shader assembly for compute shaders
-   ``dispatch_bkp``
-      Add semaphore wait before/after dispatch call count.
-      ``INTEL_DEBUG_BKP_BEFORE_DISPATCH_COUNT`` or
-      ``INTEL_DEBUG_BKP_AFTER_DISPATCH_COUNT`` can control dispatch call number.
    ``do32``
       generate compute shader SIMD32 programs even if workgroup size
       doesn't exceed the SIMD16 limit
@@ -582,9 +541,6 @@ Intel driver environment variables
       print instruction hex dump with the disassembly
    ``l3``
       emit messages about the new L3 state during transitions
-   ``mda``
-      generate mda.tar files containing shader at each optimization
-      pass and iteration that make progress (Gfx >= 9)
    ``mesh``
       dump shader assembly for mesh shaders
    ``no8``
@@ -606,12 +562,9 @@ Intel driver environment variables
       disable fast clears
    ``noccs``
       disable lossless color compression
-   ``no-resource-barrier``
-      disable RENDER_BARRIER instruction usage by falling back to
-      PIPE_CONTROL
    ``optimizer``
       dump shader assembly to files at each optimization pass and
-      iteration that make progress (Gfx < 9)
+      iteration that make progress
    ``pc``
       emit messages about PIPE_CONTROL instruction usage
    ``perf``
@@ -626,8 +579,6 @@ Intel driver environment variables
       mark all state dirty on each draw call
    ``rt``
       dump shader assembly for ray tracing shaders
-   ``rt_notrace``
-      skip trace rays operation (does not disable AS generation; see bvh_no_build)
    ``sf``
       emit messages about the strips & fans unit (for old gens, includes
       the SF program)
@@ -825,7 +776,7 @@ Intel driver environment variables
    this folder and have a name formatted as ``sha1_of_assembly.bin``.
    The SHA-1 of a shader assembly is printed when assembly is dumped via
    corresponding :envvar:`INTEL_DEBUG` flag (e.g. ``vs`` for vertex shader).
-   A binary could be generated from a dumped assembly by ``brw_asm`` or ``elk_asm``.
+   A binary could be generated from a dumped assembly by ``i965_asm``.
    For :envvar:`INTEL_SHADER_ASM_READ_PATH` to work it is necessary to enable
    dumping of corresponding shader stages via :envvar:`INTEL_DEBUG`.
    It is advised to use ``nocompact`` flag of :envvar:`INTEL_DEBUG` when
@@ -841,7 +792,7 @@ Intel driver environment variables
    this folder and have a name formatted as ``sha1_of_assembly.bin``.
    The SHA-1 of a shader assembly is printed when assembly is dumped via
    corresponding :envvar:`INTEL_DEBUG` flag (e.g. ``vs`` for vertex shader).
-   A binary could be generated from a dumped assembly by ``brw_asm`` or ``elk_asm``.
+   A binary could be generated from a dumped assembly by ``i965_asm``.
    For :envvar:`INTEL_SHADER_ASM_READ_PATH` to work it is necessary to enable
    dumping of corresponding shader stages via :envvar:`INTEL_DEBUG`.
    It is advised to use ``nocompact`` flag of :envvar:`INTEL_DEBUG` when
@@ -862,11 +813,6 @@ Intel driver environment variables
       does not affect on the list of shaders to dump. All generated shaders
       are always dumped if :envvar:`INTEL_SHADER_BIN_DUMP_PATH` variable is
       set.
-
-.. envvar:: INTEL_SHADER_DUMP_FILTER
-
-   Only dump information about shaders that match the specified hexadecimal
-   source hash.
 
 .. envvar:: INTEL_SIMD_DEBUG
 
@@ -906,56 +852,37 @@ Intel driver environment variables
    If none of widths for particular shader stage was specified, then all
    widths are allowed.
 
-.. envvar:: MDA_OUTPUT_DIR
-
-   Directory where the mda.tar files generated when using INTEL_DEBUG=mda are
-   going to be written to.  If not set, use the current directory.
-
-.. envvar:: MDA_PREFIX
-
-   Prefix added to the mda.tar filenames generated when using INTEL_DEBUG=mda.
-   If set to ``timestamp`` it will generate the current time/date as prefix.
-
-.. envvar:: MDA_FILTER
-
-   When set, will only generate mda.tar files which names contain any of the
-   comma-separated filter values as substrings.
-
 Anvil(ANV) driver environment variables
 ---------------------------------------
 
-.. envvar:: ANV_DEBUG
+.. envvar:: ANV_ENABLE_PIPELINE_CACHE
 
-  Accepts the following comma-separated list of flags:
+   If defined to ``0`` or ``false``, this will disable pipeline
+   caching, forcing ANV to reparse and recompile any VkShaderModule
+   (SPIRV) it is given.
 
-  ``bindless``
-    Forces all descriptor sets to use the internal :ref:`Bindless model`
-  ``no-gpl``
-    Disables `VK_KHR_graphics_pipeline_library` support
-  ``no-secondary-call``
-    Disables secondary command buffer calls
-  ``no-sparse``
-    Disables sparse support
-  ``sparse-trtt``
-    Forces use of TR-TT hardware for sparse support
-  ``video-decode``
-    Enables video decoding support
-  ``video-encode``
-    Enables video encoding support
-  ``shader-hash``
-    Emits dummy (MI_STORE_DATA_IMM) instructions containing the shader
-    source hash, preceding shader programming instructions (internal
-    shaders & ray-tracing shaders are omitted)
+.. envvar:: ANV_DISABLE_SECONDARY_CMD_BUFFER_CALLS
 
    If defined to ``1`` or ``true``, this will prevent usage of self
    modifying command buffers to implement ``vkCmdExecuteCommands``. As
    a result of this, it will also disable :ext:`VK_KHR_performance_query`.
 
-.. envvar:: ANV_DEBUG_WAIT_FOR_ATTACH
+.. envvar:: ANV_ALWAYS_BINDLESS
 
-   If defined, the value is parsed as a regular expression. If the current
-   process name matches the regex, ANV will wait 30 seconds for a debugger
-   to attach before starting device creation.
+   If defined to ``1`` or ``true``, this forces all descriptor sets to
+   use the internal :ref:`Bindless model`.
+
+.. envvar:: ANV_QUEUE_THREAD_DISABLE
+
+   If defined to ``1`` or ``true``, this disables support for timeline
+   semaphores.
+
+.. envvar:: ANV_USERSPACE_RELOCS
+
+   If defined to ``1`` or ``true``, this forces ANV to always do
+   kernel relocations in command buffers. This should only have an
+   effect on hardware that doesn't support soft-pinning (Ivybridge,
+   Haswell, Cherryview).
 
 .. envvar:: ANV_PRIMITIVE_REPLICATION_MAX_VIEWS
 
@@ -964,32 +891,10 @@ Anvil(ANV) driver environment variables
    using instanced rendering. If unspecified, the value default to
    ``2``.
 
-.. envvar:: ANV_PRINTF_BUFFER_SIZE
+.. envvar:: ANV_NO_GPL
 
-   Specifies the size of the printf buffer.
-
-.. envvar:: ANV_QUEUE_OVERRIDE
-
-   Override exposed queue families & counts. The variable is a comma
-   separated list of queue overrides. To override the number queues:
-
-   - ``gc`` is for graphics queues with compute support
-   - ``g`` is for graphics queues with no compute support
-   - ``c`` is for compute queues with no graphics support
-   - ``v`` is for video queues with no graphics support
-   - ``b`` is for copy (blitter) queues with no graphics support
-
-   For example, ``ANV_QUEUE_OVERRIDE=gc=2,c=1`` would override the number
-   of advertised queues to be 2 queues with graphics+compute support,
-   and 1 queue with compute-only support.
-
-   ``ANV_QUEUE_OVERRIDE=c=1`` would override the number of advertised
-   queues to include 1 queue with compute-only support, but it will
-   not change the number of graphics+compute queues.
-
-   ``ANV_QUEUE_OVERRIDE=gc=0,c=1`` would override the number of
-   advertised queues to include 1 queue with compute-only support, and
-   it would override the number of graphics+compute queues to be 0.
+   If set to 1, true, or yes, then VK_EXT_graphics_pipeline_library
+   will be disabled.
 
 .. envvar:: ANV_SPARSE
 
@@ -1003,50 +908,6 @@ Anvil(ANV) driver environment variables
    changes the implementation of sparse resources feature.
    For i915 there is no option, sparse resources is always implemented with
    TRTT.
-
-Hasvk driver environment variables
----------------------------------------
-
-.. envvar:: HASVK_DISABLE_SECONDARY_CMD_BUFFER_CALLS
-
-   If defined to ``1`` or ``true``, this will prevent usage of self
-   modifying command buffers to implement ``vkCmdExecuteCommands``. As
-   a result of this, it will also disable :ext:`VK_KHR_performance_query`.
-
-.. envvar:: HASVK_ALWAYS_BINDLESS
-
-   If defined to ``1`` or ``true``, this forces all descriptor sets to
-   use the internal :ref:`Bindless model`.
-
-.. envvar:: HASVK_QUEUE_OVERRIDE
-
-   Override exposed queue families & counts. The variable is a comma
-   separated list of queue overrides. To override the number queues:
-
-   - ``gc`` is for graphics queues with compute support
-   - ``g`` is for graphics queues with no compute support
-   - ``c`` is for compute queues with no graphics support
-   - ``v`` is for video queues with no graphics support
-   - ``b`` is for copy (blitter) queues with no graphics support
-
-   For example, ``HASVK_QUEUE_OVERRIDE=gc=2,c=1`` would override the
-   number of advertised queues to be 2 queues with graphics+compute
-   support, and 1 queue with compute-only support.
-
-   ``HASVK_QUEUE_OVERRIDE=c=1`` would override the number of
-   advertised queues to include 1 queue with compute-only support, but
-   it will not change the number of graphics+compute queues.
-
-   ``HASVK_QUEUE_OVERRIDE=gc=0,c=1`` would override the number of
-   advertised queues to include 1 queue with compute-only support, and
-   it would override the number of graphics+compute queues to be 0.
-
-.. envvar:: HASVK_USERSPACE_RELOCS
-
-   If defined to ``1`` or ``true``, this forces ANV to always do
-   kernel relocations in command buffers. This should only have an
-   effect on hardware that doesn't support soft-pinning (Ivybridge,
-   Haswell, Cherryview).
 
 DRI environment variables
 -------------------------
@@ -1135,6 +996,11 @@ Gallium environment variables
    specifies a file for logging all errors, warnings, etc. rather than
    stderr.
 
+.. envvar:: GALLIUM_PIPE_SEARCH_DIR
+
+   specifies an alternate search directory for pipe-loader which overrides
+   the compile-time path based on the install location.
+
 .. envvar:: GALLIUM_PRINT_OPTIONS
 
    if non-zero, print all the Gallium environment variables which are
@@ -1142,20 +1008,20 @@ Gallium environment variables
 
 .. envvar:: GALLIUM_TRACE
 
-   If set, this variable will cause the trace output to be written to the
+   If set, this variable will cause the :ref:`trace` output to be written to the
    specified file. Paths may be relative or absolute; relative paths are relative
    to the working directory.  For example, setting it to "trace.xml" will cause
    the trace to be written to a file of the same name in the working directory.
 
 .. envvar:: GALLIUM_TRACE_TC
 
-   If enabled while trace is active, this variable specifies that the threaded context
+   If enabled while :ref:`trace` is active, this variable specifies that the threaded context
    should be traced for drivers which implement it. By default, the driver thread is traced,
    which will include any reordering of the command stream from threaded context.
 
 .. envvar:: GALLIUM_TRACE_TRIGGER
 
-   If set while trace is active, this variable specifies a filename to monitor.
+   If set while :ref:`trace` is active, this variable specifies a filename to monitor.
    Once the file exists (e.g., from the user running 'touch /path/to/file'), a single
    frame will be recorded into the trace output.
    Paths may be relative or absolute; relative paths are relative to the working directory.
@@ -1200,6 +1066,54 @@ Gallium environment variables
    ``sse4.1``
    ``avx``
 
+Clover environment variables
+----------------------------
+
+.. envvar:: CLOVER_DEVICE_TYPE
+
+   allows to overwrite the device type of devices. Possible values are
+   ``accelerator``, ``cpu``, ``custom`` and ``gpu``
+
+.. envvar:: CLOVER_DEVICE_VERSION_OVERRIDE
+
+   overwrites the auto detected OpenCL version of a device. Possible values:
+   ``1.0``
+   ``1.1``
+   ``1.2``
+   ``2.0``
+   ``2.1``
+   ``2.2``
+   ``3.0``
+
+.. envvar:: CLOVER_DEVICE_CLC_VERSION_OVERRIDE
+
+   overwrites the auto detected CLC version. Possible values:
+   ``1.0``
+   ``1.1``
+   ``1.2``
+   ``2.0``
+   ``2.1``
+   ``2.2``
+   ``3.0``
+
+.. envvar:: CLOVER_EXTRA_BUILD_OPTIONS
+
+   allows specifying additional compiler and linker options. Specified
+   options are appended after the options set by the OpenCL program in
+   ``clBuildProgram``.
+
+.. envvar:: CLOVER_EXTRA_COMPILE_OPTIONS
+
+   allows specifying additional compiler options. Specified options are
+   appended after the options set by the OpenCL program in
+   ``clCompileProgram``.
+
+.. envvar:: CLOVER_EXTRA_LINK_OPTIONS
+
+   allows specifying additional linker options. Specified options are
+   appended after the options set by the OpenCL program in
+   ``clLinkProgram``.
+
 .. _rusticl-env-var:
 
 Rusticl environment variables
@@ -1239,8 +1153,8 @@ Rusticl environment variables
    a comma-separated list of features to enable. Those are disabled by default
    as they might not be stable enough or break OpenCL conformance.
 
+   - ``fp16`` enables OpenCL half support
    - ``fp64`` enables OpenCL double support
-   - ``intel`` enables various Intel OpenCL extensions
 
 .. envvar:: RUSTICL_DEBUG
 
@@ -1248,7 +1162,6 @@ Rusticl environment variables
 
    - ``allow_invalid_spirv`` disables validation of any input SPIR-V
    - ``clc`` dumps all OpenCL C source being compiled
-   - ``memory`` enables debugging of memory objects
    - ``nir`` dumps nirs in various compilation stages. Might print nothing if shader caching is
              enabled.
    - ``no_reuse_context`` pipe_contexts are not recycled
@@ -1276,6 +1189,32 @@ clc environment variables
    - ``dump_llvm`` Dumps all generated LLVM IRs
    - ``dump_spirv`` Dumps all compiled, linked and specialized SPIR-Vs
    - ``verbose`` Enable debug logging of clc code
+
+Nine frontend environment variables
+-----------------------------------
+
+.. envvar:: D3D_ALWAYS_SOFTWARE
+
+   an integer, which forces Nine to use the CPU instead of GPU acceleration.
+
+.. envvar:: NINE_DEBUG
+
+   a comma-separated list of named flags that do debugging things.
+   Use ``NINE_DEBUG=help`` to print a list of available options.
+
+.. envvar:: NINE_FF_DUMP
+
+   a boolean, which dumps shaders generated by a fixed function (FF).
+
+.. envvar:: NINE_SHADER
+
+   a comma-separated list of named flags, which do alternate shader handling.
+   Use ``NINE_SHADER=help`` to print a list of available options.
+
+.. envvar:: NINE_QUIRKS
+
+   a comma-separated list of named flags that do various things.
+   Use ``NINE_DEBUG=help`` to print a list of available options.
 
 Softpipe driver environment variables
 -------------------------------------
@@ -1387,12 +1326,8 @@ RADV driver environment variables
       enable LLVM compiler backend
    ``allbos``
       force all allocated buffers to be referenced in submissions
-   ``bo_history``
-      dump the BO history to /tmp/radv_bo_history.log after each BO operations
    ``checkir``
       validate the LLVM IR before LLVM compiles the shader
-   ``dumpibs``
-     dump IBs (command streams)
    ``dump_trap_handler``
       dump the trap handler shader
    ``epilogs``
@@ -1409,14 +1344,15 @@ RADV driver environment variables
       Print image info
    ``info``
       show GPU-related information
+   ``invariantgeom``
+      Mark geometry-affecting outputs as invariant. This works around a common
+      class of application bugs appearing as flickering.
    ``metashaders``
       dump internal meta shaders
    ``noatocdithering``
       disable dithering for alpha to coverage
    ``nobinning``
       disable primitive binning
-   ``nobolist``
-      disable the global BO list when no features require it
    ``nocache``
       disable shaders cache
    ``nocompute``
@@ -1425,6 +1361,8 @@ RADV driver environment variables
       disable Delta Color Compression (DCC) on images
    ``nodisplaydcc``
       disable Delta Color Compression (DCC) on displayable images
+   ``nodynamicbounds``
+      do not check OOB access for dynamic descriptors
    ``noeso``
       disable VK_EXT_shader_object
    ``nofastclears``
@@ -1435,26 +1373,24 @@ RADV driver environment variables
       disable VK_EXT_graphics_pipeline_library
    ``nohiz``
       disable HIZ for depthstencil images
-   ``noibchaining``
-      disable chaining IB buffers
+   ``noibs``
+      disable directly recording command buffers in GPU-visible memory
    ``nomeshshader``
       disable mesh shader support on GFX10.3+
    ``nongg``
       disable NGG for GFX10 and GFX10.3
    ``nonggc``
-      disable NGG culling for GFX10 and GFX10.3
+      disable NGG culling on GPUs where it's enabled by default (GFX10.3 only).
+   ``nongg_gs``
+      disable NGG GS for GFX10 and GFX10.3
    ``nort``
       skip executing vkCmdTraceRays and ray queries (RT extensions will still be
       advertised)
-   ``nosmemmitigation``
-      don't mitigate SMEM memory access issues on GFX6-7
    ``notccompatcmask``
       disable TC-compat CMASK for MSAA surfaces
    ``noumr``
       disable UMR dumps during GPU hang detection (only with
       :envvar:`RADV_DEBUG` = ``hang``)
-   ``novideo``
-      disable all video extensions
    ``novrsflatshading``
       disable VRS for flat shading (only on GFX10.3+)
    ``preoptir``
@@ -1463,9 +1399,6 @@ RADV driver environment variables
       dump vertex shader prologs
    ``psocachestats``
      dump PSO cache stats (hits/misses) to verify precompilation of shaders
-   ``pso_history``
-     dump PSO history (pipeline hash + shader VA) to /tmp/radv_pso_history.log.
-     Useful for debugging GPU hangs with UMR and Fossilize.
    ``shaders``
       dump shaders
    ``shaderstats``
@@ -1474,6 +1407,8 @@ RADV driver environment variables
       enable register shadowing
    ``spirv``
       dump SPIR-V
+   ``splitfma``
+      split application-provided fused multiply-add in geometry stages
    ``startup``
       display info at startup
    ``syncshaders``
@@ -1502,12 +1437,10 @@ RADV driver environment variables
       Dump backend IR (ACO or LLVM) for selected shader stages.
    ``asm``
       Dump shader disassembly for selected shader stages.
-   ``bvh4``
-      Use bvh4 encoding on GPUs that support bvh8 encoding.
-   ``validatevas``
-      Enable tracking of VA ranges for radv_build_is_valid_va.
-   ``vm``
-      add a gap between all VA allocations to check for page faults
+
+.. envvar:: RADV_FORCE_FAMILY
+
+   create a null device to compile shaders without a AMD GPU (e.g. VEGA10)
 
 .. envvar:: RADV_FORCE_VRS
 
@@ -1524,6 +1457,8 @@ RADV driver environment variables
 
    a comma-separated list of named flags, which do various things:
 
+   ``bolist``
+      enable the global BO list
    ``cswave32``
       enable wave32 for compute shaders (GFX10+)
    ``dccmsaa``
@@ -1535,16 +1470,12 @@ RADV driver environment variables
       rt extensions with older hardware.
    ``gewave32``
       enable wave32 for vertex/tess/geometry shaders (GFX10+)
-   ``hic``
-      enable experimental implementation of VK_EXT_host_image_copy (GFX10+)
    ``localbos``
       enable local BOs
    ``nggc``
-      enable NGG culling for GFX11+
+      enable NGG culling on GPUs where it's not enabled by default (GFX10.1 only).
    ``nircache``
       cache per-stage NIR for graphics pipelines
-   ``nogttspill``
-      disable GTT spilling when allocating memory
    ``nosam``
       disable optimizations that get enabled when all VRAM is CPU visible.
    ``pswave32``
@@ -1555,14 +1486,10 @@ RADV driver environment variables
       enable wave64 for ray tracing shaders (GFX10-10.3)
    ``sam``
       enable optimizations to move more driver internal objects to VRAM.
-   ``sparse``
-      enable experimental sparse binding and sparse residency on GPUs where we don't support it by default (pre Polaris)
    ``transfer_queue``
       enable experimental transfer queue support (GFX9+, not yet spec compliant)
    ``video_decode``
-      enable experimental video decoding support on GFX6-9
-   ``video_encode``
-      enable experimental video encoding support on GFX6-9
+      enable experimental video decoding support
 
 .. envvar:: RADV_TEX_ANISO
 
@@ -1640,8 +1567,8 @@ RADV driver environment variables
    ``validateir``
       validate the ACO IR at various points of compilation (enabled by
       default for debug/debugoptimized builds)
-   ``novalidate``
-      don't enable some ACO validation by default in debug/debugoptimized builds
+   ``novalidateir``
+      disable ACO IR validation in debug/debugoptimized builds
    ``validatera``
       validate register assignment of ACO IR and catches many RA bugs
    ``force-waitcnt``
@@ -1662,20 +1589,6 @@ RADV driver environment variables
       print information used to calculate some pipeline statistics
    ``liveinfo``
       print liveness and register demand information before scheduling
-
-.. envvar:: radv_gfx12_hiz_wa
-
-   choose the specific HiZ workaround to apply on GFX12 (RDNA4). The possible
-   values are:
-
-   ``disabled``
-     no HiZ workaround is enabled, use at your own risk but optimal for performance
-   ``partial``
-     mitigate the issue partially, potentially risky but performance should be
-     mostly optimal
-   ``full``
-     mitigate the issue completely, no risk but performance might be decreased
-     (default value)
 
 RadeonSI driver environment variables
 -------------------------------------
@@ -1764,8 +1677,8 @@ RadeonSI driver environment variables
       Use old-style monolithic shaders compiled on demand
    ``nooptvariant``
       Disable compiling optimized shader variants.
-   ``usellvm``
-      Use LLVM as shader compiler when possible
+   ``useaco``
+      Use ACO as shader compiler when possible
    ``nowc``
       Disable GTT write combining
    ``check_vm``
@@ -1786,23 +1699,6 @@ RadeonSI driver environment variables
       Enable DPBB. Enable DPBB for gfx9 dGPU. Default enabled for gfx9 APU and >= gfx10.
    ``extra_md``
       add extra information in bo metadata to help tools (umr)
-   ``shadowregs``
-      Enable CP register shadowing in kernel queue.
-   ``userqnoshadowregs``
-      Disable register shadowing in userqueue. This will also disable userqueue mcbp.
-   ``novideotiling``
-      Disable tiling for video.
-   ``nodectier1``
-      Disable tier1 for video decode.
-   ``nodectier2``
-      Disable tier2 for video decode.
-   ``nodectier3``
-      Disable tier3 for video decode.
-   ``noenctier2``
-      Disable tier2 for video encode.
-   ``export_modifier``
-      Export real modifier instead of DRM_FORMAT_MOD_INVALID to user. For example
-      by eglExportDMABUFImageQueryMESA.
 
 r600 driver environment variables
 ---------------------------------
@@ -2096,9 +1992,6 @@ PowerVR driver environment variables
 
    ``reindex``
       Reindex IR at the end of each pass.
-
-   ``no_pred_cf``
-      No predicated execution in CF.
 
 .. envvar:: PCO_SKIP_PASSES
 

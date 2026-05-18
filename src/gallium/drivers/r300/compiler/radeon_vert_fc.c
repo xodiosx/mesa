@@ -76,7 +76,8 @@ reserve_predicate_reg(struct vert_fc_state *fc_state)
       }
    }
    if (i == fc_state->C->max_temp_regs) {
-      rc_error(fc_state->C, "No free temporary to use for predicate stack counter");
+      rc_error(fc_state->C, "No free temporary to use for"
+                            " predicate stack counter.\n");
       return -1;
    }
    return 1;

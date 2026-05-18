@@ -22,7 +22,6 @@
  */
 
 #include "anv_nir.h"
-#include "nir.h"
 #include "nir_builder.h"
 
 static bool
@@ -89,7 +88,7 @@ lower_ubo_load_instr(nir_builder *b, nir_intrinsic_instr *load,
          nir_push_if(b, in_bounds);
 
          nir_def *load_val =
-            nir_load_global_constant(b, load->def.num_components,
+            nir_build_load_global_constant(b, load->def.num_components,
                                            load->def.bit_size, addr,
                                            .access = nir_intrinsic_access(load),
                                            .align_mul = nir_intrinsic_align_mul(load),
@@ -99,7 +98,7 @@ lower_ubo_load_instr(nir_builder *b, nir_intrinsic_instr *load,
 
          val = nir_if_phi(b, load_val, zero);
       } else {
-         val = nir_load_global_constant(b, load->def.num_components,
+         val = nir_build_load_global_constant(b, load->def.num_components,
                                               load->def.bit_size, addr,
                                               .access = nir_intrinsic_access(load),
                                               .align_mul = nir_intrinsic_align_mul(load),
@@ -115,8 +114,6 @@ lower_ubo_load_instr(nir_builder *b, nir_intrinsic_instr *load,
 bool
 anv_nir_lower_ubo_loads(nir_shader *shader)
 {
-   nir_divergence_analysis(shader);
-
    return nir_shader_intrinsics_pass(shader, lower_ubo_load_instr,
                                        nir_metadata_none,
                                        NULL);

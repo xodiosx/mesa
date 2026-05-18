@@ -3,7 +3,7 @@
 
 # When changing this file, you need to bump the following
 # .gitlab-ci/image-tags.yml tags:
-# DEBIAN_BUILD_BASE_TAG
+# DEBIAN_BUILD_TAG
 
 set -e
 
@@ -12,13 +12,11 @@ set -e
 set -o xtrace
 
 export DEBIAN_FRONTEND=noninteractive
-: "${LLVM_VERSION:?llvm version not set!}"
+export LLVM_VERSION="${LLVM_VERSION:=15}"
 
-apt-get install -y ca-certificates curl gnupg2
+apt-get install -y ca-certificates
 sed -i -e 's/http:\/\/deb/https:\/\/deb/g' /etc/apt/sources.list.d/*
 echo "deb [trusted=yes] https://gitlab.freedesktop.org/gfx-ci/ci-deb-repo/-/raw/${PKG_REPO_REV}/ ${FDO_DISTRIBUTION_VERSION%-*} main" | tee /etc/apt/sources.list.d/gfx-ci_.list
-
-. .gitlab-ci/container/debian/maybe-add-llvm-repo.sh
 
 # Ephemeral packages (installed for this script and removed again at
 # the end)
@@ -55,6 +53,7 @@ DEPS=(
     libpciaccess-dev
     libunwind-dev
     libva-dev
+    libvdpau-dev
     libvulkan-dev
     libx11-dev
     libx11-xcb-dev
@@ -98,12 +97,12 @@ apt-get install -y --no-remove "${DEPS[@]}" "${EPHEMERAL[@]}" \
 
 . .gitlab-ci/container/build-libclc.sh
 
-# Needed for ci-fairy s3cp
-pip3 install --break-system-packages "ci-fairy[s3] @ git+https://gitlab.freedesktop.org/freedesktop/ci-templates@$MESA_TEMPLATES_COMMIT"
+# Needed for ci-fairy, this revision is able to upload files to S3
+pip3 install --break-system-packages git+http://gitlab.freedesktop.org/freedesktop/ci-templates@ffe4d1b10aab7534489f0c4bbc4c5899df17d3f2
 
 . .gitlab-ci/container/install-meson.sh
 
-. .gitlab-ci/container/build-rust.sh build
+. .gitlab-ci/container/build-rust.sh
 
 ############### Uninstall ephemeral packages
 

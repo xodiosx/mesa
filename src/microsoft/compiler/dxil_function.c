@@ -161,7 +161,7 @@ allocate_function_from_predefined(struct dxil_module *mod,
                                 predefined_funcs[i].attr);
       }
    }
-   UNREACHABLE("Invalid function name");
+   unreachable("Invalid function name");
 }
 
 const struct dxil_func *
@@ -248,7 +248,7 @@ dxil_alloc_func_with_rettype(struct dxil_module *mod, const char *name,
    while (param_descr[num_params]) {
       const struct dxil_type *t = get_type_from_string(mod, param_descr, overload, &index);
       if (!t)
-         return NULL;
+         return false;
       assert(num_params < MAX_FUNC_PARAMS);
       arg_types[num_params++] = t;
    }
@@ -258,7 +258,7 @@ dxil_alloc_func_with_rettype(struct dxil_module *mod, const char *name,
                                     arg_types, num_params);
    if (!func_type) {
       fprintf(stderr, "%s: Func type allocation failed\n", __func__);
-      return NULL;
+      return false;
    }
 
    char full_name[100];

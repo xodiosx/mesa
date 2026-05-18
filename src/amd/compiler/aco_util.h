@@ -18,10 +18,8 @@
 #include <functional>
 #include <iterator>
 #include <map>
-#include <memory>
 #include <type_traits>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace aco {
@@ -298,7 +296,7 @@ public:
       buffer->current_idx = 0;
    }
 
-   bool operator==(const monotonic_buffer_resource& other) const { return buffer == other.buffer; }
+   bool operator==(const monotonic_buffer_resource& other) { return buffer == other.buffer; }
 
 private:
    struct Buffer {
@@ -391,14 +389,6 @@ using map = std::map<Key, T, Compare, aco::monotonic_allocator<std::pair<const K
 template <class Key, class T, class Hash = std::hash<Key>, class Pred = std::equal_to<Key>>
 using unordered_map =
    std::unordered_map<Key, T, Hash, Pred, aco::monotonic_allocator<std::pair<const Key, T>>>;
-
-/*
- * aco::unordered_set - alias for std::unordered_set with monotonic_allocator
- *
- * This template specialization mimics std::pmr::unordered_set.
- */
-template <class T, class Hash = std::hash<T>, class Pred = std::equal_to<T>>
-using unordered_set = std::unordered_set<T, Hash, Pred, aco::monotonic_allocator<T>>;
 
 /*
  * Cache-friendly set of 32-bit IDs with fast insert/erase/lookup and
@@ -803,7 +793,7 @@ template <typename T> struct bit_reference {
 
    constexpr bit_reference& operator&=(bool val)
    {
-      storage &= ~(T(!val) << bit);
+      storage &= T(val) << bit;
       return *this;
    }
 
@@ -1064,8 +1054,7 @@ using bitarray32 = bitfield_array<uint32_t, 0, 32, uint32_t>;
  */
 template <typename T, uint32_t Size> class small_vec {
 public:
-   /* We could support destructors with some effort, but currently there's no use case. */
-   static_assert(std::is_trivially_destructible<T>::value);
+   static_assert(std::is_trivial<T>::value);
 
    using value_type = T;
    using pointer = value_type*;
@@ -1091,37 +1080,26 @@ public:
 
    constexpr small_vec& operator=(const small_vec& other)
    {
-      if (&other == this)
-         return *this;
       clear();
       reserve(other.capacity);
       length = other.length;
-      std::uninitialized_copy(other.begin(), other.end(), begin());
+      memcpy(begin(), other.begin(), length * sizeof(value_type));
       return *this;
    }
 
    constexpr small_vec& operator=(small_vec&& other) noexcept
    {
-      if (&other == this)
-         return *this;
       clear();
-      length = other.length;
-      capacity = other.capacity;
-      if (capacity > Size)
-         data = other.data;
-      else
-         std::uninitialized_move(other.begin(), other.end(), begin());
+      void* ptr = this;
+      memcpy(ptr, &other, sizeof(*this));
       other.length = 0;
       other.capacity = Size;
       return *this;
    }
 
-   constexpr iterator begin() noexcept { return capacity > Size ? data : (T*)inline_data; }
+   constexpr iterator begin() noexcept { return capacity > Size ? data : inline_data; }
 
-   constexpr const_iterator begin() const noexcept
-   {
-      return capacity > Size ? data : (T*)inline_data;
-   }
+   constexpr const_iterator begin() const noexcept { return capacity > Size ? data : inline_data; }
 
    constexpr iterator end() noexcept { return std::next(begin(), length); }
 
@@ -1204,18 +1182,13 @@ public:
    constexpr void reserve(size_type n)
    {
       if (n > capacity) {
-         if constexpr (std::is_trivial<T>::value) {
-            if (capacity > Size) {
-               data = (T*)realloc(data, sizeof(T) * n);
-               capacity = n;
-               return;
-            }
+         if (capacity > Size) {
+            data = (T*)realloc(data, sizeof(T) * n);
+         } else {
+            T* ptr = (T*)malloc(sizeof(T) * n);
+            memcpy(ptr, inline_data, sizeof(T) * length);
+            data = ptr;
          }
-         T* ptr = (T*)malloc(sizeof(T) * n);
-         std::uninitialized_move(begin(), end(), ptr);
-         if (capacity > Size)
-            free(data);
-         data = ptr;
          capacity = n;
       }
    }
@@ -1225,7 +1198,7 @@ public:
       if (length == capacity)
          reserve(2 * capacity);
 
-      new (std::next(begin(), length++)) T(val);
+      *std::next(begin(), length++) = val;
    }
 
    template <typename... Args> constexpr void emplace_back(Args... args) noexcept
@@ -1233,43 +1206,7 @@ public:
       if (length == capacity)
          reserve(2 * capacity);
 
-      new (std::next(begin(), length++)) T(args...);
-   }
-
-   constexpr void insert(const_iterator it, const value_type& val) noexcept
-   {
-      size_t idx = it - begin();
-      assert(idx <= size());
-
-      if (length == capacity)
-         reserve(2 * capacity);
-
-      if (idx == length) {
-         new (end()) T(val);
-      } else {
-         /* We can't do this one as part of move_backward because end() is uninitialized. */
-         new (end()) T(std::move(*(end() - 1)));
-         std::move_backward(std::next(begin(), idx), std::prev(end(), 1), end());
-         *std::next(begin(), idx) = val;
-      }
-      length++;
-   }
-
-   constexpr void erase(const_iterator it) noexcept
-   {
-      std::move(iterator(it) + 1, end(), iterator(it));
-      length--;
-   }
-
-   constexpr void resize(uint32_t new_size) noexcept
-   {
-      if (new_size > capacity)
-         reserve(new_size);
-
-      for (uint32_t i = length; i < new_size; i++)
-         new (std::next(begin(), i)) T();
-
-      length = new_size;
+      *std::next(begin(), length++) = T(args...);
    }
 
    constexpr void clear() noexcept
@@ -1296,7 +1233,7 @@ private:
    uint32_t capacity = Size;
    union {
       T* data = NULL;
-      alignas(T) uint8_t inline_data[sizeof(T) * Size];
+      T inline_data[Size];
    };
 };
 

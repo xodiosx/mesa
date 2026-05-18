@@ -68,19 +68,12 @@ vk_address_binding_report(struct vk_instance *instance,
                           uint64_t size,
                           VkDeviceAddressBindingTypeEXT type);
 
-void
-vk_emit_device_memory_report(struct vk_device* device,
-                             VkDeviceMemoryReportEventTypeEXT type,
-                             uint64_t mem_obj_id,
-                             VkDeviceSize size,
-                             VkObjectType obj_type,
-                             uint64_t obj_handle,
-                             uint32_t heap_index);
-
 struct u_printf_ctx;
+struct u_printf_info;
 
 VkResult
-vk_check_printf_status(struct vk_device *dev, struct u_printf_ctx *ctx);
+vk_check_printf_status(struct vk_device *dev, struct u_printf_ctx *ctx,
+                       struct u_printf_info *info, uint32_t count);
 
 #ifdef __cplusplus
 }

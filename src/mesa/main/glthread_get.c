@@ -22,13 +22,13 @@
  */
 
 #include "main/glthread_marshal.h"
-#include "dispatch.h"
+#include "main/dispatch.h"
 
 uint32_t
 _mesa_unmarshal_GetIntegerv(struct gl_context *ctx,
                             const struct marshal_cmd_GetIntegerv *restrict cmd)
 {
-   UNREACHABLE("never executed");
+   unreachable("never executed");
    return 0;
 }
 

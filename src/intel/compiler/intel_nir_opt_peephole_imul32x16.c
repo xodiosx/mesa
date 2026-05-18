@@ -170,7 +170,8 @@ signed_integer_range_analysis(nir_shader *shader, struct hash_table *range_ht,
     * two ranges for any value of bound with the sign-bit set is [INT_MIN,
     * INT_MAX].
     */
-   const int32_t bound = nir_unsigned_upper_bound(shader, range_ht, scalar);
+   const int32_t bound = nir_unsigned_upper_bound(shader, range_ht,
+                                                     scalar, NULL);
    if (bound < 0) {
       *lo = INT32_MIN;
       *hi = INT32_MAX;
@@ -245,7 +246,7 @@ intel_nir_opt_peephole_imul32x16_instr(nir_builder *b,
       /* All constants were previously processed.  There is nothing more to
        * learn from a constant here.
        */
-      if (nir_src_is_const(imul->src[i].src))
+      if (imul->src[i].src.ssa->parent_instr->type == nir_instr_type_load_const)
          continue;
 
       nir_scalar scalar = nir_scalar_chase_alu_src(imul_scalar, i);

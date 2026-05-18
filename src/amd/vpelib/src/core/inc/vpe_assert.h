@@ -29,7 +29,6 @@ extern "C" {
 #endif
 
 #include <assert.h>
-#include <stdlib.h> // for exit()
 
 #if defined(_WIN32)
 
@@ -44,10 +43,8 @@ extern "C" {
 
 #ifdef _DEBUG
 #define VPE_ASSERT(_expr) assert(_expr)
-#define VPE_EXIT(_expr)   exit(_expr)
 #else
 #define VPE_ASSERT(_expr) ((void)0)
-#define VPE_EXIT(_expr)   ((void)0)
 #endif
 
 #ifdef __cplusplus

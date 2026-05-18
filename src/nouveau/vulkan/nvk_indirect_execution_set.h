@@ -7,8 +7,6 @@
 
 #include "nvk_private.h"
 
-#include "nak.h"
-
 struct nvk_physical_device;
 struct nvk_shader;
 struct nvkmd_mem;
@@ -22,9 +20,19 @@ enum nvk_ies_type {
 PRAGMA_DIAGNOSTIC_PUSH
 PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
 struct nvk_ies_cs_qmd {
-   uint32_t qmd[NAK_MAX_QMD_DWORDS];
+   uint32_t qmd[64];
 };
 PRAGMA_DIAGNOSTIC_POP
+
+static inline uint16_t
+nvk_ies_cs_qmd_max_dw_count(struct nvk_physical_device *pdev)
+{
+   return 64;
+}
+
+void nvk_ies_cs_qmd_init(struct nvk_physical_device *pdev,
+                         struct nvk_ies_cs_qmd *qmd,
+                         struct nvk_shader *shader);
 
 PRAGMA_DIAGNOSTIC_PUSH
 PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
@@ -37,7 +45,7 @@ PRAGMA_DIAGNOSTIC_POP
 static_assert(sizeof(struct nvk_ies_gfx_shader) == 4,
               "nvk_ies_gfx_shader has no holes");
 
-uint16_t nvk_ies_gfx_shader_max_dw_count(const struct nvk_physical_device *pdev,
+uint16_t nvk_ies_gfx_shader_max_dw_count(struct nvk_physical_device *pdev,
                                          VkShaderStageFlags stages,
                                          bool last_vtgm);
 
@@ -51,7 +59,7 @@ PRAGMA_DIAGNOSTIC_POP
 static_assert(sizeof(struct nvk_ies_gfx_pipeline) == 4,
               "nvk_ies_gfx_pipeline has no holes");
 
-uint16_t nvk_ies_gfx_pipeline_max_dw_count(const struct nvk_physical_device *pdev,
+uint16_t nvk_ies_gfx_pipeline_max_dw_count(struct nvk_physical_device *pdev,
                                            VkShaderStageFlags stages);
 
 struct nvk_indirect_execution_set {

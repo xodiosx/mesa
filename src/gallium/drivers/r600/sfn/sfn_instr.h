@@ -121,13 +121,11 @@ public:
    virtual void update_indirect_addr(PRegister old_reg, PRegister addr) {
       (void)old_reg;
       (void)addr;
-      UNREACHABLE("Instruction type has no indirect address");
+      unreachable("Instruction type has no indirect address");
    };
    const InstrList& required_instr() const { return m_required_instr; }
 
    virtual AluGroup *as_alu_group() { return nullptr;}
-
-   virtual void pin_dest_to_chan() {}
 
 protected:
 
@@ -144,6 +142,7 @@ private:
    InstrList m_required_instr;
    InstrList m_dependend_instr;
 
+   int m_use_count;
    int m_block_id;
    int m_index;
    std::bitset<nflags> m_instr_flags{0};
@@ -178,10 +177,6 @@ public:
 
    const_iterator begin() const { return m_instructions.begin(); }
    const_iterator end() const { return m_instructions.end(); }
-
-   void set_cf_start(ControlFlowInstr *cf) { m_cf_start = cf; }
-   ControlFlowInstr *cf_start() { return m_cf_start; }
-   const ControlFlowInstr *cf_start() const { return m_cf_start; }
 
    bool empty() const { return m_instructions.empty(); }
 
@@ -227,8 +222,6 @@ public:
 
    static void set_chipclass(r600_chip_class chip_class);
 
-   bool kcache_needs_extended() const;
-
 private:
    bool try_reserve_kcache(const UniformValue& u,
                            std::array<KCacheLine, 4>& kcache) const;
@@ -253,7 +246,6 @@ private:
    static unsigned s_max_kcache_banks;
    int m_emitted_rat_instr{0};
    uint32_t m_expected_ar_uses{0};
-   ControlFlowInstr *m_cf_start{nullptr};
 };
 
 class Resource {
@@ -311,7 +303,7 @@ public:
       case 2:
          return bim_one;
       default:
-         UNREACHABLE("Invalid resource offset, scheduler must substitute registers");
+         unreachable("Invalid resource offset, scheduler must substitute registers");
       }
    }
 
@@ -346,10 +338,6 @@ public:
    const RegisterVec4& dst() const { return m_dest; }
 
    void update_indirect_addr(PRegister old_reg, PRegister addr) override;
-
-   void pin_dest_to_chan() override;
-
-   virtual Block::Instructions prepare_instr() const { return Block::Instructions(); }
 
 protected:
    InstrWithVectorResult(const InstrWithVectorResult& orig);

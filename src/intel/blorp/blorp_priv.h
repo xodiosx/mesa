@@ -35,9 +35,6 @@
 extern "C" {
 #endif
 
-
-#define BLORP_INLINE_PARAM_THREAD_GROUP_ID_Z_DIMENSION (0)
-
 void blorp_init(struct blorp_context *blorp, void *driver_ctx,
                 struct isl_device *isl_dev, const struct blorp_config *config);
 
@@ -46,12 +43,11 @@ struct blorp_compiler {
    const struct elk_compiler *elk;
 
    const nir_shader_compiler_options *(*nir_options)(struct blorp_context *blorp,
-                                                     mesa_shader_stage stage);
+                                                     gl_shader_stage stage);
 
    struct blorp_program (*compile_fs)(struct blorp_context *blorp, void *mem_ctx,
                                       struct nir_shader *nir,
                                       bool multisample_fbo,
-                                      bool is_fast_clear,
                                       bool use_repclear);
    struct blorp_program (*compile_vs)(struct blorp_context *blorp, void *mem_ctx,
                                       struct nir_shader *nir);
@@ -447,11 +443,9 @@ static inline struct blorp_program
 blorp_compile_fs(struct blorp_context *blorp, void *mem_ctx,
                  struct nir_shader *nir,
                  bool multisample_fbo,
-                 bool is_fast_clear,
                  bool use_repclear)
 {
-   return blorp->compiler->compile_fs(blorp, mem_ctx, nir, multisample_fbo,
-                                      is_fast_clear, use_repclear);
+   return blorp->compiler->compile_fs(blorp, mem_ctx, nir, multisample_fbo, use_repclear);
 }
 
 static inline struct blorp_program
@@ -477,9 +471,9 @@ blorp_get_cs_local_y(struct blorp_params *params)
 {
    uint32_t height = params->y1 - params->y0;
    uint32_t or_ys = params->y0 | params->y1;
-   if (height > 32 || util_is_aligned(or_ys, 4)) {
+   if (height > 32 || (or_ys & 3) == 0) {
       return 4;
-   } else if (util_is_aligned(or_ys, 2)) {
+   } else if ((or_ys & 1) == 0) {
       return 2;
    } else {
       return 1;

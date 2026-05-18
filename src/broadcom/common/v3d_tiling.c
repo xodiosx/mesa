@@ -46,7 +46,7 @@ v3d_utile_width(int cpp)
         case 16:
                 return 2;
         default:
-                UNREACHABLE("unknown cpp");
+                unreachable("unknown cpp");
         }
 }
 
@@ -64,7 +64,7 @@ v3d_utile_height(int cpp)
         case 16:
                 return 2;
         default:
-                UNREACHABLE("unknown cpp");
+                unreachable("unknown cpp");
         }
 }
 
@@ -447,7 +447,7 @@ v3d_move_tiled_image(void *gpu, uint32_t gpu_stride,
                                         is_load);
                 break;
         default:
-                UNREACHABLE("Unsupported tiling format");
+                unreachable("Unsupported tiling format");
                 break;
         }
 }

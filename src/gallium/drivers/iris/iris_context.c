@@ -73,7 +73,7 @@ iris_lost_context_state(struct iris_batch *batch)
    } else if (batch->name == IRIS_BATCH_BLITTER) {
       /* No state to set up */
    } else {
-      UNREACHABLE("unhandled batch reset");
+      unreachable("unhandled batch reset");
    }
 
    ice->state.dirty = ~0ull;
@@ -159,7 +159,7 @@ iris_get_sample_position(struct pipe_context *ctx,
    case 4:  INTEL_SAMPLE_POS_4X(u.v._);  break;
    case 8:  INTEL_SAMPLE_POS_8X(u.v._);  break;
    case 16: INTEL_SAMPLE_POS_16X(u.v._); break;
-   default: UNREACHABLE("invalid sample count");
+   default: unreachable("invalid sample count");
    }
 
    out_value[0] = u.a.x[sample_index];
@@ -282,14 +282,8 @@ iris_destroy_context(struct pipe_context *ctx)
       gfx8_##func(__VA_ARGS__);                   \
       break;                                      \
    default:                                       \
-      UNREACHABLE("Unknown hardware generation"); \
+      unreachable("Unknown hardware generation"); \
    }
-
-#ifndef INTEL_USE_ELK
-static inline void gfx8_init_state(struct iris_context *ice) { UNREACHABLE("no elk support"); }
-static inline void gfx8_init_blorp(struct iris_context *ice) { UNREACHABLE("no elk support"); }
-static inline void gfx8_init_query(struct iris_context *ice) { UNREACHABLE("no elk support"); }
-#endif
 
 /**
  * Create a context.
@@ -400,10 +394,6 @@ iris_create_context(struct pipe_screen *pscreen, void *priv, unsigned flags)
 
    /* Clover doesn't support u_threaded_context */
    if (flags & PIPE_CONTEXT_COMPUTE_ONLY)
-      return ctx;
-
-   /* Threaded context disabled via drirc. */
-   if (screen->driconf.disable_threaded_context)
       return ctx;
 
    return threaded_context_create(ctx, &screen->transfer_pool,

@@ -13,7 +13,8 @@
  * We need to set the (ei) "end input" flag on the last varying fetch.
  * And we want to ensure that all threads execute the instruction that
  * sets (ei).  The easiest way to ensure this is to move all varying
- * fetches into the start block.
+ * fetches into the start block.  Which is something we used to get for
+ * free by using lower_all_io_to_temps=true.
  *
  * This may come at the cost of additional register usage.  OTOH setting
  * the (ei) flag earlier probably frees up more VS to run.
@@ -42,7 +43,7 @@ static void move_instruction_to_start_block(state *state, nir_instr *instr);
 static bool
 check_precondition_src(nir_src *src, void *state)
 {
-   check_precondition_instr(state, nir_def_instr(src->ssa));
+   check_precondition_instr(state, src->ssa->parent_instr);
    return true;
 }
 
@@ -105,7 +106,7 @@ check_precondition_block(precond_state *state, nir_block *block)
 static bool
 move_src(nir_src *src, void *state)
 {
-   move_instruction_to_start_block(state, nir_def_instr(src->ssa));
+   move_instruction_to_start_block(state, src->ssa->parent_instr);
    return true;
 }
 
@@ -200,7 +201,10 @@ ir3_nir_move_varying_inputs(nir_shader *shader)
          progress |= move_varying_inputs_block(&state, block);
       }
 
-      nir_progress(progress, function->impl, nir_metadata_control_flow);
+      if (progress) {
+         nir_metadata_preserve(
+            function->impl, nir_metadata_control_flow);
+      }
    }
 
    return progress;

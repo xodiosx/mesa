@@ -26,16 +26,16 @@
 #include "util/blend.h"
 
 #ifdef PAN_ARCH
-#include "pan_texture.h"
+#include "pan_shader.h"
 #endif
 
 #include "compiler/nir/nir.h"
 #include "compiler/nir/nir_builder.h"
 #include "compiler/nir/nir_conversion_builder.h"
 #include "compiler/nir/nir_lower_blend.h"
-#include "compiler/pan_compiler.h"
-#include "compiler/pan_nir.h"
+#include "panfrost/util/pan_lower_framebuffer.h"
 #include "util/format/u_format.h"
+#include "pan_texture.h"
 
 #ifndef PAN_ARCH
 
@@ -49,18 +49,6 @@ factor_is_supported(enum pipe_blendfactor factor)
    return factor != PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE &&
           factor != PIPE_BLENDFACTOR_SRC1_COLOR &&
           factor != PIPE_BLENDFACTOR_SRC1_ALPHA;
-}
-
-/* The set of factors supported by the hardware for floats is significantly
- * reduced.
- */
-static bool
-factor_is_supported_for_float(enum pipe_blendfactor factor)
-{
-   return factor == PIPE_BLENDFACTOR_ZERO ||
-          factor == PIPE_BLENDFACTOR_ONE ||
-          factor == PIPE_BLENDFACTOR_SRC_ALPHA ||
-          factor == PIPE_BLENDFACTOR_INV_SRC_ALPHA;
 }
 
 /* OpenGL allows encoding (src*dest + dest*src) which is incompatiblle with
@@ -82,41 +70,27 @@ is_2srcdest(enum pipe_blend_func blend_func, enum pipe_blendfactor src_factor,
 static bool
 can_fixed_function_equation(enum pipe_blend_func blend_func,
                             enum pipe_blendfactor src_factor,
-                            enum pipe_blendfactor dest_factor,
-                            bool is_alpha, bool is_float,
+                            enum pipe_blendfactor dest_factor, bool is_alpha,
                             bool supports_2src)
 {
-   /* We can only do add/subtract in hardware.  No min/max. */
+   if (is_2srcdest(blend_func, src_factor, dest_factor, is_alpha))
+      return supports_2src;
+
    if (blend_func != PIPE_BLEND_ADD && blend_func != PIPE_BLEND_SUBTRACT &&
        blend_func != PIPE_BLEND_REVERSE_SUBTRACT)
       return false;
 
-   if (is_float) {
-      /* There are a couple special cases for add with zero */
-      if (blend_func == PIPE_BLEND_ADD &&
-          src_factor == PIPE_BLENDFACTOR_ZERO &&
-          (dest_factor == PIPE_BLENDFACTOR_INV_SRC_COLOR ||
-           dest_factor == PIPE_BLENDFACTOR_DST_ALPHA))
-         return true;
+   if (!factor_is_supported(src_factor) || !factor_is_supported(dest_factor))
+      return false;
 
-      return factor_is_supported_for_float(src_factor) &&
-             factor_is_supported_for_float(dest_factor);
-   } else {
-      if (is_2srcdest(blend_func, src_factor, dest_factor, is_alpha))
-         return supports_2src;
+   /* Fixed function requires src/dest factors to match (up to invert) or be
+    * zero/one.
+    */
+   enum pipe_blendfactor src = util_blendfactor_without_invert(src_factor);
+   enum pipe_blendfactor dest = util_blendfactor_without_invert(dest_factor);
 
-      if (!factor_is_supported(src_factor) || !factor_is_supported(dest_factor))
-         return false;
-
-      /* Fixed function requires src/dest factors to match (up to invert) or be
-       * zero/one.
-       */
-      enum pipe_blendfactor src = util_blendfactor_without_invert(src_factor);
-      enum pipe_blendfactor dest = util_blendfactor_without_invert(dest_factor);
-
-      return (src == dest) || (src == PIPE_BLENDFACTOR_ONE) ||
-             (dest == PIPE_BLENDFACTOR_ONE);
-   }
+   return (src == dest) || (src == PIPE_BLENDFACTOR_ONE) ||
+          (dest == PIPE_BLENDFACTOR_ONE);
 }
 
 static unsigned
@@ -141,120 +115,6 @@ pan_blend_constant_mask(const struct pan_blend_equation eq)
           blend_factor_constant_mask(eq.alpha_dst_factor);
 }
 
-static inline bool
-is_min_max(enum pipe_blend_func func)
-{
-   return func == PIPE_BLEND_MIN || func == PIPE_BLEND_MAX;
-}
-
-void
-pan_blend_optimize_equation(struct pan_blend_equation *eq,
-                            enum pipe_format format,
-                            const float *constants)
-{
-   unsigned comp_mask = 0xf;
-
-   if (!eq->blend_enable)
-      return;
-
-   /* Sanitize alpha blend factors because later optimizations rely on COLOR
-    * actually meaning color.
-    */
-   eq->alpha_src_factor = util_blendfactor_to_alpha(eq->alpha_src_factor);
-   eq->alpha_dst_factor = util_blendfactor_to_alpha(eq->alpha_dst_factor);
-
-   if (is_min_max(eq->rgb_func)) {
-      eq->rgb_src_factor = PIPE_BLENDFACTOR_ONE;
-      eq->rgb_dst_factor = PIPE_BLENDFACTOR_ONE;
-   }
-
-   if (is_min_max(eq->alpha_func)) {
-      eq->alpha_src_factor = PIPE_BLENDFACTOR_ONE;
-      eq->alpha_dst_factor = PIPE_BLENDFACTOR_ONE;
-   }
-
-   /* If we know the format, we can optimize a few things */
-   if (format != PIPE_FORMAT_NONE) {
-      const struct util_format_description *fmt =
-         util_format_description(format);
-      assert(eq->is_float == (fmt->channel[0].type == UTIL_FORMAT_TYPE_FLOAT));
-
-      comp_mask = util_format_colormask(fmt);
-
-      /* Check to see if any of the disabled channels actually matter.  If
-       * not, smash the blend mask to 0xf.  Otherwise, pan_blend_is_opaque()
-       * may return false unnecessarily.
-       */
-      if (!((~eq->color_mask) & comp_mask))
-         eq->color_mask = 0xf;
-
-      if (!(comp_mask & 0b1000)) {
-         eq->rgb_src_factor =
-            util_blend_dst_alpha_to_one(eq->rgb_src_factor);
-         eq->rgb_dst_factor =
-            util_blend_dst_alpha_to_one(eq->rgb_dst_factor);
-
-         eq->alpha_src_factor =
-            util_blend_dst_alpha_to_one(eq->alpha_src_factor);
-         eq->alpha_dst_factor =
-            util_blend_dst_alpha_to_one(eq->alpha_dst_factor);
-      }
-   }
-
-   /* If we know the blend constants, we can optimize more */
-   unsigned constant_mask = pan_blend_constant_mask(*eq);
-   if (constant_mask && constants != NULL) {
-      enum pipe_blendfactor const_alpha = PIPE_BLENDFACTOR_CONST_ALPHA;
-      if (constant_mask & 0b1000) {
-         if (constants[3] == 0.0f)
-            const_alpha = PIPE_BLENDFACTOR_ZERO;
-         else if (constants[3] == 1.0f)
-            const_alpha = PIPE_BLENDFACTOR_ONE;
-      }
-
-      /* Each color blend constant can only affect it's corresponding channel
-       * so we only care about components actually in our format.
-       */
-      const unsigned color_constant_mask = comp_mask & constant_mask & 0b0111;
-
-      enum pipe_blendfactor const_color = PIPE_BLENDFACTOR_CONST_COLOR;
-      if (color_constant_mask) {
-         bool all_zero = true, all_one = true;
-         u_foreach_bit(i, color_constant_mask) {
-            if (constants[i] != 0.0f)
-               all_zero = false;
-            if (constants[i] != 1.0f)
-               all_one = false;
-         }
-         assert(!all_zero || !all_one);
-         if (all_zero)
-            const_color = PIPE_BLENDFACTOR_ZERO;
-         if (all_one)
-            const_color = PIPE_BLENDFACTOR_ONE;
-      }
-
-      if (const_color != PIPE_BLENDFACTOR_CONST_COLOR ||
-          const_alpha != PIPE_BLENDFACTOR_CONST_ALPHA) {
-#define REPLACE_CONST_FACTOR(factor) do {             \
-   if (factor == PIPE_BLENDFACTOR_CONST_COLOR)        \
-      factor = const_color;                           \
-   else if (factor == PIPE_BLENDFACTOR_CONST_ALPHA)   \
-      factor = const_alpha;                           \
-} while (false)
-
-         REPLACE_CONST_FACTOR(eq->rgb_src_factor);
-         REPLACE_CONST_FACTOR(eq->rgb_dst_factor);
-         REPLACE_CONST_FACTOR(eq->alpha_src_factor);
-         REPLACE_CONST_FACTOR(eq->alpha_dst_factor);
-
-#undef REPLACE_CONST_FACTOR
-      }
-   }
-
-   if (pan_blend_is_opaque(*eq))
-      eq->blend_enable = false;
-}
-
 /* Only "homogenous" (scalar or vector with all components equal) constants are
  * valid for fixed-function, so check for this condition */
 
@@ -271,28 +131,6 @@ pan_blend_is_homogenous_constant(unsigned mask, const float *constants)
    return true;
 }
 
-uint16_t
-pan_pack_blend_constant(enum pipe_format format, float cons)
-{
-   const struct util_format_description *format_desc =
-      util_format_description(format);
-
-   /* Mali doesn't support float blend constants */
-   assert(format_desc->channel[0].type != UTIL_FORMAT_TYPE_FLOAT);
-
-   /* On Bifrost, the blend constant is expressed with a UNORM of the
-    * size of the target format. The value is then shifted such that
-    * used bits are in the MSB.
-    */
-   unsigned chan_size = 0;
-   for (unsigned i = 0; i < format_desc->nr_channels; i++)
-      chan_size = MAX2(format_desc->channel[0].size, chan_size);
-
-   float factor = ((1 << chan_size) - 1) << (16 - chan_size);
-
-   return cons * factor;
-}
-
 /* Determines if an equation can run in fixed function */
 
 bool
@@ -302,12 +140,10 @@ pan_blend_can_fixed_function(const struct pan_blend_equation equation,
    return !equation.blend_enable ||
           (can_fixed_function_equation(
               equation.rgb_func, equation.rgb_src_factor,
-              equation.rgb_dst_factor, false /* is_alpha */,
-              equation.is_float, supports_2src) &&
+              equation.rgb_dst_factor, false, supports_2src) &&
            can_fixed_function_equation(
               equation.alpha_func, equation.alpha_src_factor,
-              equation.alpha_dst_factor, true /* is_alpha */,
-              equation.is_float, supports_2src));
+              equation.alpha_dst_factor, true, supports_2src));
 }
 
 static enum mali_blend_operand_c
@@ -335,20 +171,18 @@ to_c_factor(enum pipe_blendfactor factor)
       return MALI_BLEND_OPERAND_C_CONSTANT;
 
    default:
-      UNREACHABLE("Unsupported blend factor");
+      unreachable("Unsupported blend factor");
    }
 }
 
 static void
-to_mali_function(enum pipe_blend_func blend_func,
-                 enum pipe_blendfactor src_factor,
-                 enum pipe_blendfactor dest_factor,
-                 bool is_alpha, bool is_float,
-                 struct MALI_BLEND_FUNCTION *function)
+to_panfrost_function(enum pipe_blend_func blend_func,
+                     enum pipe_blendfactor src_factor,
+                     enum pipe_blendfactor dest_factor, bool is_alpha,
+                     struct MALI_BLEND_FUNCTION *function)
 {
    assert(can_fixed_function_equation(blend_func, src_factor, dest_factor,
-                                      is_alpha, is_float,
-                                      true /* supports_2src */));
+                                      is_alpha, true));
 
    /* We handle ZERO/ONE specially since it's the hardware has 0 and can invert
     * to 1 but Gallium has 0 as the uninverted version.
@@ -409,7 +243,7 @@ to_mali_function(enum pipe_blend_func blend_func,
          function->b = MALI_BLEND_OPERAND_B_SRC_MINUS_DEST;
          break;
       default:
-         UNREACHABLE("Invalid blend function");
+         unreachable("Invalid blend function");
       }
    } else if (is_2srcdest(blend_func, src_factor, dest_factor, is_alpha)) {
       /* src*dest + dest*src = 2*src*dest = 0 + dest*(2*src) */
@@ -438,7 +272,7 @@ to_mali_function(enum pipe_blend_func blend_func,
          function->negate_a = true;
          break;
       default:
-         UNREACHABLE("Invalid blend function\n");
+         unreachable("Invalid blend function\n");
       }
    }
 }
@@ -454,15 +288,6 @@ pan_blend_is_opaque(const struct pan_blend_equation equation)
    /* With nothing masked out, disabled bledning is opaque */
    if (!equation.blend_enable)
       return true;
-
-   /* NOTE (NaN/inf):
-    *
-    * Technically, we should reject this optimization for float blending
-    * because 0.0 * NaN/inf = NaN.  However, Vulkan and OpenGL both allow us
-    * to drop inf/NaN pretty much at-will and the NIR blending we would fall
-    * back to will also drop 0.0 blend factors.  One day we might want to do
-    * all this behind a driconf flag but today is not that day.
-    */
 
    /* Also detect open-coded opaque blending */
    return equation.rgb_src_factor == PIPE_BLENDFACTOR_ONE &&
@@ -596,21 +421,6 @@ pan_blend_reads_dest(const struct pan_blend_equation equation)
    if (!equation.blend_enable)
       return false;
 
-   /* NOTE (NaN/inf):
-    *
-    * Technically, we should reject this optimization for float blending
-    * because 0.0 * NaN/inf = NaN.  However, Vulkan and OpenGL both allow us
-    * to drop inf/NaN pretty much at-will and the NIR blending we would fall
-    * back to will also drop 0.0 blend factors.  One day we might want to do
-    * all this behind a driconf flag but today is not that day.
-    */
-
-   /* Min/max blending ignores the factors so the destination always gets
-    * read verbatim.
-    */
-   if (is_min_max(equation.rgb_func) || is_min_max(equation.alpha_func))
-      return true;
-
    return is_dest_factor(equation.rgb_src_factor, false) ||
           is_dest_factor(equation.alpha_src_factor, true) ||
           equation.rgb_dst_factor != PIPE_BLENDFACTOR_ZERO ||
@@ -637,12 +447,10 @@ pan_blend_to_fixed_function_equation(const struct pan_blend_equation equation,
    }
 
    /* Compile the fixed-function blend */
-   to_mali_function(equation.rgb_func, equation.rgb_src_factor,
-                    equation.rgb_dst_factor, false /* is_alpha */,
-                    equation.is_float, &out->rgb);
-   to_mali_function(equation.alpha_func, equation.alpha_src_factor,
-                    equation.alpha_dst_factor, true /* is_alpha */,
-                    equation.is_float, &out->alpha);
+   to_panfrost_function(equation.rgb_func, equation.rgb_src_factor,
+                        equation.rgb_dst_factor, false, &out->rgb);
+   to_panfrost_function(equation.alpha_func, equation.alpha_src_factor,
+                        equation.alpha_dst_factor, true, &out->alpha);
 
    out->color_mask = equation.color_mask;
 }
@@ -650,37 +458,33 @@ pan_blend_to_fixed_function_equation(const struct pan_blend_equation equation,
 uint32_t
 pan_pack_blend(const struct pan_blend_equation equation)
 {
-   struct mali_blend_equation_packed out;
+   STATIC_ASSERT(sizeof(uint32_t) == MALI_BLEND_EQUATION_LENGTH);
+
+   uint32_t out = 0;
 
    pan_pack(&out, BLEND_EQUATION, cfg) {
       pan_blend_to_fixed_function_equation(equation, &cfg);
    }
 
-   return out.opaque[0];
+   return out;
 }
 
-enum mali_register_file_format
-pan_blend_type_from_nir(nir_alu_type nir_type)
+DERIVE_HASH_TABLE(pan_blend_shader_key);
+
+void
+pan_blend_shader_cache_init(struct pan_blend_shader_cache *cache,
+                            unsigned gpu_id)
 {
-   switch (nir_type) {
-   case 0: /* Render target not in use */
-      return 0;
-   case nir_type_float16:
-      return MALI_REGISTER_FILE_FORMAT_F16;
-   case nir_type_float32:
-      return MALI_REGISTER_FILE_FORMAT_F32;
-   case nir_type_int32:
-      return MALI_REGISTER_FILE_FORMAT_I32;
-   case nir_type_uint32:
-      return MALI_REGISTER_FILE_FORMAT_U32;
-   case nir_type_int16:
-      return MALI_REGISTER_FILE_FORMAT_I16;
-   case nir_type_uint16:
-      return MALI_REGISTER_FILE_FORMAT_U16;
-   default:
-      UNREACHABLE("Unsupported blend shader type for NIR alu type");
-      return 0;
-   }
+   cache->gpu_id = gpu_id;
+   cache->shaders = pan_blend_shader_key_table_create(NULL);
+   pthread_mutex_init(&cache->lock, NULL);
+}
+
+void
+pan_blend_shader_cache_cleanup(struct pan_blend_shader_cache *cache)
+{
+   _mesa_hash_table_destroy(cache->shaders, NULL);
+   pthread_mutex_destroy(&cache->lock);
 }
 
 #else /* ifndef PAN_ARCH */
@@ -722,7 +526,7 @@ logicop_str(enum pipe_logicop logicop)
    case PIPE_LOGICOP_SET:
       return "set";
    default:
-      UNREACHABLE("Invalid logicop\n");
+      unreachable("Invalid logicop\n");
    }
 }
 
@@ -791,6 +595,25 @@ get_equation_str(const struct pan_blend_rt_state *rt_state, char *str,
    }
 }
 
+static bool
+pan_inline_blend_constants(nir_builder *b, nir_intrinsic_instr *intr,
+                           void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_load_blend_const_color_rgba)
+      return false;
+
+   float *floats = data;
+   const nir_const_value constants[4] = {
+      nir_const_value_for_float(floats[0], 32),
+      nir_const_value_for_float(floats[1], 32),
+      nir_const_value_for_float(floats[2], 32),
+      nir_const_value_for_float(floats[3], 32)};
+
+   b->cursor = nir_after_instr(&intr->instr);
+   nir_def *constant = nir_build_imm(b, 4, 32, constants);
+   nir_def_replace(&intr->def, constant);
+   return true;
+}
 
 nir_shader *
 GENX(pan_blend_create_shader)(const struct pan_blend_state *state,
@@ -803,7 +626,7 @@ GENX(pan_blend_create_shader)(const struct pan_blend_state *state,
    get_equation_str(rt_state, equation_str, sizeof(equation_str));
 
    nir_builder b = nir_builder_init_simple_shader(
-      MESA_SHADER_FRAGMENT, pan_get_nir_shader_compiler_options(PAN_ARCH),
+      MESA_SHADER_FRAGMENT, GENX(pan_shader_get_compiler_options)(),
       "pan_blend(rt=%d,fmt=%s,nr_samples=%d,%s=%s)", rt,
       util_format_name(rt_state->format), rt_state->nr_samples,
       state->logicop_enable ? "logicop" : "equation",
@@ -848,6 +671,7 @@ GENX(pan_blend_create_shader)(const struct pan_blend_state *state,
       options.rt[rt].alpha.dst_factor = rt_state->equation.alpha_dst_factor;
    }
 
+   nir_def *pixel = nir_load_barycentric_pixel(&b, 32, .interp_mode = 1);
    nir_def *zero = nir_imm_int(&b, 0);
 
    for (unsigned i = 0; i < 2; ++i) {
@@ -858,8 +682,8 @@ GENX(pan_blend_create_shader)(const struct pan_blend_state *state,
       src_type = nir_alu_type_get_base_type(nir_type) |
                  nir_alu_type_get_type_size(src_type);
 
-      nir_def *src = nir_load_input(
-         &b, 4, nir_alu_type_get_type_size(src_type), zero,
+      nir_def *src = nir_load_interpolated_input(
+         &b, 4, nir_alu_type_get_type_size(src_type), pixel, zero,
          .io_semantics.location = i ? VARYING_SLOT_VAR0 : VARYING_SLOT_COL0,
          .io_semantics.num_slots = 1, .base = i, .dest_type = src_type);
 
@@ -895,58 +719,59 @@ GENX(pan_blend_create_shader)(const struct pan_blend_state *state,
 }
 
 #if PAN_ARCH >= 6
-
-#if PAN_ARCH < 9
-static enum mali_register_file_format
-get_register_format(nir_alu_type T)
-{
-   switch (T) {
-   case nir_type_float16:
-      return MALI_REGISTER_FILE_FORMAT_F16;
-   case nir_type_float32:
-      return MALI_REGISTER_FILE_FORMAT_F32;
-   case nir_type_int8:
-   case nir_type_int16:
-      return MALI_REGISTER_FILE_FORMAT_I16;
-   case nir_type_int32:
-      return MALI_REGISTER_FILE_FORMAT_I32;
-   case nir_type_uint8:
-   case nir_type_uint16:
-      return MALI_REGISTER_FILE_FORMAT_U16;
-   case nir_type_uint32:
-      return MALI_REGISTER_FILE_FORMAT_U32;
-   default:
-      UNREACHABLE("Invalid format");
-   }
-}
-#endif
-
 uint64_t
 GENX(pan_blend_get_internal_desc)(enum pipe_format fmt, unsigned rt,
                                   unsigned force_size, bool dithered)
 {
    const struct util_format_description *desc = util_format_description(fmt);
-   struct mali_internal_blend_packed res;
+   uint64_t res;
 
    pan_pack(&res, INTERNAL_BLEND, cfg) {
       cfg.mode = MALI_BLEND_MODE_OPAQUE;
       cfg.fixed_function.num_comps = desc->nr_channels;
       cfg.fixed_function.rt = rt;
 
-#if PAN_ARCH < 9
       nir_alu_type T = pan_unpacked_type_for_format(desc);
 
       if (force_size)
          T = nir_alu_type_get_base_type(T) | force_size;
 
-      cfg.fixed_function.conversion.register_format = get_register_format(T);
-#endif
+      switch (T) {
+      case nir_type_float16:
+         cfg.fixed_function.conversion.register_format =
+            MALI_REGISTER_FILE_FORMAT_F16;
+         break;
+      case nir_type_float32:
+         cfg.fixed_function.conversion.register_format =
+            MALI_REGISTER_FILE_FORMAT_F32;
+         break;
+      case nir_type_int8:
+      case nir_type_int16:
+         cfg.fixed_function.conversion.register_format =
+            MALI_REGISTER_FILE_FORMAT_I16;
+         break;
+      case nir_type_int32:
+         cfg.fixed_function.conversion.register_format =
+            MALI_REGISTER_FILE_FORMAT_I32;
+         break;
+      case nir_type_uint8:
+      case nir_type_uint16:
+         cfg.fixed_function.conversion.register_format =
+            MALI_REGISTER_FILE_FORMAT_U16;
+         break;
+      case nir_type_uint32:
+         cfg.fixed_function.conversion.register_format =
+            MALI_REGISTER_FILE_FORMAT_U32;
+         break;
+      default:
+         unreachable("Invalid format");
+      }
 
       cfg.fixed_function.conversion.memory_format =
-         GENX(pan_dithered_format_from_pipe_format)(fmt, dithered);
+         GENX(panfrost_dithered_format_from_pipe_format)(fmt, dithered);
    }
 
-   return res.opaque[0] | ((uint64_t)res.opaque[1] << 32);
+   return res;
 }
 
 static bool
@@ -972,20 +797,110 @@ GENX(pan_inline_rt_conversion)(nir_shader *s, enum pipe_format *formats)
    return nir_shader_intrinsics_pass(s, inline_rt_conversion,
                                      nir_metadata_control_flow, formats);
 }
+#endif
 
-#if PAN_ARCH < 9
-enum mali_register_file_format
-GENX(pan_fixup_blend_type)(nir_alu_type T_size, enum pipe_format format)
+struct pan_blend_shader_variant *
+GENX(pan_blend_get_shader_locked)(struct pan_blend_shader_cache *cache,
+                                  const struct pan_blend_state *state,
+                                  nir_alu_type src0_type,
+                                  nir_alu_type src1_type, unsigned rt)
 {
-   const struct util_format_description *desc = util_format_description(format);
-   unsigned size = nir_alu_type_get_type_size(T_size);
-   nir_alu_type T_format = pan_unpacked_type_for_format(desc);
-   nir_alu_type T = nir_alu_type_get_base_type(T_format) | size;
+   struct pan_blend_shader_key key = {
+      .format = state->rts[rt].format,
+      .src0_type = src0_type,
+      .src1_type = src1_type,
+      .rt = rt,
+      .has_constants = pan_blend_constant_mask(state->rts[rt].equation) != 0,
+      .logicop_enable = state->logicop_enable,
+      .logicop_func = state->logicop_func,
+      .nr_samples = state->rts[rt].nr_samples,
+      .equation = state->rts[rt].equation,
+      .alpha_to_one = state->alpha_to_one,
+   };
+   /* Blend shaders should only be used for blending on Bifrost onwards */
+   assert(PAN_ARCH <= 5 || state->logicop_enable || state->alpha_to_one ||
+          !pan_blend_is_opaque(state->rts[rt].equation));
+   assert(state->rts[rt].equation.color_mask != 0);
 
-   return pan_blend_type_from_nir(T);
+   struct hash_entry *he =
+      _mesa_hash_table_search(cache->shaders, &key);
+   struct pan_blend_shader *shader = he ? he->data : NULL;
+
+   if (!shader) {
+      shader = rzalloc(cache->shaders, struct pan_blend_shader);
+      shader->key = key;
+      list_inithead(&shader->variants);
+      _mesa_hash_table_insert(cache->shaders, &shader->key, shader);
+   }
+
+   list_for_each_entry(struct pan_blend_shader_variant, iter, &shader->variants,
+                       node) {
+      if (!key.has_constants ||
+          !memcmp(iter->constants, state->constants, sizeof(iter->constants))) {
+         return iter;
+      }
+   }
+
+   struct pan_blend_shader_variant *variant = NULL;
+
+   if (shader->nvariants < PAN_BLEND_SHADER_MAX_VARIANTS) {
+      variant = rzalloc(shader, struct pan_blend_shader_variant);
+      util_dynarray_init(&variant->binary, variant);
+      list_add(&variant->node, &shader->variants);
+      shader->nvariants++;
+   } else {
+      variant = list_last_entry(&shader->variants,
+                                struct pan_blend_shader_variant, node);
+      list_del(&variant->node);
+      list_add(&variant->node, &shader->variants);
+      util_dynarray_clear(&variant->binary);
+   }
+
+   memcpy(variant->constants, state->constants, sizeof(variant->constants));
+
+   nir_shader *nir =
+      GENX(pan_blend_create_shader)(state, src0_type, src1_type, rt);
+
+   nir_shader_intrinsics_pass(nir, pan_inline_blend_constants,
+                              nir_metadata_control_flow,
+                              (void *)state->constants);
+
+   /* Compile the NIR shader */
+   struct panfrost_compile_inputs inputs = {
+      .gpu_id = cache->gpu_id,
+      .is_blend = true,
+      .blend.nr_samples = key.nr_samples,
+   };
+
+   enum pipe_format rt_formats[8] = {0};
+   rt_formats[rt] = key.format;
+
+#if PAN_ARCH >= 6
+   inputs.blend.bifrost_blend_desc =
+      GENX(pan_blend_get_internal_desc)(key.format, key.rt, 0, false);
+#endif
+
+   struct pan_shader_info info;
+   pan_shader_preprocess(nir, inputs.gpu_id);
+
+#if PAN_ARCH >= 6
+   NIR_PASS(_, nir, GENX(pan_inline_rt_conversion), rt_formats);
+#else
+   NIR_PASS(_, nir, pan_lower_framebuffer, rt_formats,
+            pan_raw_format_mask_midgard(rt_formats), MAX2(key.nr_samples, 1),
+            cache->gpu_id < 0x700);
+#endif
+
+   GENX(pan_shader_compile)(nir, &inputs, &variant->binary, &info);
+
+   variant->work_reg_count = info.work_reg_count;
+
+#if PAN_ARCH <= 5
+   variant->first_tag = info.midgard.first_tag;
+#endif
+
+   ralloc_free(nir);
+
+   return variant;
 }
-#endif
-
-#endif
-
 #endif /* ifndef PAN_ARCH */

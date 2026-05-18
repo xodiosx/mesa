@@ -431,7 +431,7 @@ llvm_middle_end_bind_parameters(struct draw_pt_middle_end *middle)
    struct draw_llvm *llvm = fpme->llvm;
    unsigned i;
 
-   for (mesa_shader_stage shader_type = MESA_SHADER_VERTEX; shader_type <= MESA_SHADER_GEOMETRY; shader_type++) {
+   for (enum pipe_shader_type shader_type = PIPE_SHADER_VERTEX; shader_type <= PIPE_SHADER_GEOMETRY; shader_type++) {
       for (i = 0; i < ARRAY_SIZE(llvm->jit_resources[shader_type].constants); ++i) {
          /*
           * There could be a potential issue with rounding this up, as the
@@ -453,6 +453,8 @@ llvm_middle_end_bind_parameters(struct draw_pt_middle_end *middle)
             llvm->jit_resources[shader_type].ssbos[i].u = (const uint32_t *)fake_const_buf;
          }
       }
+
+      llvm->jit_resources[shader_type].aniso_filter_table = lp_build_sample_aniso_filter_table();
    }
 
    llvm->vs_jit_context.planes =
@@ -554,7 +556,7 @@ llvm_pipeline_generic(struct draw_pt_middle_end *middle,
       }
       /* Run vertex fetch shader */
       clipped = fpme->current_variant->jit_func(&fpme->llvm->vs_jit_context,
-                                                &fpme->llvm->jit_resources[MESA_SHADER_VERTEX],
+                                                &fpme->llvm->jit_resources[PIPE_SHADER_VERTEX],
                                                 llvm_vert_info.verts,
                                                 draw->pt.user.vbuffer,
                                                 fetch_info->count,
@@ -645,7 +647,7 @@ llvm_pipeline_generic(struct draw_pt_middle_end *middle,
    if ((opt & PT_SHADE) && gshader) {
       struct draw_vertex_shader *vshader = draw->vs.vertex_shader;
       draw_geometry_shader_run(gshader,
-                               draw->pt.user.constants[MESA_SHADER_GEOMETRY],
+                               draw->pt.user.constants[PIPE_SHADER_GEOMETRY],
                                vert_info,
                                prim_info,
                                tes_shader ? &tes_shader->info : &vshader->info,
@@ -696,7 +698,7 @@ llvm_pipeline_generic(struct draw_pt_middle_end *middle,
                    vert_info, prim_info);
 
    if (prim_info->count == 0) {
-//      debug_printf("GS/IA didn't emit any vertices!\n");
+      debug_printf("GS/IA didn't emit any vertices!\n");
    } else {
       draw_stats_clipper_primitives(draw, prim_info);
 
@@ -730,7 +732,9 @@ llvm_pipeline_generic(struct draw_pt_middle_end *middle,
        FREE(gs_vert_info[i].verts);
    }
 
-   FREE(patch_lengths);
+   if (patch_lengths) {
+      FREE(patch_lengths);
+   }
 
    if (free_prim_info) {
       FREE(tes_elts_out);
@@ -751,7 +755,6 @@ prim_type(enum mesa_prim prim, unsigned flags)
 
 static void
 llvm_middle_end_run(struct draw_pt_middle_end *middle,
-                    unsigned start,
                     const unsigned *fetch_elts,
                     unsigned fetch_count,
                     const uint16_t *draw_elts,
@@ -763,12 +766,12 @@ llvm_middle_end_run(struct draw_pt_middle_end *middle,
    struct draw_prim_info prim_info;
 
    fetch_info.linear = false;
-   fetch_info.start = start;
+   fetch_info.start = 0;
    fetch_info.elts = fetch_elts;
    fetch_info.count = fetch_count;
 
    prim_info.linear = false;
-   prim_info.start = start - fpme->draw->start_index;
+   prim_info.start = 0;
    prim_info.count = draw_count;
    prim_info.elts = draw_elts;
    prim_info.prim = prim_type(fpme->input_prim, prim_flags);
@@ -796,7 +799,7 @@ llvm_middle_end_linear_run(struct draw_pt_middle_end *middle,
    fetch_info.elts = NULL;
 
    prim_info.linear = true;
-   prim_info.start = start - fpme->draw->start_index;
+   prim_info.start = start;
    prim_info.count = count;
    prim_info.elts = NULL;
    prim_info.prim = prim_type(fpme->input_prim, prim_flags);
@@ -813,8 +816,8 @@ llvm_middle_end_linear_run_elts(struct draw_pt_middle_end *middle,
                                 unsigned start,
                                 unsigned count,
                                 const uint16_t *draw_elts,
-                                unsigned draw_start,
-                                unsigned draw_count)
+                                unsigned draw_count,
+                                unsigned prim_flags)
 {
    struct llvm_middle_end *fpme = llvm_middle_end(middle);
    struct draw_fetch_info fetch_info;
@@ -826,11 +829,11 @@ llvm_middle_end_linear_run_elts(struct draw_pt_middle_end *middle,
    fetch_info.elts = NULL;
 
    prim_info.linear = false;
-   prim_info.start = draw_start - fpme->draw->start_index;
+   prim_info.start = 0;
    prim_info.count = draw_count;
    prim_info.elts = draw_elts;
-   prim_info.prim = fpme->input_prim;
-   prim_info.flags = 0;
+   prim_info.prim = prim_type(fpme->input_prim, prim_flags);
+   prim_info.flags = prim_flags;
    prim_info.primitive_count = 1;
    prim_info.primitive_lengths = &draw_count;
 

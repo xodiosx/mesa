@@ -43,7 +43,10 @@
 
 #include "common/intel_hang_dump.h"
 
-#include "intel_tools.h"
+#include "compiler/brw_disasm.h"
+#include "compiler/brw_isa_info.h"
+#include "compiler/elk/elk_disasm.h"
+#include "compiler/elk/elk_isa_info.h"
 
 /* Data */
 
@@ -124,6 +127,9 @@ static struct Context {
 
    struct intel_device_info devinfo;
    struct intel_spec *spec = NULL;
+
+   struct brw_isa_info brw;
+   struct elk_isa_info elk;
 
    /* Result of parsing the hang file */
    std::vector<hang_bo>   bos;
@@ -222,9 +228,15 @@ public:
          size_t shader_txt_size = 0;
          FILE *f = open_memstream(&shader_txt, &shader_txt_size);
          if (f) {
-            intel_disassemble(&context.devinfo,
-                              (const uint8_t *) bo->map +
-                              (address - bo->offset), 0, f);
+            if (context.devinfo.ver >= 9) {
+               brw_disassemble_with_errors(&context.brw,
+                                           (const uint8_t *) bo->map +
+                                           (address - bo->offset), 0, f);
+            } else {
+               elk_disassemble_with_errors(&context.elk,
+                                           (const uint8_t *) bo->map +
+                                           (address - bo->offset), 0, f);
+            }
             fclose(f);
          }
 
@@ -651,7 +663,7 @@ get_block_size(uint32_t type)
    case INTEL_HANG_DUMP_BLOCK_TYPE_MAP:      return sizeof(struct intel_hang_dump_block_map);
    case INTEL_HANG_DUMP_BLOCK_TYPE_EXEC:     return sizeof(struct intel_hang_dump_block_exec);
    case INTEL_HANG_DUMP_BLOCK_TYPE_HW_IMAGE: return sizeof(struct intel_hang_dump_block_hw_image);
-   default:                                  UNREACHABLE("invalid block");
+   default:                                  unreachable("invalid block");
    }
 }
 
@@ -717,7 +729,7 @@ parse_hang_file(const char *filename)
       }
 
       default:
-         UNREACHABLE("Invalid block type");
+         unreachable("Invalid block type");
       }
    }
 }
@@ -768,6 +780,11 @@ main(int argc, char *argv[])
       intel_device_name_to_pci_device_id(platform),
       &context.devinfo);
 
+   if (context.devinfo.ver >= 9) {
+      brw_init_isa_info(&context.brw, &context.devinfo);
+   } else {
+      elk_init_isa_info(&context.elk, &context.devinfo);
+   }
    context.spec = intel_spec_load(&context.devinfo);
 
    parse_hang_file(filename);

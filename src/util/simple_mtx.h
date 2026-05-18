@@ -24,7 +24,28 @@
 #ifndef _SIMPLE_MTX_H
 #define _SIMPLE_MTX_H
 
-#include <stdint.h>
+#include "util/futex.h"
+#include "util/macros.h"
+#include "util/u_call_once.h"
+#include "u_atomic.h"
+
+#if UTIL_FUTEX_SUPPORTED
+#if defined(HAVE_VALGRIND) && !defined(NDEBUG)
+#  include <valgrind.h>
+#  include <helgrind.h>
+#  define HG(x) x
+#else
+#  define HG(x)
+#endif
+#else /* !UTIL_FUTEX_SUPPORTED */
+#  include "c11/threads.h"
+#endif /* UTIL_FUTEX_SUPPORTED */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#if UTIL_FUTEX_SUPPORTED
 
 /* mtx_t - Fast, simple mutex
  *
@@ -50,30 +71,6 @@
  * condition variables.
  */
 
-#ifndef __OPENCL_VERSION__
-
-#include "util/futex.h"
-#include "util/macros.h"
-#include "util/u_call_once.h"
-#include "u_atomic.h"
-
-#if UTIL_FUTEX_SUPPORTED
-#if defined(HAVE_VALGRIND) && !defined(NDEBUG)
-#  include <valgrind.h>
-#  include <helgrind.h>
-#  define HG(x) x
-#else
-#  define HG(x)
-#endif
-#else /* !UTIL_FUTEX_SUPPORTED */
-#  include "c11/threads.h"
-#endif /* UTIL_FUTEX_SUPPORTED */
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#if UTIL_FUTEX_SUPPORTED
 typedef struct {
    uint32_t val;
 } simple_mtx_t;
@@ -104,7 +101,7 @@ simple_mtx_destroy(ASSERTED simple_mtx_t *mtx)
 static inline void
 simple_mtx_lock(simple_mtx_t *mtx)
 {
-   int64_t c;
+   uint32_t c;
 
    c = p_atomic_cmpxchg(&mtx->val, 0, 1);
 
@@ -125,7 +122,7 @@ simple_mtx_lock(simple_mtx_t *mtx)
 static inline void
 simple_mtx_unlock(simple_mtx_t *mtx)
 {
-   int64_t c;
+   uint32_t c;
 
    HG(ANNOTATE_RWLOCK_RELEASED(mtx, 1));
 
@@ -140,7 +137,7 @@ simple_mtx_unlock(simple_mtx_t *mtx)
 }
 
 static inline void
-simple_mtx_assert_locked(ASSERTED simple_mtx_t *mtx)
+simple_mtx_assert_locked(simple_mtx_t *mtx)
 {
    assert(mtx->val);
 }
@@ -204,15 +201,6 @@ simple_mtx_assert_locked(simple_mtx_t *mtx)
 
 #ifdef __cplusplus
 }
-#endif
-
-#else
-
-/* Dummy implementation to let more headers compile with OpenCL */
-typedef struct {
-   uint32_t _;
-} simple_mtx_t;
-
 #endif
 
 #endif /* _SIMPLE_MTX_H */

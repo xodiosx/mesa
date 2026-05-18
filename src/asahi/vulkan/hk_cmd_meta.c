@@ -4,7 +4,6 @@
  * Copyright 2022-2023 Collabora Ltd. and Red Hat Inc.
  * SPDX-License-Identifier: MIT
  */
-#include "asahi/compiler/agx_nir_texture.h"
 #include "util/format/u_format.h"
 #include "util/format/u_formats.h"
 #include "util/u_math.h"
@@ -18,8 +17,6 @@
 #include "hk_physical_device.h"
 
 #include "layout.h"
-#include "libagx_dgc.h"
-#include "libagx_shaders.h"
 #include "nir_builder.h"
 #include "nir_builder_opcodes.h"
 #include "nir_format_convert.h"
@@ -48,8 +45,7 @@ hk_cmd_bind_map_buffer(struct vk_command_buffer *vk_cmd,
    if (unlikely(T.cpu == NULL))
       return VK_ERROR_OUT_OF_POOL_MEMORY;
 
-   assert(buffer->vk.device_address == 0);
-   buffer->vk.device_address = T.gpu;
+   buffer->addr = T.gpu;
    *map_out = T.cpu;
    return VK_SUCCESS;
 }
@@ -63,7 +59,6 @@ hk_device_init_meta(struct hk_device *dev)
 
    dev->meta.use_gs_for_layer = false;
    dev->meta.use_stencil_export = true;
-   dev->meta.use_rect_list_pipeline = true;
    dev->meta.cmd_bind_map_buffer = hk_cmd_bind_map_buffer;
    dev->meta.max_bind_map_buffer_size_B = 64 * 1024;
 
@@ -211,22 +206,34 @@ aspect_format(VkFormat fmt, VkImageAspectFlags aspect)
    bool depth = (aspect & VK_IMAGE_ASPECT_DEPTH_BIT);
    bool stencil = (aspect & VK_IMAGE_ASPECT_STENCIL_BIT);
 
-   assert(!(depth && stencil));
+   enum pipe_format p_format = hk_format_to_pipe_format(fmt);
 
-   switch (fmt) {
-   case VK_FORMAT_D32_SFLOAT:
-      return VK_FORMAT_R32_SFLOAT;
-   case VK_FORMAT_D32_SFLOAT_S8_UINT:
-      return stencil ? VK_FORMAT_R8_UINT : VK_FORMAT_R32_SFLOAT;
-   case VK_FORMAT_D16_UNORM:
-      return VK_FORMAT_R16_UNORM;
-   case VK_FORMAT_S8_UINT:
-      return VK_FORMAT_R8_UINT;
-   case VK_FORMAT_D16_UNORM_S8_UINT:
-      return stencil ? VK_FORMAT_R8_UINT : VK_FORMAT_R16_UNORM;
-   default:
-      break;
+   if (util_format_is_depth_or_stencil(p_format)) {
+      assert(depth ^ stencil);
+      if (depth) {
+         switch (fmt) {
+         case VK_FORMAT_D32_SFLOAT:
+         case VK_FORMAT_D32_SFLOAT_S8_UINT:
+            return VK_FORMAT_D32_SFLOAT;
+         case VK_FORMAT_D16_UNORM:
+         case VK_FORMAT_D16_UNORM_S8_UINT:
+            return VK_FORMAT_D16_UNORM;
+         default:
+            unreachable("invalid depth");
+         }
+      } else {
+         switch (fmt) {
+         case VK_FORMAT_S8_UINT:
+         case VK_FORMAT_D32_SFLOAT_S8_UINT:
+         case VK_FORMAT_D16_UNORM_S8_UINT:
+            return VK_FORMAT_S8_UINT;
+         default:
+            unreachable("invalid stencil");
+         }
+      }
    }
+
+   assert(!depth && !stencil);
 
    const struct vk_format_ycbcr_info *ycbcr_info =
       vk_format_get_ycbcr_info(fmt);
@@ -240,7 +247,7 @@ aspect_format(VkFormat fmt, VkImageAspectFlags aspect)
       case VK_IMAGE_ASPECT_PLANE_2_BIT:
          return ycbcr_info->planes[2].format;
       default:
-         UNREACHABLE("invalid ycbcr aspect");
+         unreachable("invalid ycbcr aspect");
       }
    }
 
@@ -253,8 +260,11 @@ aspect_format(VkFormat fmt, VkImageAspectFlags aspect)
  * the unfortunate exception).
  */
 static enum pipe_format
-canonical_format_pipe(enum pipe_format fmt)
+canonical_format_pipe(enum pipe_format fmt, bool canonicalize_zs)
 {
+   if (!canonicalize_zs && util_format_is_depth_or_stencil(fmt))
+      return fmt;
+
    assert(ail_is_valid_pixel_format(fmt));
 
    if (util_format_is_compressed(fmt)) {
@@ -298,7 +308,7 @@ static VkFormat
 canonical_format(VkFormat fmt)
 {
    return vk_format_from_pipe_format(
-      canonical_format_pipe(hk_format_to_pipe_format(fmt)));
+      canonical_format_pipe(hk_format_to_pipe_format(fmt), false));
 }
 
 enum copy_type {
@@ -377,7 +387,7 @@ is_format_native(enum pipe_format format)
    case PIPE_FORMAT_B5G5R5A1_UNORM:
       return false;
    default:
-      UNREACHABLE("expected canonical");
+      unreachable("expected canonical");
    }
 }
 
@@ -386,7 +396,7 @@ load_store_formatted(nir_builder *b, nir_def *base, nir_def *index,
                      nir_def *value, enum pipe_format format)
 {
    if (util_format_is_depth_or_stencil(format))
-      format = canonical_format_pipe(format);
+      format = canonical_format_pipe(format, true);
 
    if (is_format_native(format)) {
       enum pipe_format isa = ail_pixel_format[format].renderable;
@@ -416,11 +426,12 @@ load_store_formatted(nir_builder *b, nir_def *base, nir_def *index,
             raw = nir_trim_vector(b, raw, blocksize_B / 4);
          }
 
-         nir_store_global(b, raw, addr, .align_mul = blocksize_B);
+         nir_store_global(b, addr, blocksize_B, raw,
+                          nir_component_mask(raw->num_components));
       } else {
-         nir_def *raw = nir_load_global(b, DIV_ROUND_UP(blocksize_B, 4),
-                                        MIN2(32, blocksize_B * 8), addr,
-                                        .align_mul = blocksize_B);
+         nir_def *raw =
+            nir_load_global(b, addr, blocksize_B, DIV_ROUND_UP(blocksize_B, 4),
+                            MIN2(32, blocksize_B * 8));
 
          return nir_format_unpack_rgba(b, raw, format);
       }
@@ -484,12 +495,12 @@ build_image_copy_shader(const struct vk_meta_image_copy_key *key)
    /* The destination format is already canonical, convert to an ISA format */
    enum pipe_format isa_format = PIPE_FORMAT_NONE;
    if (key->block_based) {
-      enum pipe_format pipe = canonical_format_pipe(key->dst_format);
+      enum pipe_format pipe = canonical_format_pipe(key->dst_format, true);
       isa_format = ail_pixel_format[pipe].renderable;
       assert(isa_format != PIPE_FORMAT_NONE);
    }
 
-   nir_def *local_offset = nir_imm_int(b, 0);
+   nir_def *local_offset = nir_imm_intN_t(b, 0, 16);
    nir_def *lid = nir_trim_vector(b, nir_load_local_invocation_id(b), 2);
    lid = nir_u2u16(b, lid);
 
@@ -542,13 +553,10 @@ build_image_copy_shader(const struct vk_meta_image_copy_key *key)
                                           NULL, key->dst_format);
          } else {
             if (msaa) {
-               value1 =
-                  nir_txf_ms(b, src_coord, ms_index, .texture_deref = deref);
+               value1 = nir_txf_ms_deref(b, deref, src_coord, ms_index);
             } else {
-               value1 = nir_txf(b, src_coord, .texture_deref = deref);
+               value1 = nir_txf_deref(b, deref, src_coord, NULL);
             }
-
-            nir_def_as_tex(value1)->backend_flags = AGX_TEXTURE_FLAG_NO_CLAMP;
 
             /* Munge according to the implicit conversions so we get a bit copy */
             if (key->src_format != key->dst_format) {
@@ -788,7 +796,7 @@ hk_meta_copy_image_to_buffer2(struct vk_command_buffer *cmd,
          bool is_3d = region->imageExtent.depth > 1;
 
          struct vk_meta_image_copy_key key = {
-            .key_type = VK_META_OBJECT_KEY_COPY_IMAGE_TO_BUFFER,
+            .key_type = VK_META_OBJECT_KEY_COPY_IMAGE_TO_BUFFER_PIPELINE,
             .type = IMG2BUF,
             .block_size = blocksize_B,
             .nr_samples = image->samples,
@@ -869,7 +877,7 @@ hk_meta_copy_image_to_buffer2(struct vk_command_buffer *cmd,
             hk_format_to_pipe_format(src_image->format);
 
          struct vk_meta_push_data push = {
-            .buffer = hk_buffer_address_rw(buffer, region->bufferOffset),
+            .buffer = hk_buffer_address(buffer, region->bufferOffset),
             .row_extent = row_extent,
             .slice_or_layer_extent = is_3d ? slice_extent : layer_extent,
 
@@ -973,13 +981,14 @@ hk_meta_copy_buffer_to_image2(struct vk_command_buffer *cmd,
          bool is_3d = region->imageExtent.depth > 1;
 
          struct vk_meta_image_copy_key key = {
-            .key_type = VK_META_OBJECT_KEY_COPY_IMAGE_TO_BUFFER,
+            .key_type = VK_META_OBJECT_KEY_COPY_IMAGE_TO_BUFFER_PIPELINE,
             .type = BUF2IMG,
             .block_size = blocksize_B,
             .nr_samples = image->samples,
             .src_format = hk_format_to_pipe_format(canonical),
             .dst_format = canonical_format_pipe(
-               hk_format_to_pipe_format(aspect_format(image->format, aspect))),
+               hk_format_to_pipe_format(aspect_format(image->format, aspect)),
+               false),
 
             /* TODO: MSAA path */
             .block_based =
@@ -1069,7 +1078,7 @@ hk_meta_copy_buffer_to_image2(struct vk_command_buffer *cmd,
                                VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 
          struct vk_meta_push_data push = {
-            .buffer = hk_buffer_address_ro(buffer, region->bufferOffset),
+            .buffer = hk_buffer_address(buffer, region->bufferOffset),
             .row_extent = row_extent,
             .slice_or_layer_extent = is_3d ? slice_extent : layer_extent,
          };
@@ -1124,24 +1133,22 @@ hk_meta_copy_image2(struct vk_command_buffer *cmd, struct vk_meta_device *meta,
             uint32_t blocksize_B =
                util_format_get_blocksize(hk_format_to_pipe_format(canonical));
 
-            bool use_dst_aspect_mask =
-               vk_format_get_ycbcr_info(dst_image->format) ||
-               vk_format_get_ycbcr_info(src_image->format) ||
-               (vk_format_is_depth_or_stencil(dst_image->format) &&
-                !vk_format_is_depth_or_stencil(src_image->format));
-
             VkImageAspectFlagBits dst_aspect_mask =
-               use_dst_aspect_mask ? region->dstSubresource.aspectMask
-                                   : (1 << aspect);
+               vk_format_get_ycbcr_info(dst_image->format) ||
+                     vk_format_get_ycbcr_info(src_image->format)
+                  ? region->dstSubresource.aspectMask
+                  : (1 << aspect);
 
             struct vk_meta_image_copy_key key = {
-               .key_type = VK_META_OBJECT_KEY_COPY_IMAGE_TO_BUFFER,
+               .key_type = VK_META_OBJECT_KEY_COPY_IMAGE_TO_BUFFER_PIPELINE,
                .type = IMG2IMG,
                .block_size = blocksize_B,
                .nr_samples = dst_image->samples,
                .src_format = hk_format_to_pipe_format(canonical),
-               .dst_format = canonical_format_pipe(hk_format_to_pipe_format(
-                  aspect_format(dst_image->format, dst_aspect_mask))),
+               .dst_format =
+                  canonical_format_pipe(hk_format_to_pipe_format(aspect_format(
+                                           dst_image->format, dst_aspect_mask)),
+                                        false),
 
                /* TODO: MSAA path */
                .block_based = (dst_image->image_type != VK_IMAGE_TYPE_1D) &&
@@ -1317,7 +1324,7 @@ hk_meta_copy_get_image_properties(struct hk_image *img)
          props.depth.component_mask = BITFIELD_BIT(0);
          break;
       default:
-         UNREACHABLE("Invalid ZS format");
+         unreachable("Invalid ZS format");
       }
    }
 
@@ -1330,7 +1337,7 @@ hk_CmdBlitImage2(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(hk_cmd_buffer, cmd, commandBuffer);
    struct hk_device *dev = hk_cmd_buffer_device(cmd);
-   perf_debug(cmd, "Blit image");
+   perf_debug(dev, "Blit image");
 
    struct hk_meta_save save;
    hk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS);
@@ -1344,7 +1351,7 @@ hk_CmdResolveImage2(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(hk_cmd_buffer, cmd, commandBuffer);
    struct hk_device *dev = hk_cmd_buffer_device(cmd);
-   perf_debug(cmd, "Resolve");
+   perf_debug(dev, "Resolve");
 
    struct hk_meta_save save;
    hk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS);
@@ -1364,49 +1371,23 @@ hk_meta_resolve_rendering(struct hk_cmd_buffer *cmd,
    hk_meta_end(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS);
 }
 
-static void
-hk_cmd_copy(struct hk_cmd_buffer *cmd, uint64_t dst, uint64_t src, size_t size)
-{
-   /* Use vectorized copies for as much of the buffer as possible. This requires
-    * that dst, src, and size are all properly aligned. Failing to check for
-    * alignment on the buffers causes subtle and hard-to-debug issues!
-    */
-   if (size >= 16 && (dst & 0xf) == 0 && (src & 0xf) == 0) {
-      unsigned uint4s = size / 16;
-      unsigned bytes = uint4s * 16;
-
-      libagx_copy_uint4(cmd, agx_1d(uint4s), AGX_BARRIER_ALL, dst, src);
-
-      dst += bytes;
-      src += bytes;
-      size -= bytes;
-   }
-
-   if (size) {
-      libagx_copy_uchar(cmd, agx_1d(size), AGX_BARRIER_ALL, dst, src);
-   }
-}
-
 VKAPI_ATTR void VKAPI_CALL
-hk_CmdCopyBuffer2(VkCommandBuffer commandBuffer, const VkCopyBufferInfo2 *info)
+hk_CmdCopyBuffer2(VkCommandBuffer commandBuffer,
+                  const VkCopyBufferInfo2 *pCopyBufferInfo)
 {
    VK_FROM_HANDLE(hk_cmd_buffer, cmd, commandBuffer);
    struct hk_device *dev = hk_cmd_buffer_device(cmd);
 
-   for (unsigned i = 0; i < info->regionCount; i++) {
-      const VkBufferCopy2 *region = &info->pRegions[i];
-      VK_FROM_HANDLE(hk_buffer, src_buffer, info->srcBuffer);
-      uint64_t src = hk_buffer_address_ro(src_buffer, region->srcOffset);
-      uint64_t dst = vk_meta_buffer_address(&dev->vk, info->dstBuffer,
-                                            region->dstOffset, region->size);
-      hk_cmd_copy(cmd, dst, src, region->size);
-   }
+   struct hk_meta_save save;
+   hk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_COMPUTE);
+   vk_meta_copy_buffer(&cmd->vk, &dev->meta, pCopyBufferInfo);
+   hk_meta_end(cmd, &save, VK_PIPELINE_BIND_POINT_COMPUTE);
 }
 
 static bool
 hk_copy_requires_gfx(struct hk_image *img)
 {
-   return img->vk.samples > 1 && img->planes[0].layout.compressed;
+   return img->vk.samples > 1 && ail_is_compressed(&img->planes[0].layout);
 }
 
 static bool
@@ -1491,14 +1472,13 @@ hk_CmdFillBuffer(VkCommandBuffer commandBuffer, VkBuffer dstBuffer,
                  VkDeviceSize dstOffset, VkDeviceSize dstRange, uint32_t data)
 {
    VK_FROM_HANDLE(hk_cmd_buffer, cmd, commandBuffer);
-   VK_FROM_HANDLE(hk_buffer, buffer, dstBuffer);
    struct hk_device *dev = hk_cmd_buffer_device(cmd);
 
-   size_t range = vk_buffer_range(&buffer->vk, dstOffset, dstRange);
-   uint64_t addr =
-      vk_meta_buffer_address(&dev->vk, dstBuffer, dstOffset, dstRange);
-
-   libagx_fill(cmd, agx_1d(range / 4), AGX_BARRIER_ALL, addr, data);
+   struct hk_meta_save save;
+   hk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_COMPUTE);
+   vk_meta_fill_buffer(&cmd->vk, &dev->meta, dstBuffer, dstOffset, dstRange,
+                       data);
+   hk_meta_end(cmd, &save, VK_PIPELINE_BIND_POINT_COMPUTE);
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -1507,13 +1487,13 @@ hk_CmdUpdateBuffer(VkCommandBuffer commandBuffer, VkBuffer dstBuffer,
                    const void *pData)
 {
    VK_FROM_HANDLE(hk_cmd_buffer, cmd, commandBuffer);
-   VK_FROM_HANDLE(hk_buffer, buffer, dstBuffer);
    struct hk_device *dev = hk_cmd_buffer_device(cmd);
-   size_t range = vk_buffer_range(&buffer->vk, dstOffset, dstRange);
 
-   hk_cmd_copy(cmd,
-               vk_meta_buffer_address(&dev->vk, dstBuffer, dstOffset, dstRange),
-               hk_pool_upload(cmd, pData, range, 4), range);
+   struct hk_meta_save save;
+   hk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_COMPUTE);
+   vk_meta_update_buffer(&cmd->vk, &dev->meta, dstBuffer, dstOffset, dstRange,
+                         pData);
+   hk_meta_end(cmd, &save, VK_PIPELINE_BIND_POINT_COMPUTE);
 }
 
 VKAPI_ATTR void VKAPI_CALL

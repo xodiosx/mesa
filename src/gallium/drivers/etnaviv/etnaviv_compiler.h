@@ -61,8 +61,7 @@ struct etna_compiler {
 struct etna_shader_inout {
    int reg; /* native register */
    int slot; /* nir: gl_varying_slot or gl_vert_attrib */
-   uint8_t interpolation;
-   uint8_t num_components;
+   int num_components;
 };
 
 struct etna_shader_io_file {
@@ -99,7 +98,7 @@ struct etna_shader_variant {
 #define VARIANT_CACHE_PTR(v)   (((char *)v) + VARIANT_CACHE_START)
 #define VARIANT_CACHE_SIZE     (sizeof(struct etna_shader_variant) - VARIANT_CACHE_START)
 
-   mesa_shader_stage stage;
+   gl_shader_stage stage;
    uint32_t code_size; /* code size in uint32 words */
    unsigned num_loops;
    unsigned num_temps;
@@ -138,7 +137,6 @@ struct etna_varying {
    uint32_t pa_attributes;
    uint8_t num_components;
    uint8_t use[4];
-   uint8_t semantic;
    uint8_t reg;
 };
 

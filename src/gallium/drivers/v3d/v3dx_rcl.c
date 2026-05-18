@@ -24,9 +24,10 @@
 #include "util/format/u_format.h"
 #include "util/macros.h"
 #include "v3d_context.h"
+#include "broadcom/common/v3d_macros.h"
 #include "broadcom/common/v3d_tiling.h"
 #include "broadcom/common/v3d_util.h"
-#include "v3dx_format_table.h"
+#include "broadcom/cle/v3dx_pack.h"
 
 #define PIPE_CLEAR_COLOR_BUFFERS (PIPE_CLEAR_COLOR0 |                   \
                                   PIPE_CLEAR_COLOR1 |                   \
@@ -35,71 +36,42 @@
 
 #define PIPE_FIRST_COLOR_BUFFER_BIT (ffs(PIPE_CLEAR_COLOR0) - 1)
 
-static inline enum v3d_tiling_mode
-v3d_surface_get_tiling(struct pipe_surface *psurf, bool separate_stencil)
-{
-        assert(psurf && psurf->texture);
-        struct v3d_resource *rsc = v3d_resource(psurf->texture);
-        if (separate_stencil) {
-                assert(rsc->separate_stencil);
-                rsc = rsc->separate_stencil;
-        }
-        return rsc->slices[psurf->level].tiling;
-}
-
-static uint32_t
-v3d_surface_get_height_in_ub_or_stride(struct pipe_surface *psurf,
-                                       bool separate_stencil)
-{
-        assert(psurf && psurf->texture);
-        struct v3d_resource *rsc = v3d_resource(psurf->texture);
-        if (separate_stencil) {
-                assert(rsc->separate_stencil);
-                rsc = rsc->separate_stencil;
-        }
-        struct v3d_resource_slice *slice = &rsc->slices[psurf->level];
-
-        if (slice->tiling == V3D_TILING_UIF_NO_XOR ||
-            slice->tiling == V3D_TILING_UIF_XOR) {
-                return (slice->padded_height /
-                        (2 * v3d_utile_height(rsc->cpp)));
-        } else if (slice->tiling == V3D_TILING_RASTER) {
-                return slice->stride;
-        }
-        return 0;
-}
-
 static void
 load_general(struct v3d_cl *cl, struct pipe_surface *psurf, int buffer,
              int layer, uint32_t pipe_bit, uint32_t *loads_pending)
 {
+        struct v3d_surface *surf = v3d_surface(psurf);
+        bool separate_stencil = surf->separate_stencil && buffer == STENCIL;
+        if (separate_stencil) {
+                psurf = surf->separate_stencil;
+                surf = v3d_surface(psurf);
+        }
+
         struct v3d_resource *rsc = v3d_resource(psurf->texture);
-        bool separate_stencil = rsc->separate_stencil && buffer == STENCIL;
-        if (separate_stencil)
-                rsc = rsc->separate_stencil;
 
         uint32_t layer_offset =
-                v3d_layer_offset(&rsc->base, psurf->level,
-                                 psurf->first_layer + layer);
-
+                v3d_layer_offset(&rsc->base, psurf->u.tex.level,
+                                 psurf->u.tex.first_layer + layer);
         cl_emit(cl, LOAD_TILE_BUFFER_GENERAL, load) {
                 load.buffer_to_load = buffer;
                 load.address = cl_address(rsc->bo, layer_offset);
 
-                load.memory_format = v3d_surface_get_tiling(psurf,
-                                                            separate_stencil);
+                load.memory_format = surf->tiling;
                 if (separate_stencil)
                         load.input_image_format = V3D_OUTPUT_IMAGE_FORMAT_S8;
                 else
-                        load.input_image_format =
-                                v3d_get_rt_format(
-                                        &cl->job->v3d->screen->devinfo,
-                                        psurf->format);
-                load.r_b_swap = v3d_format_needs_tlb_rb_swap(psurf->format);
+                        load.input_image_format = surf->format;
+                load.r_b_swap = surf->swap_rb;
                 load.force_alpha_1 = util_format_has_alpha1(psurf->format);
-                load.height_in_ub_or_stride =
-                        v3d_surface_get_height_in_ub_or_stride(psurf,
-                                                               separate_stencil);
+                if (surf->tiling == V3D_TILING_UIF_NO_XOR ||
+                    surf->tiling == V3D_TILING_UIF_XOR) {
+                        load.height_in_ub_or_stride =
+                                surf->padded_height_of_output_image_in_uif_blocks;
+                } else if (surf->tiling == V3D_TILING_RASTER) {
+                        struct v3d_resource_slice *slice =
+                                &rsc->slices[psurf->u.tex.level];
+                        load.height_in_ub_or_stride = slice->stride;
+                }
 
                 if (psurf->texture->nr_samples > 1)
                         load.decimate_mode = V3D_DECIMATE_MODE_ALL_SAMPLES;
@@ -118,21 +90,24 @@ store_general(struct v3d_job *job,
               uint32_t *stores_pending, bool general_color_clear,
               bool resolve_4x)
 {
-        struct v3d_resource *rsc = v3d_resource(psurf->texture);
-        bool separate_stencil = rsc->separate_stencil && buffer == STENCIL;
-        if (separate_stencil)
-                rsc = rsc->separate_stencil;
+        struct v3d_surface *surf = v3d_surface(psurf);
+        bool separate_stencil = surf->separate_stencil && buffer == STENCIL;
+        if (separate_stencil) {
+                psurf = surf->separate_stencil;
+                surf = v3d_surface(psurf);
+        }
 
         if (stores_pending)
                 *stores_pending &= ~pipe_bit;
+
+        struct v3d_resource *rsc = v3d_resource(psurf->texture);
 
         rsc->writes++;
         rsc->graphics_written = true;
 
         uint32_t layer_offset =
-                v3d_layer_offset(&rsc->base, psurf->level,
-                                 psurf->first_layer + layer);
-
+                v3d_layer_offset(&rsc->base, psurf->u.tex.level,
+                                 psurf->u.tex.first_layer + layer);
         cl_emit(cl, STORE_TILE_BUFFER_GENERAL, store) {
                 store.buffer_to_store = buffer;
                 store.address = cl_address(rsc->bo, layer_offset);
@@ -142,17 +117,20 @@ store_general(struct v3d_job *job,
                 if (separate_stencil)
                         store.output_image_format = V3D_OUTPUT_IMAGE_FORMAT_S8;
                 else
-                        store.output_image_format =
-                                v3d_get_rt_format(
-                                        &cl->job->v3d->screen->devinfo,
-                                        psurf->format);
+                        store.output_image_format = surf->format;
 
-                store.r_b_swap = v3d_format_needs_tlb_rb_swap(psurf->format);
-                store.memory_format = v3d_surface_get_tiling(psurf,
-                                                             separate_stencil);
-                store.height_in_ub_or_stride =
-                        v3d_surface_get_height_in_ub_or_stride(psurf,
-                                                               separate_stencil);
+                store.r_b_swap = surf->swap_rb;
+                store.memory_format = surf->tiling;
+
+                if (surf->tiling == V3D_TILING_UIF_NO_XOR ||
+                    surf->tiling == V3D_TILING_UIF_XOR) {
+                        store.height_in_ub_or_stride =
+                                surf->padded_height_of_output_image_in_uif_blocks;
+                } else if (surf->tiling == V3D_TILING_RASTER) {
+                        struct v3d_resource_slice *slice =
+                                &rsc->slices[psurf->u.tex.level];
+                        store.height_in_ub_or_stride = slice->stride;
+                }
 
                 if (psurf->texture->nr_samples > 1) {
                         store.decimate_mode = V3D_DECIMATE_MODE_ALL_SAMPLES;
@@ -160,8 +138,8 @@ store_general(struct v3d_job *job,
                         /* We are resolving from a MSAA blit buffer or we are
                          * resolving directly from TLB to a resolve buffer
                          */
-                        assert((job->bbuf.texture && job->bbuf.texture->nr_samples > 1) ||
-                               (job->dbuf.texture && job->dbuf.texture->nr_samples <= 1));
+                        assert((job->bbuf && job->bbuf->texture->nr_samples > 1) ||
+                               (job->dbuf && job->dbuf->texture->nr_samples <= 1));
                         store.decimate_mode = V3D_DECIMATE_MODE_4X;
                 } else {
                         store.decimate_mode = V3D_DECIMATE_MODE_SAMPLE_0;
@@ -190,21 +168,20 @@ v3d_rcl_emit_loads(struct v3d_job *job, struct v3d_cl *cl, int layer)
         /* When blitting, no color or zs buffer is loaded; instead the blit
          * source buffer is loaded for the aspects that we are going to blit.
          */
-        assert(!job->bbuf.texture || job->load == 0);
-        assert(!job->bbuf.texture || job->nr_cbufs <= 1);
+        assert(!job->bbuf || job->load == 0);
+        assert(!job->bbuf || job->nr_cbufs <= 1);
 
-        uint32_t loads_pending = job->bbuf.texture ? job->store : job->load;
+        uint32_t loads_pending = job->bbuf ? job->store : job->load;
 
         for (int i = 0; i < job->nr_cbufs; i++) {
                 uint32_t bit = PIPE_CLEAR_COLOR0 << i;
                 if (!(loads_pending & bit))
                         continue;
 
-                struct pipe_surface *psurf =
-                        job->bbuf.texture ? &job->bbuf : &job->cbufs[i];
-                assert(!job->bbuf.texture || i == 0);
+                struct pipe_surface *psurf = job->bbuf ? job->bbuf : job->cbufs[i];
+                assert(!job->bbuf || i == 0);
 
-                if (!psurf->texture)
+                if (!psurf)
                         continue;
 
                 load_general(cl, psurf, RENDER_TARGET_0 + i, layer,
@@ -213,8 +190,7 @@ v3d_rcl_emit_loads(struct v3d_job *job, struct v3d_cl *cl, int layer)
 
         if (loads_pending & PIPE_CLEAR_DEPTHSTENCIL) {
                 assert(!job->early_zs_clear);
-                struct pipe_surface *src =
-                        job->bbuf.texture ? &job->bbuf : &job->zsbuf;
+                struct pipe_surface *src = job->bbuf ? job->bbuf : job->zsbuf;
                 struct v3d_resource *rsc = v3d_resource(src->texture);
 
                 if (rsc->separate_stencil &&
@@ -253,20 +229,19 @@ v3d_rcl_emit_stores(struct v3d_job *job, struct v3d_cl *cl, int layer)
          * perspective.  Non-MSAA surfaces will use
          * STORE_MULTI_SAMPLE_RESOLVED_TILE_COLOR_BUFFER_EXTENDED.
          */
-        assert((!job->bbuf.texture && !job->dbuf.texture) ||
-               job->nr_cbufs <= 1);
+        assert((!job->bbuf && !job->dbuf) || job->nr_cbufs <= 1);
         for (int i = 0; i < job->nr_cbufs; i++) {
-                struct pipe_surface *psurf = &job->cbufs[i];
-                if (!psurf->texture)
+                struct pipe_surface *psurf = job->cbufs[i];
+                if (!psurf)
                         continue;
 
                 uint32_t bit = PIPE_CLEAR_COLOR0 << i;
                 if (job->blit_tlb & bit) {
-                        assert(job->dbuf.texture);
+                        assert(job->dbuf);
                         bool blit_resolve =
-                                job->dbuf.texture->nr_samples <= 1 &&
+                                job->dbuf->texture->nr_samples <= 1 &&
                                 psurf->texture->nr_samples > 1;
-                        store_general(job, cl, &job->dbuf, layer,
+                        store_general(job, cl, job->dbuf, layer,
                                       RENDER_TARGET_0 + i, bit, NULL,
                                       false, blit_resolve);
                 }
@@ -275,19 +250,18 @@ v3d_rcl_emit_stores(struct v3d_job *job, struct v3d_cl *cl, int layer)
                         continue;
 
                 bool blit_resolve =
-                        job->bbuf.texture &&
-                        job->bbuf.texture->nr_samples > 1 &&
+                        job->bbuf && job->bbuf->texture->nr_samples > 1 &&
                         psurf->texture->nr_samples <= 1;
                 store_general(job, cl, psurf, layer, RENDER_TARGET_0 + i, bit,
                               &stores_pending, general_color_clear, blit_resolve);
         }
 
-        if (job->store & PIPE_CLEAR_DEPTHSTENCIL && job->zsbuf.texture) {
+        if (job->store & PIPE_CLEAR_DEPTHSTENCIL && job->zsbuf) {
                 assert(!job->early_zs_clear);
-                struct v3d_resource *rsc = v3d_resource(job->zsbuf.texture);
+                struct v3d_resource *rsc = v3d_resource(job->zsbuf->texture);
                 if (rsc->separate_stencil) {
                         if (job->store & PIPE_CLEAR_DEPTH) {
-                                store_general(job, cl, &job->zsbuf, layer,
+                                store_general(job, cl, job->zsbuf, layer,
                                               Z, PIPE_CLEAR_DEPTH,
                                               &stores_pending,
                                               general_color_clear,
@@ -295,14 +269,14 @@ v3d_rcl_emit_stores(struct v3d_job *job, struct v3d_cl *cl, int layer)
                         }
 
                         if (job->store & PIPE_CLEAR_STENCIL) {
-                                store_general(job, cl, &job->zsbuf, layer,
+                                store_general(job, cl, job->zsbuf, layer,
                                               STENCIL, PIPE_CLEAR_STENCIL,
                                               &stores_pending,
                                               general_color_clear,
                                               false);
                         }
                 } else {
-                        store_general(job, cl, &job->zsbuf, layer,
+                        store_general(job, cl, job->zsbuf, layer,
                                       zs_buffer_from_pipe_bits(job->store),
                                       job->store & PIPE_CLEAR_DEPTHSTENCIL,
                                       &stores_pending, general_color_clear,
@@ -391,12 +365,11 @@ v3d_rcl_emit_generic_per_tile_list(struct v3d_job *job, int layer)
  * Note: rt_type is in fact a "enum V3DX(Internal_Type)".
  *
  */
-
-#if V3D_VERSION == 42
-static enum V3DX(Render_Target_Clamp)
-v3dX(clamp_for_format_and_type)(enum V3DX(Internal_Type) rt_type,
+static uint32_t
+v3dX(clamp_for_format_and_type)(uint32_t rt_type,
                                 enum pipe_format format)
 {
+#if V3D_VERSION == 42
         if (util_format_is_srgb(format)) {
                 return V3D_RENDER_TARGET_CLAMP_NORM;
         } else if (util_format_is_pure_integer(format)) {
@@ -404,15 +377,8 @@ v3dX(clamp_for_format_and_type)(enum V3DX(Internal_Type) rt_type,
         } else {
                 return V3D_RENDER_TARGET_CLAMP_NONE;
         }
-        UNREACHABLE("Wrong V3D_VERSION");
-}
 #endif
-
 #if V3D_VERSION >= 71
-static enum V3DX(Render_Target_Type_Clamp)
-v3dX(clamp_for_format_and_type)(enum V3DX(Internal_Type) rt_type,
-                                enum pipe_format format)
-{
         switch (rt_type) {
         case V3D_INTERNAL_TYPE_8I:
                 return V3D_RENDER_TARGET_TYPE_CLAMP_8I_CLAMPED;
@@ -421,15 +387,7 @@ v3dX(clamp_for_format_and_type)(enum V3DX(Internal_Type) rt_type,
         case V3D_INTERNAL_TYPE_8:
                 return V3D_RENDER_TARGET_TYPE_CLAMP_8;
         case V3D_INTERNAL_TYPE_16I:
-                /* For the 16-bit snorm case we need to take care of sign
-                 * extension. Consider F2SNORM16 for -1.0f. We get
-                 * 0x00008000. This is greater than 2**15 therefore gets
-                 * clamped to 00007fff. If we didn't disable clamping here, we
-                 * would need to sign extend after F2SNORM16 in the shader.
-                 */
-                return util_format_is_snorm(format) ?
-                       V3D_RENDER_TARGET_TYPE_CLAMP_16I :
-                       V3D_RENDER_TARGET_TYPE_CLAMP_16I_CLAMPED;
+                return V3D_RENDER_TARGET_TYPE_CLAMP_16I_CLAMPED;
         case V3D_INTERNAL_TYPE_16UI:
                 return V3D_RENDER_TARGET_TYPE_CLAMP_16UI_CLAMPED;
         case V3D_INTERNAL_TYPE_16F:
@@ -443,13 +401,12 @@ v3dX(clamp_for_format_and_type)(enum V3DX(Internal_Type) rt_type,
         case V3D_INTERNAL_TYPE_32F:
                 return V3D_RENDER_TARGET_TYPE_CLAMP_32F;
         default:
-                UNREACHABLE("Unknown internal render target type");
+                unreachable("Unknown internal render target type");
         }
         return V3D_RENDER_TARGET_TYPE_CLAMP_INVALID;
-
-        UNREACHABLE("Wrong V3D_VERSION");
-}
 #endif
+        unreachable("Wrong V3D_VERSION");
+}
 
 #if V3D_VERSION >= 71
 static void
@@ -458,28 +415,17 @@ v3d_setup_render_target(struct v3d_job *job,
                         uint32_t *rt_bpp,
                         uint32_t *rt_type_clamp)
 {
-        if (!job->cbufs[cbuf].texture)
+        if (!job->cbufs[cbuf])
                 return;
-        struct v3d_device_info *devinfo = &job->v3d->screen->devinfo;
-        struct pipe_surface *psurf = &job->cbufs[cbuf];
-        uint8_t sinternal_bpp;
-        uint8_t sinternal_type;
-        v3d_format_get_internal_type_and_bpp(devinfo,
-                                             psurf->format,
-                                             &sinternal_type,
-                                             &sinternal_bpp);
-        *rt_bpp = sinternal_bpp;
-        if (job->bbuf.texture) {
-                struct pipe_surface *bsurf = &job->bbuf;
-                uint8_t binternal_bpp;
-                v3d_format_get_internal_type_and_bpp(devinfo,
-                                                     bsurf->format,
-                                                     NULL,
-                                                     &binternal_bpp);
-                *rt_bpp = MAX2(*rt_bpp, binternal_bpp);
+
+        struct v3d_surface *surf = v3d_surface(job->cbufs[cbuf]);
+        *rt_bpp = surf->internal_bpp;
+        if (job->bbuf) {
+           struct v3d_surface *bsurf = v3d_surface(job->bbuf);
+           *rt_bpp = MAX2(*rt_bpp, bsurf->internal_bpp);
         }
-        *rt_type_clamp = v3dX(clamp_for_format_and_type)(sinternal_type,
-                                                         psurf->format);
+        *rt_type_clamp = v3dX(clamp_for_format_and_type)(surf->internal_type,
+                                                         surf->base.format);
 }
 #endif
 
@@ -491,30 +437,18 @@ v3d_setup_render_target(struct v3d_job *job,
                         uint32_t *rt_type,
                         uint32_t *rt_clamp)
 {
-        if (!job->cbufs[cbuf].texture)
+        if (!job->cbufs[cbuf])
                 return;
 
-        struct v3d_device_info *devinfo = &job->v3d->screen->devinfo;
-        struct pipe_surface *psurf = &job->cbufs[cbuf];
-        uint8_t sinternal_bpp;
-        uint8_t sinternal_type;
-        v3d_format_get_internal_type_and_bpp(devinfo,
-                                             psurf->format,
-                                             &sinternal_type,
-                                             &sinternal_bpp);
-        *rt_bpp = sinternal_bpp;
-        if (job->bbuf.texture) {
-                struct pipe_surface *bsurf = &job->bbuf;
-                uint8_t binternal_bpp;
-                v3d_format_get_internal_type_and_bpp(devinfo,
-                                                     bsurf->format,
-                                                     NULL,
-                                                     &binternal_bpp);
-                *rt_bpp = MAX2(*rt_bpp, binternal_bpp);
+        struct v3d_surface *surf = v3d_surface(job->cbufs[cbuf]);
+        *rt_bpp = surf->internal_bpp;
+        if (job->bbuf) {
+           struct v3d_surface *bsurf = v3d_surface(job->bbuf);
+           *rt_bpp = MAX2(*rt_bpp, bsurf->internal_bpp);
         }
-        *rt_type = sinternal_type;
-        *rt_clamp = v3dX(clamp_for_format_and_type)(sinternal_type,
-                                                    psurf->format);
+        *rt_type = surf->internal_type;
+        *rt_clamp = v3dX(clamp_for_format_and_type)(surf->internal_type,
+                                                    surf->base.format);
 }
 #endif
 
@@ -578,6 +512,7 @@ emit_render_layer(struct v3d_job *job, uint32_t layer)
 
         cl_emit(&job->rcl, MULTICORE_RENDERING_SUPERTILE_CFG, config) {
                 uint32_t frame_w_in_supertiles, frame_h_in_supertiles;
+                const uint32_t max_supertiles = 256;
 
                 /* Size up our supertiles until we get under the limit. */
                 for (;;) {
@@ -585,16 +520,8 @@ emit_render_layer(struct v3d_job *job, uint32_t layer)
                                                              supertile_w);
                         frame_h_in_supertiles = DIV_ROUND_UP(job->tile_desc.draw_y,
                                                              supertile_h);
-                        uint32_t num_supertiles = frame_w_in_supertiles *
-                                                  frame_h_in_supertiles;
-                        /* While the hardware allows up to V3D_MAX_SUPERTILES,
-                         * it doesn't allow 1xV3D_MAX_SUPERTILES or
-                         * V3D_MAX_SUPERTILESx1 frame configurations; in these
-                         * cases we need to increase the supertile size.
-                         */
-                        if (frame_w_in_supertiles < V3D_MAX_SUPERTILES &&
-                            frame_h_in_supertiles < V3D_MAX_SUPERTILES &&
-                            num_supertiles <= V3D_MAX_SUPERTILES) {
+                        if (frame_w_in_supertiles *
+                                frame_h_in_supertiles < max_supertiles) {
                                 break;
                         }
 
@@ -658,14 +585,6 @@ emit_render_layer(struct v3d_job *job, uint32_t layer)
 
         v3d_rcl_emit_generic_per_tile_list(job, layer);
 
-        /* If rasterization has been disabled for all the draws/clears of the
-         * job we can avoid the submission of the Supertile Coordinates.
-         * This disables the execution of the fragment shader for each of the
-         * tiles.
-         */
-        if (!job->does_rasterization)
-               return;
-
         /* XXX perf: We should expose GL_MESA_tile_raster_order to
          * improve X11 performance, but we should use Morton order
          * otherwise to improve cache locality.
@@ -701,13 +620,10 @@ v3dX(emit_rcl)(struct v3d_job *job)
 {
         /* The RCL list should be empty. */
         assert(!job->rcl.bo);
-        struct v3d_device_info *devinfo = &job->v3d->screen->devinfo;
-        uint32_t cl_supertile_coordinates_size = 0;
-        if (job->does_rasterization) {
-                cl_supertile_coordinates_size = MAX2(job->num_layers, 1) *
-                        256 * cl_packet_length(SUPERTILE_COORDINATES);
-        }
-        v3d_cl_ensure_space_with_branch(&job->rcl, 200 + cl_supertile_coordinates_size);
+
+        v3d_cl_ensure_space_with_branch(&job->rcl, 200 +
+                                        MAX2(job->num_layers, 1) * 256 *
+                                        cl_packet_length(SUPERTILE_COORDINATES));
         job->submit.rcl_start = job->rcl.bo->offset;
         v3d_job_add_bo(job, job->rcl.bo);
 
@@ -716,13 +632,9 @@ v3dX(emit_rcl)(struct v3d_job *job)
          * optional updates to the previous HW state.
          */
         cl_emit(&job->rcl, TILE_RENDERING_MODE_CFG_COMMON, config) {
-                if (job->zsbuf.texture) {
-                        uint8_t internal_type;
-                        v3d_format_get_internal_type_and_bpp(devinfo,
-                                                             job->zsbuf.format,
-                                                             &internal_type,
-                                                             NULL);
-                        config.internal_depth_type = internal_type;
+                if (job->zsbuf) {
+                        struct v3d_surface *surf = v3d_surface(job->zsbuf);
+                        config.internal_depth_type = surf->internal_type;
                 }
 
                 if (job->decided_global_ez_enable) {
@@ -746,7 +658,7 @@ v3dX(emit_rcl)(struct v3d_job *job)
                         config.early_z_disable = true;
                 }
 
-                assert(job->zsbuf.texture || config.early_z_disable);
+                assert(job->zsbuf || config.early_z_disable);
 
                 job->early_zs_clear = (job->clear_tlb & PIPE_CLEAR_DEPTHSTENCIL) &&
                         !(job->load & PIPE_CLEAR_DEPTHSTENCIL) &&
@@ -793,8 +705,8 @@ v3dX(emit_rcl)(struct v3d_job *job)
         }
 #endif
         for (int i = 0; i < job->nr_cbufs; i++) {
-                struct pipe_surface *psurf = &job->cbufs[i];
-                if (!psurf->texture) {
+                struct pipe_surface *psurf = job->cbufs[i];
+                if (!psurf) {
 #if V3D_VERSION >= 71
                         cl_emit(&job->rcl, TILE_RENDERING_MODE_CFG_RENDER_TARGET_PART1, rt) {
                                 rt.render_target_number = i;
@@ -803,36 +715,26 @@ v3dX(emit_rcl)(struct v3d_job *job)
 #endif
                         continue;
                 }
-                uint8_t internal_bpp;
-                v3d_format_get_internal_type_and_bpp(devinfo,
-                                                     psurf->format,
-                                                     NULL,
-                                                     &internal_bpp);
+
+                struct v3d_surface *surf = v3d_surface(psurf);
                 struct v3d_resource *rsc = v3d_resource(psurf->texture);
 
                 UNUSED uint32_t config_pad = 0;
                 UNUSED uint32_t clear_pad = 0;
 
-                enum v3d_tiling_mode tiling = v3d_surface_get_tiling(psurf,
-                                                                     false);
-
                 /* XXX: Set the pad for raster. */
-                if (tiling == V3D_TILING_UIF_NO_XOR ||
-                    tiling == V3D_TILING_UIF_XOR) {
+                if (surf->tiling == V3D_TILING_UIF_NO_XOR ||
+                    surf->tiling == V3D_TILING_UIF_XOR) {
                         int uif_block_height = v3d_utile_height(rsc->cpp) * 2;
                         uint32_t implicit_padded_height = (align(job->draw_height, uif_block_height) /
                                                            uif_block_height);
-                        uint32_t padded_height_of_output_image_in_uif_blocks =
-                                v3d_surface_get_height_in_ub_or_stride(psurf,
-                                                                       false);
-
-                        if (padded_height_of_output_image_in_uif_blocks -
+                        if (surf->padded_height_of_output_image_in_uif_blocks -
                             implicit_padded_height < 15) {
-                                config_pad = (padded_height_of_output_image_in_uif_blocks -
+                                config_pad = (surf->padded_height_of_output_image_in_uif_blocks -
                                               implicit_padded_height);
                         } else {
                                 config_pad = 15;
-                                clear_pad = padded_height_of_output_image_in_uif_blocks;
+                                clear_pad = surf->padded_height_of_output_image_in_uif_blocks;
                         }
                 }
 
@@ -844,7 +746,7 @@ v3dX(emit_rcl)(struct v3d_job *job)
                         clear.render_target_number = i;
                 };
 
-                if (internal_bpp >= V3D_INTERNAL_BPP_64) {
+                if (surf->internal_bpp >= V3D_INTERNAL_BPP_64) {
                         cl_emit(&job->rcl, TILE_RENDERING_MODE_CFG_CLEAR_COLORS_PART2,
                                 clear) {
                                 clear.clear_color_mid_low_32_bits =
@@ -857,7 +759,7 @@ v3dX(emit_rcl)(struct v3d_job *job)
                         };
                 }
 
-                if (internal_bpp >= V3D_INTERNAL_BPP_128 || clear_pad) {
+                if (surf->internal_bpp >= V3D_INTERNAL_BPP_128 || clear_pad) {
                         cl_emit(&job->rcl, TILE_RENDERING_MODE_CFG_CLEAR_COLORS_PART3,
                                 clear) {
                                 clear.uif_padded_height_in_uif_blocks = clear_pad;
@@ -880,7 +782,7 @@ v3dX(emit_rcl)(struct v3d_job *job)
                         base_addr += (job->tile_desc.height * rt.stride) / 8;
                 }
 
-                if (internal_bpp >= V3D_INTERNAL_BPP_64) {
+                if (surf->internal_bpp >= V3D_INTERNAL_BPP_64) {
                         cl_emit(&job->rcl, TILE_RENDERING_MODE_CFG_RENDER_TARGET_PART2, rt) {
                                 rt.clear_color_mid_bits = /* 40 bits (32 + 8)  */
                                         ((uint64_t) job->clear_color[i][1]) |
@@ -889,7 +791,7 @@ v3dX(emit_rcl)(struct v3d_job *job)
                         }
                 }
 
-                if (internal_bpp >= V3D_INTERNAL_BPP_128) {
+                if (surf->internal_bpp >= V3D_INTERNAL_BPP_128) {
                         cl_emit(&job->rcl, TILE_RENDERING_MODE_CFG_RENDER_TARGET_PART3, rt) {
                                 rt.clear_color_top_bits = /* 56 bits (24 + 32) */
                                         (((uint64_t) (job->clear_color[i][2] & 0xffffff00)) >> 8) |

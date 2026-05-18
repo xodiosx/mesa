@@ -171,9 +171,11 @@ check_face_level(const struct svga_texture *tex,
 {
    if (tex->b.target == PIPE_TEXTURE_CUBE) {
       assert(face < 6);
-   } else if (tex->b.target == PIPE_TEXTURE_3D) {
+   }
+   else if (tex->b.target == PIPE_TEXTURE_3D) {
       assert(face < tex->b.depth0);
-   } else {
+   }
+   else {
       assert(face < tex->b.array_size);
    }
 
@@ -233,7 +235,8 @@ svga_set_texture_dirty(struct svga_texture *tex,
 static inline void
 svga_clear_texture_dirty(struct svga_texture *tex)
 {
-   for (unsigned i = 0; i < tex->b.depth0 * tex->b.array_size; i++) {
+   unsigned i;
+   for (i = 0; i < tex->b.depth0 * tex->b.array_size; i++) {
       tex->dirty[i] = 0;
    }
    tex->modified = false;

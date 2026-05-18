@@ -112,11 +112,6 @@ visit_instr(nir_instr *instr, uint32_t *cur_modes, unsigned vis_avail_sem)
       unsigned semantics = nir_intrinsic_memory_semantics(intrin);
       nir_intrinsic_set_memory_semantics(
          intrin, semantics & ~vis_avail_sem);
-
-      if (nir_intrinsic_memory_semantics(intrin) == 0 &&
-          nir_intrinsic_execution_scope(intrin) <= SCOPE_INVOCATION)
-         nir_instr_remove(instr);
-
       return true;
    }
 
@@ -156,7 +151,7 @@ lower_make_visible(nir_cf_node *cf_node, uint32_t *cur_modes)
    switch (cf_node->type) {
    case nir_cf_node_block: {
       nir_block *block = nir_cf_node_as_block(cf_node);
-      nir_foreach_instr_safe(instr, block)
+      nir_foreach_instr(instr, block)
          progress |= visit_instr(instr, cur_modes, NIR_MEMORY_MAKE_VISIBLE);
       break;
    }
@@ -184,7 +179,7 @@ lower_make_visible(nir_cf_node *cf_node, uint32_t *cur_modes)
       break;
    }
    case nir_cf_node_function:
-      UNREACHABLE("Invalid cf type");
+      unreachable("Invalid cf type");
    }
    return progress;
 }
@@ -196,7 +191,7 @@ lower_make_available(nir_cf_node *cf_node, uint32_t *cur_modes)
    switch (cf_node->type) {
    case nir_cf_node_block: {
       nir_block *block = nir_cf_node_as_block(cf_node);
-      nir_foreach_instr_reverse_safe(instr, block)
+      nir_foreach_instr_reverse(instr, block)
          progress |= visit_instr(instr, cur_modes, NIR_MEMORY_MAKE_AVAILABLE);
       break;
    }
@@ -224,7 +219,7 @@ lower_make_available(nir_cf_node *cf_node, uint32_t *cur_modes)
       break;
    }
    case nir_cf_node_function:
-      UNREACHABLE("Invalid cf type");
+      unreachable("Invalid cf type");
    }
    return progress;
 }
@@ -234,20 +229,21 @@ nir_lower_memory_model(nir_shader *shader)
 {
    bool progress = false;
 
-   nir_foreach_function_impl(impl, shader) {
-      bool impl_progress = false;
-      struct exec_list *cf_list = &impl->body;
+   nir_function_impl *impl = nir_shader_get_entrypoint(shader);
+   struct exec_list *cf_list = &impl->body;
 
-      uint32_t modes = 0;
-      foreach_list_typed(nir_cf_node, cf_node, node, cf_list)
-         impl_progress |= lower_make_visible(cf_node, &modes);
+   uint32_t modes = 0;
+   foreach_list_typed(nir_cf_node, cf_node, node, cf_list)
+      progress |= lower_make_visible(cf_node, &modes);
 
-      modes = 0;
-      foreach_list_typed_reverse(nir_cf_node, cf_node, node, cf_list)
-         impl_progress |= lower_make_available(cf_node, &modes);
-      progress |= nir_progress(impl_progress, impl,
-                               nir_metadata_control_flow);
-   }
+   modes = 0;
+   foreach_list_typed_reverse(nir_cf_node, cf_node, node, cf_list)
+      progress |= lower_make_available(cf_node, &modes);
+
+   if (progress)
+      nir_metadata_preserve(impl, nir_metadata_control_flow);
+   else
+      nir_metadata_preserve(impl, nir_metadata_all);
 
    return progress;
 }

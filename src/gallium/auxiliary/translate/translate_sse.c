@@ -807,7 +807,11 @@ translate_attr_convert(struct translate_sse *p,
                sse2_por(p->func, tmpXMM, dataXMM);
                sse2_psrlw_imm(p->func, dataXMM, 7);
                sse2_por(p->func, tmpXMM, dataXMM);
-               SWAP(dataXMM, tmpXMM);
+               {
+                  struct x86_reg t = dataXMM;
+                  dataXMM = tmpXMM;
+                  tmpXMM = t;
+               }
             }
             else {
                sse2_punpcklbw(p->func, dataXMM, dataXMM);

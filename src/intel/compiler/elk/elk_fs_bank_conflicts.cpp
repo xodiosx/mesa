@@ -50,7 +50,6 @@
 
 #include "elk_fs.h"
 #include "elk_cfg.h"
-#include "util/macros.h"
 
 #ifdef __SSE2__
 
@@ -256,6 +255,15 @@ namespace {
 }
 
 #endif
+
+/**
+ * Swap \p x and \p y.
+ */
+#define SWAP(x, y) do {                          \
+      __typeof(y) _swap_tmp = y;                 \
+      y = x;                                     \
+      x = _swap_tmp;                             \
+   } while (0)
 
 namespace {
    /**

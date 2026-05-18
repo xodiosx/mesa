@@ -10,7 +10,6 @@
 #ifndef ACO_SHADER_INFO_H
 #define ACO_SHADER_INFO_H
 
-#include "ac_gpu_info.h"
 #include "ac_hw_stage.h"
 #include "ac_shader_args.h"
 #include "amd_family.h"
@@ -44,7 +43,7 @@ struct aco_vs_prolog_info {
    uint32_t misaligned_mask;
    uint32_t unaligned_mask;
    bool is_ngg;
-   mesa_shader_stage next_stage;
+   gl_shader_stage next_stage;
 };
 
 struct aco_ps_epilog_info {
@@ -66,15 +65,8 @@ struct aco_ps_epilog_info {
    uint16_t color_types;
    bool clamp_color;
    bool skip_null_export;
-   bool writes_all_cbufs;
+   unsigned broadcast_last_cbuf;
    enum compare_func alpha_func;
-   /* Depth/stencil/samplemask are always passed via VGPRs, and the epilog key can choose
-    * not to export them using these flags, which can be dynamic states.
-    */
-   bool kill_depth;
-   bool kill_stencil;
-   bool kill_samplemask;
-
    struct ac_arg alpha_reference;
    struct ac_arg depth;
    struct ac_arg stencil;
@@ -93,9 +85,6 @@ struct aco_ps_prolog_info {
    bool force_linear_center_interp;
 
    unsigned samplemask_log_ps_iter;
-   bool get_frag_coord_from_pixel_coord;
-   bool pixel_center_integer;
-   bool force_samplemask_to_helper_invocation;
    unsigned num_interp_inputs;
    unsigned colors_read;
    int color_interp_vgpr_index[2];
@@ -109,18 +98,24 @@ struct aco_ps_prolog_info {
 struct aco_shader_info {
    enum ac_hw_stage hw_stage;
    uint8_t wave_size;
-   bool schedule_ngg_pos_exports; /* Whether we should schedule position exports up or not. */
+   bool has_ngg_culling;
+   bool has_ngg_early_prim_export;
    bool image_2d_view_of_3d;
    unsigned workgroup_size;
-   unsigned lds_size;
    bool merged_shader_compiled_separately; /* GFX9+ */
    struct ac_arg next_stage_pc;
    struct ac_arg epilog_pc; /* Vulkan only */
    struct {
       bool tcs_in_out_eq;
-      bool any_tcs_inputs_via_lds;
+      uint64_t tcs_temp_only_input_mask;
       bool has_prolog;
    } vs;
+   struct {
+      struct ac_arg tcs_offchip_layout;
+
+      /* Vulkan only */
+      uint32_t num_lds_blocks;
+   } tcs;
    struct {
       uint32_t num_inputs;
       unsigned spi_ps_input_ena;
@@ -134,6 +129,8 @@ struct aco_shader_info {
    struct {
       bool uses_full_subgroups;
    } cs;
+
+   uint32_t gfx9_gs_ring_lds_size;
 };
 
 enum aco_compiler_debug_level {
@@ -141,7 +138,6 @@ enum aco_compiler_debug_level {
 };
 
 struct aco_compiler_options {
-   const struct ac_cu_info* cu_info;
    bool dump_ir;
    bool dump_preoptir;
    bool record_asm;
@@ -185,6 +181,8 @@ enum aco_symbol_id {
    aco_symbol_invalid,
    aco_symbol_scratch_addr_lo,
    aco_symbol_scratch_addr_hi,
+   aco_symbol_lds_ngg_scratch_base,
+   aco_symbol_lds_ngg_gs_out_vertex_base,
    aco_symbol_const_data_addr,
 };
 
@@ -204,32 +202,14 @@ struct aco_trap_handler_layout {
    uint32_t ttmp0;
    uint32_t ttmp1;
 
-   union {
-      struct {
-         uint32_t state_priv;
-         uint32_t mode;
-         uint32_t status;
-         uint32_t gpr_alloc;
-         uint32_t lds_alloc;
-         uint32_t ib_sts;
-         uint32_t excp_flag_priv;
-         uint32_t excp_flag_user;
-         uint32_t trap_ctrl;
-         uint32_t hw_id1;
-      } gfx12;
-
-      struct {
-         uint32_t status;
-         uint32_t mode;
-         uint32_t trap_sts;
-         uint32_t hw_id1;
-         uint32_t gpr_alloc;
-         uint32_t lds_alloc;
-         uint32_t ib_sts;
-         uint32_t reserved0;
-         uint32_t reserved1;
-         uint32_t reserved2;
-      } gfx8;
+   struct {
+      uint32_t status;
+      uint32_t mode;
+      uint32_t trap_sts;
+      uint32_t hw_id1;
+      uint32_t gpr_alloc;
+      uint32_t lds_alloc;
+      uint32_t ib_sts;
    } sq_wave_regs;
 
    uint32_t m0;

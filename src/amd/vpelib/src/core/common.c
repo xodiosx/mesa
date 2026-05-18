@@ -1,4 +1,4 @@
-/* Copyright 2022-2025 Advanced Micro Devices, Inc.
+/* Copyright 2022 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -36,12 +36,6 @@ bool vpe_find_color_space_from_table(
             return true;
     }
     return false;
-}
-
-bool vpe_is_subsampled_format(enum vpe_surface_pixel_format format)
-{
-    return (format >= VPE_SURFACE_PIXEL_FORMAT_VIDEO_BEGIN &&
-            format <= VPE_SURFACE_PIXEL_FORMAT_SUBSAMPLE_END);
 }
 
 bool vpe_is_dual_plane_format(enum vpe_surface_pixel_format format)
@@ -202,18 +196,6 @@ bool vpe_is_yuv444(enum vpe_surface_pixel_format format)
             vpe_is_yuv444_10(format));
 }
 
-bool vpe_is_yuv8(enum vpe_surface_pixel_format format)
-{
-    return (vpe_is_yuv420_8(format) ||
-            vpe_is_yuv444_8(format));
-}
-
-bool vpe_is_yuv10(enum vpe_surface_pixel_format format)
-{
-    return (vpe_is_yuv420_10(format) ||
-            vpe_is_yuv444_10(format));
-}
-
 bool vpe_is_yuv(enum vpe_surface_pixel_format format)
 {
     return (vpe_is_yuv420(format) ||
@@ -319,6 +301,7 @@ bool vpe_has_per_pixel_alpha(enum vpe_surface_pixel_format format)
     case VPE_SURFACE_PIXEL_FORMAT_GRPH_ABGR16161616F:
     case VPE_SURFACE_PIXEL_FORMAT_GRPH_RGBA16161616F:
     case VPE_SURFACE_PIXEL_FORMAT_GRPH_BGRA16161616F:
+    case VPE_SURFACE_PIXEL_FORMAT_GRPH_RGBE_ALPHA:
     case VPE_SURFACE_PIXEL_FORMAT_VIDEO_ACrYCb2101010:
     case VPE_SURFACE_PIXEL_FORMAT_VIDEO_CrYCbA1010102:
     case VPE_SURFACE_PIXEL_FORMAT_VIDEO_AYCrCb8888:
@@ -389,7 +372,7 @@ enum vpe_status vpe_check_output_support(struct vpe *vpe, const struct vpe_build
         return VPE_STATUS_PITCH_ALIGNMENT_NOT_SUPPORTED;
     }
 
-    // target rect should not exceed width/height
+    // target rect shouldn't exceed width/height
     if ((param->target_rect.x < surface_info->plane_size.surface_size.x ||
             param->target_rect.x + (int32_t)param->target_rect.width >
                 surface_info->plane_size.surface_size.x +
@@ -430,7 +413,7 @@ enum vpe_status vpe_check_output_support(struct vpe *vpe, const struct vpe_build
         params.format              = surface_info->format;
         params.swizzle_mode        = surface_info->swizzle;
         params.scan                = VPE_SCAN_PATTERN_0_DEGREE;
-        support = vpe_priv->pub.check_funcs.get_dcc_compression_output_cap(&params, &cap);
+        support = vpe->cap_funcs->get_dcc_compression_output_cap(vpe, &params, &cap);
         if (!support) {
             vpe_log("output dcc not supported\n");
             return VPE_STATUS_OUTPUT_DCC_NOT_SUPPORTED;
@@ -438,15 +421,15 @@ enum vpe_status vpe_check_output_support(struct vpe *vpe, const struct vpe_build
     }
 
     // pixel format
-    support = vpe_priv->pub.check_funcs.check_output_format(surface_info->format);
+    support = cdc_be->funcs->check_output_format(cdc_be, surface_info->format);
     if (!support) {
         vpe_log("output pixel format not supported %d\n", (int)surface_info->format);
         return VPE_STATUS_PIXEL_FORMAT_NOT_SUPPORTED;
     }
 
     // color space value
-    support =
-        vpe_priv->pub.check_funcs.check_output_color_space(surface_info->format, &surface_info->cs);
+    support = vpe_priv->resource.check_output_color_space(
+        vpe_priv, surface_info->format, &surface_info->cs);
     if (!support) {
         vpe_log("output color space not supported fmt: %d, "
                 "encoding: %d, cositing: %d, gamma: %d, range: %d, primaries: %d\n",
@@ -533,7 +516,7 @@ enum vpe_status vpe_check_input_support(struct vpe *vpe, const struct vpe_stream
         params.format              = surface_info->format;
         params.swizzle_mode        = surface_info->swizzle;
 
-        support = vpe_priv->pub.check_funcs.get_dcc_compression_input_cap(&params, &cap);
+        support = vpe->cap_funcs->get_dcc_compression_input_cap(vpe, &params, &cap);
         //only support non dual plane formats
         if (!support) {
             vpe_log("input internal dcc not supported\n");
@@ -542,15 +525,15 @@ enum vpe_status vpe_check_input_support(struct vpe *vpe, const struct vpe_stream
     }
 
     // pixel format
-    support = vpe_priv->pub.check_funcs.check_input_format(surface_info->format);
+    support = cdc_fe->funcs->check_input_format(cdc_fe, surface_info->format);
     if (!support) {
         vpe_log("input pixel format not supported %d\n", (int)surface_info->format);
         return VPE_STATUS_PIXEL_FORMAT_NOT_SUPPORTED;
     }
 
     // color space value
-    support =
-        vpe_priv->pub.check_funcs.check_input_color_space(surface_info->format, &surface_info->cs);
+    support = vpe_priv->resource.check_input_color_space(
+        vpe_priv, surface_info->format, &surface_info->cs);
     if (!support) {
         vpe_log("input color space not supported fmt: %d, "
                 "encoding: %d, cositing: %d, gamma: %d, range: %d, primaries: %d\n",
@@ -626,10 +609,6 @@ enum vpe_status vpe_check_tone_map_support(
         }
     }
 
-    if (is_3D_lut_enabled && stream->tm_params.lut_dim != LUT_DIM_9 &&
-        stream->tm_params.lut_dim != LUT_DIM_17) { /* only support 9/17 cube */
-        status = VPE_STATUS_BAD_TONE_MAP_PARAMS;
-    }
     return status;
 }
 

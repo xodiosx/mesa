@@ -62,7 +62,7 @@ enum color_range_type {
     COLOR_RANGE_FULL,
     COLOR_RANGE_LIMITED_8BPC,
     COLOR_RANGE_LIMITED_10BPC,
-    COLOR_RANGE_LIMITED_16BPC,
+    COLOR_RANGE_LIMITED_16BPC
 };
 
 enum color_transfer_func {
@@ -73,7 +73,7 @@ enum color_transfer_func {
     TRANSFER_FUNC_PQ2084,
     TRANSFER_FUNC_LINEAR,
     TRANSFER_FUNC_NORMALIZED_PQ,
-    TRANSFER_FUNC_HLG,
+    TRANSFER_FUNC_HLG
 };
 
 enum dither_option {
@@ -129,7 +129,7 @@ enum transfer_func_type {
     TF_TYPE_PREDEFINED,
     TF_TYPE_DISTRIBUTED_POINTS,
     TF_TYPE_BYPASS,
-    TF_TYPE_HWPWL,
+    TF_TYPE_HWPWL
 };
 
 enum cm_type {
@@ -276,13 +276,10 @@ enum vpe_status vpe_color_update_whitepoint(
     const struct vpe_priv *vpe_priv, const struct vpe_build_param *param);
 
 enum vpe_status vpe_color_tm_update_hdr_mult(uint16_t shaper_in_exp_max, uint32_t peak_white,
-    struct fixed31_32 *hdr_multiplier, bool enable_3dlut, bool is_fp16);
-
-enum vpe_status vpe_color_build_shaper_cs(const struct vpe_tonemap_params *tm_params,
-    struct vpe_surface_info *surface_info, struct vpe_color_space *tm_out_cs);
+    struct fixed31_32 *hdr_multiplier, bool enable_3dlut);
 
 enum vpe_status vpe_color_update_shaper(const struct vpe_priv *vpe_priv, uint16_t shaper_in_exp_max,
-    struct stream_ctx *stream_ctx, enum color_transfer_func tf_in_3dlut, bool enable_3dlut);
+    struct transfer_func *shaper_func, bool enable_3dlut);
 
 enum vpe_status vpe_color_build_tm_cs(const struct vpe_tonemap_params *tm_params,
     const struct vpe_surface_info *surface_info, struct vpe_color_space *vcs);

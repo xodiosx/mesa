@@ -1,10 +1,25 @@
+# Wide points fully clipped when they should show up partially.
+dEQP-GLES2.functional.clipping.point.wide_point_clip,Fail
+dEQP-GLES2.functional.clipping.point.wide_point_clip_viewport_center,Fail
+dEQP-GLES2.functional.clipping.point.wide_point_clip_viewport_corner,Fail
+dEQP-GLES2.functional.clipping.line.wide_line_clip_viewport_center,Fail
+dEQP-GLES2.functional.clipping.line.wide_line_clip_viewport_corner,Fail
+
+
 # "Framebuffer checked as complete, expected incomplete"
 dEQP-GLES2.functional.fbo.completeness.renderable.texture.color0.rgb_half_float_oes,Fail
+
+dEQP-GLES2.functional.fbo.render.repeated_clear.tex2d_rgb,Fail
+dEQP-GLES2.functional.fbo.render.repeated_clear.tex2d_rgba,Fail
 
 dEQP-GLES2.functional.polygon_offset.default_factor_1_slope,Fail
 dEQP-GLES2.functional.polygon_offset.fixed16_displacement_with_units,Fail
 dEQP-GLES2.functional.polygon_offset.fixed16_render_with_units,Fail
 dEQP-GLES2.functional.polygon_offset.fixed16_factor_1_slope,Fail
+
+# "Invalid line width at (119, 179) - (119, 180). Detected width of 2, expected 1"
+dEQP-GLES2.functional.rasterization.primitives.line_strip_wide,Fail,Fail
+dEQP-GLES2.functional.rasterization.primitives.line_loop_wide,Fail
 
 dEQP-GLES2.functional.texture.format.a8_cube_npot,Fail
 dEQP-GLES2.functional.texture.format.l8_cube_npot,Fail
@@ -357,13 +372,11 @@ spec@!opengl 1.0@depth-clear-precision-check@depth16,Fail
 spec@!opengl 1.0@depth-clear-precision-check@depth24,Fail
 spec@!opengl 1.0@depth-clear-precision-check@depth24_stencil8,Fail
 spec@!opengl 1.0@depth-clear-precision-check@depth32,Fail
+spec@!opengl 1.0@gl-1.0-blend-func,Fail
 spec@!opengl 1.0@gl-1.0-edgeflag,Fail
 spec@!opengl 1.0@gl-1.0-edgeflag-quads,Fail
 spec@!opengl 1.0@gl-1.0-no-op-paths,Fail
 spec@!opengl 1.0@gl-1.0-scissor-offscreen,Fail
-
-# This one started to fail in CI at the turn of 2024 and 2025 but works locally
-spec@!opengl 1.0@gl-1.0-drawbuffer-modes,Fail
 
 spec@!opengl 1.1@depthstencil-default_fb-blit samples=2,Fail
 spec@!opengl 1.1@depthstencil-default_fb-blit samples=4,Fail
@@ -412,6 +425,8 @@ spec@!opengl 1.4@tex-miplevel-selection-lod,Fail
 spec@!opengl 1.4@triangle-rasterization,Fail
 spec@!opengl 1.4@triangle-rasterization-fbo,Fail
 
+spec@!opengl 1.5@depth-tex-compare,Fail
+
 spec@!opengl 2.0@depth-tex-modes-glsl,Fail
 spec@!opengl 2.0@gl-2.0-edgeflag,Fail
 spec@!opengl 2.0@gl-2.0-edgeflag-immediate,Fail
@@ -419,6 +434,7 @@ spec@!opengl 2.0@occlusion-query-discard,Fail
 spec@!opengl 2.0@tex3d-npot,Fail
 
 spec@!opengl 2.1@pbo,Fail
+spec@!opengl 2.1@pbo@test_draw_pixels,Fail
 spec@!opengl 2.1@pbo@test_polygon_stip,Fail
 spec@!opengl 2.1@polygon-stipple-fs,Fail
 
@@ -435,6 +451,9 @@ spec@arb_color_buffer_float@mixed-mrt,Fail
 spec@arb_draw_buffers@fbo-mrt-alphatest,Fail
 
 spec@arb_fragment_coord_conventions@fp-arb-fragment-coord-conventions-integer,Fail
+
+spec@arb_fragment_program@fp-formats,Fail
+spec@arb_fragment_program@fp-indirections2,Fail
 
 spec@arb_framebuffer_object@fbo-attachments-blit-scaled-linear,Fail
 spec@arb_framebuffer_object@fbo-blit-stretch,Fail
@@ -465,14 +484,20 @@ spec@arb_shader_texture_lod@execution@tex-miplevel-selection *gradarb 2dshadow,F
 spec@arb_shader_texture_lod@execution@tex-miplevel-selection *gradarb 3d,Fail
 spec@arb_shader_texture_lod@execution@tex-miplevel-selection *gradarb cube,Fail
 spec@arb_shader_texture_lod@execution@tex-miplevel-selection *lod 1d,Fail
+spec@arb_shader_texture_lod@execution@tex-miplevel-selection *lod 1dshadow,Fail
+spec@arb_shader_texture_lod@execution@tex-miplevel-selection *lod 2d,Fail
 spec@arb_shader_texture_lod@execution@tex-miplevel-selection *lod 2dshadow,Fail
 spec@arb_shader_texture_lod@execution@tex-miplevel-selection *projgradarb 1d,Fail
 spec@arb_shader_texture_lod@execution@tex-miplevel-selection *projgradarb 1d_projvec4,Fail
 spec@arb_shader_texture_lod@execution@tex-miplevel-selection *projgradarb 1dshadow,Fail
+spec@arb_shader_texture_lod@execution@tex-miplevel-selection *projgradarb 2d,Fail
+spec@arb_shader_texture_lod@execution@tex-miplevel-selection *projgradarb 2drect_projvec4,Fail
 spec@arb_shader_texture_lod@execution@tex-miplevel-selection *projgradarb 2drectshadow,Fail
+spec@arb_shader_texture_lod@execution@tex-miplevel-selection *projgradarb 2dshadow,Fail
 spec@arb_shader_texture_lod@execution@tex-miplevel-selection *projgradarb 3d,Fail
 spec@arb_shader_texture_lod@execution@tex-miplevel-selection *projlod 1d,Fail
 spec@arb_shader_texture_lod@execution@tex-miplevel-selection *projlod 1d_projvec4,Fail
+spec@arb_shader_texture_lod@execution@tex-miplevel-selection *projlod 1dshadow,Fail
 spec@arb_shader_texture_lod@execution@tex-miplevel-selection *projlod 2d,Fail
 
 spec@arb_texture_compression_bptc@texwrap formats bordercolor,Fail
@@ -529,6 +554,8 @@ spec@arb_texture_rectangle@1-1-linear-texture,Fail
 spec@arb_texture_rectangle@copyteximage rect samples=2,Fail
 spec@arb_texture_rectangle@copyteximage rect samples=4,Fail
 spec@arb_texture_rectangle@copyteximage rect samples=6,Fail
+spec@arb_texture_rectangle@tex-miplevel-selection gl2:texture() 2drectshadow,Fail
+spec@arb_texture_rectangle@tex-miplevel-selection gl2:textureproj 2drect,Fail
 spec@arb_texture_rectangle@tex-miplevel-selection gl2:textureproj 2drect_projvec4,Fail
 spec@arb_texture_rectangle@tex-miplevel-selection gl2:textureproj 2drectshadow,Fail
 
@@ -564,8 +591,14 @@ spec@ext_direct_state_access@multi-texture,Fail
 spec@ext_direct_state_access@multi-texture@CopyMultiTexImage1DEXT + display list GL_COMPILE,Fail
 spec@ext_direct_state_access@multi-texture@CopyMultiTexSubImage1DEXT + display list GL_COMPILE,Fail
 spec@ext_direct_state_access@textures,Fail
+spec@ext_direct_state_access@textures@CopyTextureImage1DEXT + display list GL_COMPILE,Fail
+spec@ext_direct_state_access@textures@CopyTextureSubImage1DEXT + display list GL_COMPILE,Fail
 
 spec@ext_framebuffer_blit@fbo-blit-check-limits,Fail
+
+spec@ext_framebuffer_multisample@alpha-to-coverage-no-draw-buffer-zero 2,Fail
+spec@ext_framebuffer_multisample@alpha-to-coverage-no-draw-buffer-zero 4,Fail
+spec@ext_framebuffer_multisample@alpha-to-coverage-no-draw-buffer-zero 6,Fail
 
 spec@ext_framebuffer_object@fbo-alphatest-formats,Fail
 spec@ext_framebuffer_object@fbo-alphatest-formats@GL_INTENSITY12,Fail
@@ -591,6 +624,7 @@ spec@ext_texture_compression_rgtc@rgtc-teximage-01,Fail
 spec@ext_texture_compression_rgtc@rgtc-teximage-02,Fail
 
 spec@ext_texture_compression_s3tc@s3tc-errors,Fail
+spec@ext_texture_compression_s3tc@s3tc-errors_gles2,Fail
 
 spec@ext_texture_format_bgra8888@api-errors,Fail
 
@@ -686,6 +720,8 @@ spec@glsl-1.10@execution@built-in-functions@vs-pow-vec4-vec4,Fail
 spec@glsl-1.10@execution@clipping@clip-plane-transformation clipvert_pos,Fail
 spec@glsl-1.10@execution@clipping@clip-plane-transformation pos_clipvert,Fail
 
+spec@glsl-1.10@execution@glsl-1.10-built-in-uniform-state,Fail
+
 spec@glsl-1.10@execution@interpolation@interpolation-none-gl_backcolor-flat-vertex,Fail
 spec@glsl-1.10@execution@interpolation@interpolation-none-gl_backcolor-smooth-vertex,Fail
 spec@glsl-1.10@execution@interpolation@interpolation-none-gl_backsecondarycolor-flat-vertex,Fail
@@ -700,6 +736,7 @@ spec@glsl-1.10@execution@interpolation@interpolation-none-other-smooth-vertex,Fa
 # HW limitation (SM3 256 loop iters)
 spec@glsl-1.10@execution@loops@glsl-fs-loop-300,Fail
 spec@glsl-1.10@execution@loops@glsl-vs-loop-300,Fail
+
 spec@glsl-1.10@execution@variable-indexing@vs-output-array-vec2-index-wr-no-unroll,Fail
 
 # HW limitation (no support for gl_ClipVertex)
@@ -721,16 +758,23 @@ spec@glsl-1.20@execution@vs-loop-uint-induction-var-2,Fail
 spec@glsl-1.20@execution@vs-loop-uint-induction-var-3,Fail
 spec@glsl-1.20@execution@vs-loop-uint-induction-var-4,Fail
 
+spec@glsl-1.20@execution@tex-miplevel-selection gl2:texture() 1d,Fail
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:texture() 2d,Fail
+spec@glsl-1.20@execution@tex-miplevel-selection gl2:texture() 2dshadow,Fail
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:texture() cube,Fail
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:texture(bias) 1d,Fail
+spec@glsl-1.20@execution@tex-miplevel-selection gl2:texture(bias) 1dshadow,Fail
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:texture(bias) 2d,Fail
+spec@glsl-1.20@execution@tex-miplevel-selection gl2:texture(bias) 2dshadow,Fail
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:texture(bias) cube,Fail
+spec@glsl-1.20@execution@tex-miplevel-selection gl2:textureproj 1d,Fail
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:textureproj 1dshadow,Fail
+spec@glsl-1.20@execution@tex-miplevel-selection gl2:textureproj 1d_projvec4,Fail
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:textureproj 2d,Fail
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:textureproj 2d_projvec4,Fail
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:textureproj(bias) 1d,Fail
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:textureproj(bias) 1d_projvec4,Fail
+spec@glsl-1.20@execution@tex-miplevel-selection gl2:textureproj(bias) 1dshadow,Fail
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:textureproj(bias) 2d,Fail
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:textureproj(bias) 2d_projvec4,Fail
 
@@ -755,32 +799,32 @@ spec@oes_texture_float@oes_texture_float,Fail
 spec@oes_texture_float@oes_texture_float half,Fail
 
 
+# Xnine tests
+
+Xnine.clip_planes,Fail
+Xnine.depth_clamp,Fail
+Xnine.depthbias,Fail
+Xnine.dsy,Fail
+Xnine.fp_special,Fail
+Xnine.fragment_coords,Fail
+Xnine.mvp_software_vertex_shaders,Fail
+Xnine.negative_fixedfunction_fog,Fail
+Xnine.pixelshader_blending,Fail
+Xnine.pretransformed_varying,Fail
+Xnine.srgbwrite_format,Fail
+Xnine.stream,Fail
+Xnine.texture_transform_flags,Fail
+Xnine.zenable,Fail
+
 # https://gitlab.freedesktop.org/mesa/mesa/-/issues/10557
+Xnine.drawindexedprimitiveup,Crash
+Xnine.fog,Crash
+Xnine.lighting,Crash
+Xnine.specular_lighting,Crash
+Xnine.stencil_cull,Crash
 dEQP-GLES2.functional.texture.mipmap.2d.projected.nearest_nearest_mirror,Fail
 dEQP-GLES2.functional.texture.mipmap.2d.projected.nearest_nearest_repeat,Fail
 dEQP-GLES2.functional.texture.mipmap.2d.projected.nearest_nearest_clamp,Fail
 dEQP-GLES2.functional.texture.mipmap.2d.projected.linear_nearest_repeat,Fail
 dEQP-GLES2.functional.texture.mipmap.2d.projected.linear_nearest_mirror,Fail
 dEQP-GLES2.functional.texture.mipmap.2d.projected.linear_nearest_clamp,Fail
-
-# uprev Piglit in Mesa
-spec@!opengl 1.1@teximage-scale-bias,Fail
-spec@ext_framebuffer_multisample@accuracy all_samples color depthstencil linear,Fail
-spec@ext_framebuffer_multisample@accuracy all_samples color depthstencil,Fail
-spec@ext_framebuffer_multisample@accuracy all_samples color small depthstencil linear,Fail
-spec@ext_framebuffer_multisample@accuracy all_samples color small depthstencil,Fail
-spec@ext_framebuffer_multisample@accuracy all_samples depth_draw depthstencil,Fail
-spec@ext_framebuffer_multisample@accuracy all_samples depth_draw small depthstencil,Fail
-spec@ext_framebuffer_multisample@accuracy all_samples depth_resolve depthstencil,Fail
-spec@ext_framebuffer_multisample@accuracy all_samples depth_resolve small depthstencil,Fail
-spec@ext_framebuffer_multisample@accuracy all_samples stencil_draw depthstencil,Fail
-spec@ext_framebuffer_multisample@accuracy all_samples stencil_draw small depthstencil,Fail
-spec@ext_framebuffer_multisample@accuracy all_samples stencil_resolve depthstencil,Fail
-spec@ext_framebuffer_multisample@accuracy all_samples stencil_resolve small depthstencil,Fail
-spec@ext_framebuffer_multisample@alpha-to-coverage-no-draw-buffer-zero 2,Fail
-spec@ext_framebuffer_multisample@alpha-to-coverage-no-draw-buffer-zero 4,Fail
-spec@ext_framebuffer_multisample@alpha-to-coverage-no-draw-buffer-zero 6,Fail
-
-spec@glsl-1.10@execution@glsl-fs-texture2d-mipmap-const-bias-01,Fail
-spec@glsl-1.10@execution@glsl-fs-texture2d-mipmap-const-bias-04,Fail
-spec@glsl-1.10@execution@glsl-fs-texture2d-mipmap-const-bias-05,Fail

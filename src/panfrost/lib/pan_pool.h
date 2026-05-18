@@ -30,12 +30,12 @@
 
 #include "util/u_dynarray.h"
 
-struct pan_ptr {
+struct panfrost_ptr {
    /* CPU address */
    void *cpu;
 
    /* GPU address */
-   uint64_t gpu;
+   mali_ptr gpu;
 };
 
 /* Represents grow-only memory. */
@@ -54,30 +54,27 @@ pan_pool_init(struct pan_pool *pool, size_t slab_size)
 /* Represents a fat pointer for GPU-mapped memory, returned from the transient
  * allocator and not used for much else */
 
-struct pan_ptr pan_pool_alloc_aligned(struct pan_pool *pool, size_t sz,
-                                      unsigned alignment);
+struct panfrost_ptr pan_pool_alloc_aligned(struct pan_pool *pool, size_t sz,
+                                           unsigned alignment);
 
 #define PAN_POOL_ALLOCATOR(pool_subclass, alloc_func)                          \
-   struct pan_ptr pan_pool_alloc_aligned(struct pan_pool *p, size_t sz,        \
-                                         unsigned alignment)                   \
+   struct panfrost_ptr pan_pool_alloc_aligned(struct pan_pool *p, size_t sz,   \
+                                              unsigned alignment)              \
    {                                                                           \
       pool_subclass *pool = container_of(p, pool_subclass, base);              \
       return alloc_func(pool, sz, alignment);                                  \
    }
 
-static inline uint64_t
+static inline mali_ptr
 pan_pool_upload_aligned(struct pan_pool *pool, const void *data, size_t sz,
                         unsigned alignment)
 {
-   struct pan_ptr transfer = pan_pool_alloc_aligned(pool, sz, alignment);
-
-   if (transfer.cpu)
-      memcpy(transfer.cpu, data, sz);
-
+   struct panfrost_ptr transfer = pan_pool_alloc_aligned(pool, sz, alignment);
+   memcpy(transfer.cpu, data, sz);
    return transfer.gpu;
 }
 
-static inline uint64_t
+static inline mali_ptr
 pan_pool_upload(struct pan_pool *pool, const void *data, size_t sz)
 {
    return pan_pool_upload_aligned(pool, data, sz, sz);
@@ -102,7 +99,7 @@ struct pan_desc_alloc_info {
       __VA_ARGS__, {0},                                                        \
    }
 
-static inline struct pan_ptr
+static inline struct panfrost_ptr
 pan_pool_alloc_descs(struct pan_pool *pool,
                      const struct pan_desc_alloc_info *descs)
 {

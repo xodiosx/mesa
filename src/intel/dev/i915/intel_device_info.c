@@ -336,7 +336,9 @@ intel_device_info_i915_query_regions(struct intel_device_info *devinfo, int fd, 
       /* If the memory region uAPI query is not available, try to generate some
        * numbers out of os_* utils for sram only.
        */
-      return intel_device_info_compute_system_memory(devinfo, false);
+      bool ret = intel_device_info_compute_system_memory(devinfo, false);
+      devinfo->mem.sram.mappable.size /= 2;
+      return ret;
    }
 
    for (int i = 0; i < meminfo->num_regions; i++) {
@@ -346,11 +348,14 @@ intel_device_info_i915_query_regions(struct intel_device_info *devinfo, int fd, 
          if (!update) {
             devinfo->mem.sram.mem.klass = mem->region.memory_class;
             devinfo->mem.sram.mem.instance = mem->region.memory_instance;
-            devinfo->mem.sram.mappable.size = mem->probed_size;
+            /* i915 reports the whole RAM as SRAM size but Xe KMD only reports
+             * half, so adjusting i915 to follow Xe KMD.
+             */
+            devinfo->mem.sram.mappable.size = mem->probed_size / 2;
          } else {
             assert(devinfo->mem.sram.mem.klass == mem->region.memory_class);
             assert(devinfo->mem.sram.mem.instance == mem->region.memory_instance);
-            assert(devinfo->mem.sram.mappable.size == mem->probed_size);
+            assert(devinfo->mem.sram.mappable.size == mem->probed_size / 2);
          }
          /* if running without elevated privileges i915 reports
           * unallocated_size == probed_size
@@ -429,7 +434,7 @@ has_bit6_swizzle(int fd)
    };
 
    if (intel_ioctl(fd, DRM_IOCTL_I915_GEM_CREATE, &gem_create)) {
-      UNREACHABLE("Failed to create GEM BO");
+      unreachable("Failed to create GEM BO");
       return false;
    }
 
@@ -445,7 +450,7 @@ has_bit6_swizzle(int fd)
    };
 
    if (intel_ioctl(fd, DRM_IOCTL_I915_GEM_SET_TILING, &set_tiling)) {
-      UNREACHABLE("Failed to set BO tiling");
+      unreachable("Failed to set BO tiling");
       goto close_and_return;
    }
 
@@ -454,7 +459,7 @@ has_bit6_swizzle(int fd)
    };
 
    if (intel_ioctl(fd, DRM_IOCTL_I915_GEM_GET_TILING, &get_tiling)) {
-      UNREACHABLE("Failed to get BO tiling");
+      unreachable("Failed to get BO tiling");
       goto close_and_return;
    }
 
@@ -479,7 +484,7 @@ has_get_tiling(int fd)
    };
 
    if (intel_ioctl(fd, DRM_IOCTL_I915_GEM_CREATE, &gem_create)) {
-      UNREACHABLE("Failed to create GEM BO");
+      unreachable("Failed to create GEM BO");
       return false;
    }
 
@@ -574,7 +579,8 @@ bool intel_device_info_i915_get_info_from_fd(int fd, struct intel_device_info *d
 
    hwconfig_blob = intel_device_info_i915_query_hwconfig(fd, &len);
    if (hwconfig_blob) {
-      intel_hwconfig_process_table(devinfo, hwconfig_blob, len);
+      if (intel_hwconfig_process_table(devinfo, hwconfig_blob, len))
+         intel_device_info_update_after_hwconfig(devinfo);
 
       free(hwconfig_blob);
    }
@@ -605,16 +611,12 @@ bool intel_device_info_i915_get_info_from_fd(int fd, struct intel_device_info *d
    if (devinfo->ver > 12 || intel_device_info_is_mtl_or_arl(devinfo))
       devinfo->has_set_pat_uapi = true;
 
-   if (getparam(fd, I915_PARAM_MMAP_GTT_VERSION, &val)) {
+   if (getparam(fd, I915_PARAM_MMAP_GTT_VERSION, &val))
       devinfo->has_mmap_offset = val >= 4;
-      devinfo->has_partial_mmap_offset = val >= 5;
-   }
    if (getparam(fd, I915_PARAM_HAS_USERPTR_PROBE, &val))
       devinfo->has_userptr_probe = val;
    if (getparam(fd, I915_PARAM_HAS_CONTEXT_ISOLATION, &val))
       devinfo->has_context_isolation = val;
-   if (getparam(fd, getparam(fd, I915_PARAM_HAS_CONTEXT_ISOLATION, &val), &val))
-      devinfo->supports_low_latency_hint = val == 1;
 
    /* TODO: We might be able to reduce alignment to 4Kb on DG1. */
    if (devinfo->verx10 >= 125)

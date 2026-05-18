@@ -1,6 +1,3 @@
-// Copyright 2022 Red Hat.
-// SPDX-License-Identifier: MIT
-
 use libc_rust_gen::free;
 use mesa_rust_gen::*;
 
@@ -38,7 +35,7 @@ impl DiskCacheBorrowed {
         }
     }
 
-    pub fn get(&self, key: &mut cache_key) -> Option<DiskCacheEntry<'_>> {
+    pub fn get(&self, key: &mut cache_key) -> Option<DiskCacheEntry> {
         let mut size = 0;
 
         unsafe {
@@ -120,7 +117,7 @@ pub struct DiskCacheEntry<'a> {
     data: &'a mut [u8],
 }
 
-impl Deref for DiskCacheEntry<'_> {
+impl<'a> Deref for DiskCacheEntry<'a> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -128,7 +125,7 @@ impl Deref for DiskCacheEntry<'_> {
     }
 }
 
-impl Drop for DiskCacheEntry<'_> {
+impl<'a> Drop for DiskCacheEntry<'a> {
     fn drop(&mut self) {
         unsafe {
             free(self.data.as_mut_ptr().cast());

@@ -85,7 +85,7 @@ lower_int_cubmap_to_array_filter(const nir_instr *instr,
 
       int sampler_deref = nir_tex_instr_src_index(tex, nir_tex_src_sampler_deref);
       assert(sampler_deref >= 0);
-      nir_deref_instr *deref = nir_def_as_deref(tex->src[sampler_deref].src.ssa);
+      nir_deref_instr *deref = nir_instr_as_deref(tex->src[sampler_deref].src.ssa->parent_instr);
       nir_variable *cube = nir_deref_instr_get_variable(deref);
       return glsl_base_type_is_integer(glsl_get_sampler_result_type(cube->type));
    }
@@ -178,7 +178,6 @@ create_array_tex_from_cube_tex(nir_builder *b, nir_tex_instr *tex, nir_def *coor
    array_tex->sampler_index = tex->sampler_index;
    array_tex->dest_type = tex->dest_type;
    array_tex->coord_components = 3;
-   array_tex->can_speculate = tex->can_speculate;
 
    nir_src coord_src = nir_src_for_ssa(coord);
    for (unsigned i = 0; i < tex->num_srcs; i++) {
@@ -319,7 +318,7 @@ handle_cube_gather(nir_builder *b, nir_tex_instr *tex, nir_def *coord)
    nir_def *tex_size = nir_get_texture_size(b, tex);
 
    /* nir_get_texture_size puts the cursor before the tex op */
-   b->cursor = nir_after_def(coord);
+   b->cursor = nir_after_instr(coord->parent_instr);
 
    nir_def *const_05 = nir_imm_float(b, 0.5f);
    nir_def *texel_coords = nir_fmul(b, nir_trim_vector(b, coord, 2),
@@ -497,7 +496,7 @@ lower_int_cubemap_to_array_tex(nir_builder *b, nir_tex_instr *tex)
    case nir_texop_txs:
       return lower_cube_txs(b, tex);
    default:
-      UNREACHABLE("Unsupported cupe map texture operation");
+      unreachable("Unsupported cupe map texture operation");
    }
 }
 

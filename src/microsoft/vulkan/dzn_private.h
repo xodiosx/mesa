@@ -66,7 +66,14 @@
 #include "spirv_to_dxil.h"
 #include "dzn_abi_helper.h"
 
-#define dzn_stub() UNREACHABLE("Unsupported feature")
+#define DZN_SWAP(t, a, b) \
+   do { \
+      t __tmp = a; \
+      a = b; \
+      b = __tmp; \
+   } while (0)
+
+#define dzn_stub() unreachable("Unsupported feature")
 
 #if defined(VK_USE_PLATFORM_WIN32_KHR) || \
     defined(VK_USE_PLATFORM_WAYLAND_KHR) || \
@@ -102,7 +109,7 @@ dzn_index_type_from_size(uint8_t index_size)
    case 0: return DZN_NO_INDEX;
    case 2: return DZN_INDEX_2B;
    case 4: return DZN_INDEX_4B;
-   default: UNREACHABLE("Invalid index size");
+   default: unreachable("Invalid index size");
    }
 }
 
@@ -115,7 +122,7 @@ dzn_index_type_from_dxgi_format(DXGI_FORMAT format, bool prim_restart)
       return prim_restart ? DZN_INDEX_2B_WITH_PRIM_RESTART : DZN_INDEX_2B;
    case DXGI_FORMAT_R32_UINT:
       return prim_restart ? DZN_INDEX_4B_WITH_PRIM_RESTART : DZN_INDEX_4B;
-   default: UNREACHABLE("Invalid index format");
+   default: unreachable("Invalid index format");
    }
 }
 
@@ -131,7 +138,7 @@ dzn_index_size(enum dzn_index_type type)
    case DZN_INDEX_4B_WITH_PRIM_RESTART:
    case DZN_INDEX_4B:
       return 4;
-   default: UNREACHABLE("Invalid index type");
+   default: unreachable("Invalid index type");
    }
 }
 
@@ -1059,6 +1066,7 @@ struct dzn_image {
    } linear;
    D3D12_RESOURCE_DESC desc;
    ID3D12Resource *res;
+   struct dzn_device_memory *mem;
    uint32_t castable_format_count;
    const DXGI_FORMAT *castable_formats;
 

@@ -14,7 +14,6 @@
 #include <stdlib.h>
 #include "ac_gpu_info.h"
 #include "radv_buffer.h"
-#include "radv_descriptor_pool.h"
 #include "radv_descriptor_set.h"
 #include "radv_device_memory.h"
 #include "radv_event.h"
@@ -158,7 +157,7 @@ emit_page_table_update_event(struct vk_memory_trace_data *data, bool is_apu, uin
    token.data.page_table_update.physical_address = event->flags & AMDGPU_PTE_SYSTEM || is_apu ? 0 : addrs[pte_index];
 
    token.data.page_table_update.is_unmap = !(event->flags & (AMDGPU_PTE_VALID | AMDGPU_PTE_PRT));
-   util_dynarray_append(&data->tokens, token);
+   util_dynarray_append(&data->tokens, struct vk_rmv_token, token);
 }
 
 static void
@@ -381,7 +380,7 @@ fill_memory_info(const struct radeon_info *gpu_info, struct vk_rmv_memory_info *
       out_info->size = MIN2((uint64_t)gpu_info->gart_size_kb * 1024ULL, ram_size);
    } break;
    default:
-      UNREACHABLE("invalid memory index");
+      unreachable("invalid memory index");
    }
 }
 
@@ -410,7 +409,7 @@ memory_type_from_vram_type(uint32_t vram_type)
    case AMD_VRAM_TYPE_LPDDR5:
       return VK_RMV_MEMORY_TYPE_LPDDR5;
    default:
-      UNREACHABLE("Invalid vram type");
+      unreachable("Invalid vram type");
    }
 }
 
@@ -423,7 +422,8 @@ radv_rmv_fill_device_info(const struct radv_physical_device *pdev, struct vk_rmv
       fill_memory_info(gpu_info, &info->memory_infos[i], i);
    }
 
-   strncpy(info->device_name, gpu_info->marketing_name, sizeof(info->device_name) - 1);
+   if (gpu_info->marketing_name)
+      strncpy(info->device_name, gpu_info->marketing_name, sizeof(info->device_name) - 1);
    info->pcie_family_id = gpu_info->family_id;
    info->pcie_revision_id = gpu_info->pci_rev_id;
    info->pcie_device_id = gpu_info->pci.dev;
@@ -457,12 +457,12 @@ radv_memory_trace_finish(struct radv_device *device)
 
 /* The token lock must be held when entering _locked functions */
 static void
-log_resource_bind_locked(struct radv_device *device, uint64_t resource, enum radeon_bo_domain initial_domain,
-                         uint64_t addr, uint64_t size)
+log_resource_bind_locked(struct radv_device *device, uint64_t resource, struct radeon_winsys_bo *bo, uint64_t offset,
+                         uint64_t size)
 {
    struct vk_rmv_resource_bind_token token = {0};
-   token.address = addr;
-   token.is_system_memory = initial_domain & RADEON_DOMAIN_GTT;
+   token.address = bo->va + offset;
+   token.is_system_memory = bo->initial_domain & RADEON_DOMAIN_GTT;
    token.size = size;
    token.resource_id = vk_rmv_get_resource_id_locked(&device->vk, resource);
 
@@ -496,8 +496,7 @@ radv_rmv_log_heap_create(struct radv_device *device, VkDeviceMemory heap, bool i
    token.heap.alloc_flags = alloc_flags;
 
    vk_rmv_emit_token(&device->vk.memory_trace_data, VK_RMV_TOKEN_TYPE_RESOURCE_CREATE, &token);
-   log_resource_bind_locked(device, (uint64_t)heap, memory->bo->initial_domain, radv_buffer_get_va(memory->bo),
-                            memory->alloc_size);
+   log_resource_bind_locked(device, (uint64_t)heap, memory->bo, 0, memory->alloc_size);
    simple_mtx_unlock(&device->vk.memory_trace_data.token_mtx);
 }
 
@@ -514,7 +513,7 @@ radv_rmv_log_bo_allocate(struct radv_device *device, struct radeon_winsys_bo *bo
       return;
 
    struct vk_rmv_virtual_allocate_token token = {0};
-   token.address = radv_buffer_get_va(bo);
+   token.address = bo->va;
    /* If all VRAM is visible, no bo will be in invisible memory. */
    token.is_in_invisible_vram = bo->vram_no_cpu_access && !pdev->info.all_vram_visible;
    token.preferred_domains = (enum vk_rmv_kernel_memory_domain)bo->initial_domain;
@@ -538,7 +537,7 @@ radv_rmv_log_bo_destroy(struct radv_device *device, struct radeon_winsys_bo *bo)
       return;
 
    struct vk_rmv_virtual_free_token token = {0};
-   token.address = radv_buffer_get_va(bo);
+   token.address = bo->va;
 
    simple_mtx_lock(&device->vk.memory_trace_data.token_mtx);
    vk_rmv_emit_token(&device->vk.memory_trace_data, VK_RMV_TOKEN_TYPE_VIRTUAL_FREE, &token);
@@ -554,8 +553,7 @@ radv_rmv_log_buffer_bind(struct radv_device *device, VkBuffer _buffer)
 
    VK_FROM_HANDLE(radv_buffer, buffer, _buffer);
    simple_mtx_lock(&device->vk.memory_trace_data.token_mtx);
-   log_resource_bind_locked(device, (uint64_t)_buffer, buffer->bo->initial_domain, buffer->vk.device_address,
-                            buffer->vk.size);
+   log_resource_bind_locked(device, (uint64_t)_buffer, buffer->bo, buffer->offset, buffer->vk.size);
    simple_mtx_unlock(&device->vk.memory_trace_data.token_mtx);
 }
 
@@ -604,10 +602,8 @@ radv_rmv_log_image_bind(struct radv_device *device, uint32_t bind_idx, VkImage _
       return;
 
    VK_FROM_HANDLE(radv_image, image, _image);
-   struct radeon_winsys_bo *bo = image->bindings[bind_idx].bo;
-
    simple_mtx_lock(&device->vk.memory_trace_data.token_mtx);
-   log_resource_bind_locked(device, (uint64_t)_image, bo->initial_domain, image->bindings[bind_idx].addr,
+   log_resource_bind_locked(device, (uint64_t)_image, image->bindings[bind_idx].bo, image->bindings[bind_idx].offset,
                             image->bindings[bind_idx].range);
    simple_mtx_unlock(&device->vk.memory_trace_data.token_mtx);
 }
@@ -632,8 +628,7 @@ radv_rmv_log_query_pool_create(struct radv_device *device, VkQueryPool _pool)
    create_token.query_pool.has_cpu_access = true;
 
    vk_rmv_emit_token(&device->vk.memory_trace_data, VK_RMV_TOKEN_TYPE_RESOURCE_CREATE, &create_token);
-   log_resource_bind_locked(device, (uint64_t)_pool, pool->bo->initial_domain, radv_buffer_get_va(pool->bo),
-                            pool->size);
+   log_resource_bind_locked(device, (uint64_t)_pool, pool->bo, 0, pool->size);
    simple_mtx_unlock(&device->vk.memory_trace_data.token_mtx);
 }
 
@@ -660,16 +655,25 @@ radv_rmv_log_command_buffer_bo_create(struct radv_device *device, struct radeon_
    create_token.command_buffer.app_available_scratch_size = scratch_size;
 
    vk_rmv_emit_token(&device->vk.memory_trace_data, VK_RMV_TOKEN_TYPE_RESOURCE_CREATE, &create_token);
-   log_resource_bind_locked(device, upload_resource_identifier, bo->initial_domain, radv_buffer_get_va(bo), bo->size);
+   log_resource_bind_locked(device, upload_resource_identifier, bo, 0, bo->size);
    simple_mtx_unlock(&device->vk.memory_trace_data.token_mtx);
-   vk_rmv_log_cpu_map(&device->vk, radv_buffer_get_va(bo), false);
+   vk_rmv_log_cpu_map(&device->vk, bo->va, false);
 }
 
 void
 radv_rmv_log_command_buffer_bo_destroy(struct radv_device *device, struct radeon_winsys_bo *bo)
 {
-   radv_rmv_log_resource_destroy(device, (uint64_t)(uintptr_t)bo);
-   vk_rmv_log_cpu_map(&device->vk, radv_buffer_get_va(bo), true);
+   if (!device->vk.memory_trace_data.is_enabled)
+      return;
+
+   simple_mtx_lock(&device->vk.memory_trace_data.token_mtx);
+   struct vk_rmv_resource_destroy_token destroy_token = {0};
+   destroy_token.resource_id = vk_rmv_get_resource_id_locked(&device->vk, (uint64_t)(uintptr_t)bo);
+
+   vk_rmv_emit_token(&device->vk.memory_trace_data, VK_RMV_TOKEN_TYPE_RESOURCE_DESTROY, &destroy_token);
+   vk_rmv_destroy_resource_id_locked(&device->vk, (uint64_t)(uintptr_t)bo);
+   simple_mtx_unlock(&device->vk.memory_trace_data.token_mtx);
+   vk_rmv_log_cpu_map(&device->vk, bo->va, true);
 }
 
 void
@@ -691,7 +695,7 @@ radv_rmv_log_border_color_palette_create(struct radv_device *device, struct rade
    create_token.border_color_palette.num_entries = 255; /* = RADV_BORDER_COLOR_COUNT; */
 
    struct vk_rmv_resource_bind_token bind_token;
-   bind_token.address = radv_buffer_get_va(bo);
+   bind_token.address = bo->va;
    bind_token.is_system_memory = false;
    bind_token.resource_id = resource_id;
    bind_token.size = RADV_BORDER_COLOR_BUFFER_SIZE;
@@ -699,14 +703,23 @@ radv_rmv_log_border_color_palette_create(struct radv_device *device, struct rade
    vk_rmv_emit_token(&device->vk.memory_trace_data, VK_RMV_TOKEN_TYPE_RESOURCE_CREATE, &create_token);
    vk_rmv_emit_token(&device->vk.memory_trace_data, VK_RMV_TOKEN_TYPE_RESOURCE_BIND, &bind_token);
    simple_mtx_unlock(&device->vk.memory_trace_data.token_mtx);
-   vk_rmv_log_cpu_map(&device->vk, radv_buffer_get_va(bo), false);
+   vk_rmv_log_cpu_map(&device->vk, bo->va, false);
 }
 
 void
 radv_rmv_log_border_color_palette_destroy(struct radv_device *device, struct radeon_winsys_bo *bo)
 {
-   radv_rmv_log_resource_destroy(device, (uint64_t)(uintptr_t)bo);
-   vk_rmv_log_cpu_map(&device->vk, radv_buffer_get_va(bo), true);
+   if (!device->vk.memory_trace_data.is_enabled)
+      return;
+
+   simple_mtx_lock(&device->vk.memory_trace_data.token_mtx);
+   struct vk_rmv_resource_destroy_token token = {0};
+   /* same resource id as the create token */
+   token.resource_id = vk_rmv_get_resource_id_locked(&device->vk, (uint64_t)(uintptr_t)bo);
+
+   vk_rmv_emit_token(&device->vk.memory_trace_data, VK_RMV_TOKEN_TYPE_RESOURCE_DESTROY, &token);
+   simple_mtx_unlock(&device->vk.memory_trace_data.token_mtx);
+   vk_rmv_log_cpu_map(&device->vk, bo->va, true);
 }
 
 void
@@ -716,7 +729,7 @@ radv_rmv_log_sparse_add_residency(struct radv_device *device, struct radeon_wins
       return;
 
    struct vk_rmv_resource_reference_token token = {0};
-   token.virtual_address = radv_buffer_get_va(src_bo) + offset;
+   token.virtual_address = src_bo->va + offset;
    token.residency_removed = false;
 
    simple_mtx_lock(&device->vk.memory_trace_data.token_mtx);
@@ -732,7 +745,7 @@ radv_rmv_log_sparse_remove_residency(struct radv_device *device, struct radeon_w
       return;
 
    struct vk_rmv_resource_reference_token token = {0};
-   token.virtual_address = radv_buffer_get_va(src_bo) + offset;
+   token.virtual_address = src_bo->va + offset;
    token.residency_removed = true;
 
    simple_mtx_lock(&device->vk.memory_trace_data.token_mtx);
@@ -751,7 +764,7 @@ radv_rmv_log_descriptor_pool_create(struct radv_device *device, const VkDescript
    VK_FROM_HANDLE(radv_descriptor_pool, pool, _pool);
 
    if (pool->bo)
-      vk_rmv_log_cpu_map(&device->vk, radv_buffer_get_va(pool->bo), false);
+      vk_rmv_log_cpu_map(&device->vk, pool->bo->va, false);
 
    simple_mtx_lock(&device->vk.memory_trace_data.token_mtx);
    struct vk_rmv_resource_create_token create_token = {0};
@@ -774,7 +787,7 @@ radv_rmv_log_descriptor_pool_create(struct radv_device *device, const VkDescript
    if (pool->bo) {
       simple_mtx_lock(&device->vk.memory_trace_data.token_mtx);
       struct vk_rmv_resource_bind_token bind_token;
-      bind_token.address = radv_buffer_get_va(pool->bo);
+      bind_token.address = pool->bo->va;
       bind_token.is_system_memory = false;
       bind_token.resource_id = vk_rmv_get_resource_id_locked(&device->vk, (uint64_t)_pool);
       bind_token.size = pool->size;
@@ -792,7 +805,6 @@ radv_rmv_log_graphics_pipeline_create(struct radv_device *device, struct radv_pi
 
    VkPipeline _pipeline = radv_pipeline_to_handle(pipeline);
    struct radv_graphics_pipeline *graphics_pipeline = radv_pipeline_to_graphics(pipeline);
-   const struct radv_shader *last_vgt_shader = graphics_pipeline->base.shaders[graphics_pipeline->last_vgt_api_stage];
 
    simple_mtx_lock(&device->vk.memory_trace_data.token_mtx);
    struct vk_rmv_resource_create_token create_token = {0};
@@ -801,7 +813,7 @@ radv_rmv_log_graphics_pipeline_create(struct radv_device *device, struct radv_pi
    create_token.type = VK_RMV_RESOURCE_TYPE_PIPELINE;
    create_token.pipeline.is_internal = is_internal;
    create_token.pipeline.hash_lo = pipeline->pipeline_hash;
-   create_token.pipeline.is_ngg = last_vgt_shader->info.is_ngg;
+   create_token.pipeline.is_ngg = graphics_pipeline->is_ngg;
    create_token.pipeline.shader_stages = graphics_pipeline->active_stages;
 
    vk_rmv_emit_token(&device->vk.memory_trace_data, VK_RMV_TOKEN_TYPE_RESOURCE_CREATE, &create_token);
@@ -811,8 +823,7 @@ radv_rmv_log_graphics_pipeline_create(struct radv_device *device, struct radv_pi
       if (!shader)
          continue;
 
-      log_resource_bind_locked(device, (uint64_t)_pipeline, shader->bo->initial_domain,
-                               radv_buffer_get_va(shader->bo) + shader->alloc->offset, shader->alloc->size);
+      log_resource_bind_locked(device, (uint64_t)_pipeline, shader->bo, shader->alloc->offset, shader->alloc->size);
    }
    simple_mtx_unlock(&device->vk.memory_trace_data.token_mtx);
 }
@@ -837,8 +848,7 @@ radv_rmv_log_compute_pipeline_create(struct radv_device *device, struct radv_pip
 
    vk_rmv_emit_token(&device->vk.memory_trace_data, VK_RMV_TOKEN_TYPE_RESOURCE_CREATE, &create_token);
    struct radv_shader *shader = pipeline->shaders[MESA_SHADER_COMPUTE];
-   log_resource_bind_locked(device, (uint64_t)_pipeline, shader->bo->initial_domain,
-                            radv_buffer_get_va(shader->bo) + shader->alloc->offset, shader->alloc->size);
+   log_resource_bind_locked(device, (uint64_t)_pipeline, shader->bo, shader->alloc->offset, shader->alloc->size);
    simple_mtx_unlock(&device->vk.memory_trace_data.token_mtx);
 }
 
@@ -872,18 +882,16 @@ radv_rmv_log_rt_pipeline_create(struct radv_device *device, struct radv_ray_trac
    vk_rmv_emit_token(&device->vk.memory_trace_data, VK_RMV_TOKEN_TYPE_RESOURCE_CREATE, &create_token);
 
    if (prolog)
-      log_resource_bind_locked(device, (uint64_t)_pipeline, prolog->bo->initial_domain,
-                               radv_buffer_get_va(prolog->bo) + prolog->alloc->offset, prolog->alloc->size);
+      log_resource_bind_locked(device, (uint64_t)_pipeline, prolog->bo, prolog->alloc->offset, prolog->alloc->size);
 
    if (traversal)
-      log_resource_bind_locked(device, (uint64_t)_pipeline, traversal->bo->initial_domain,
-                               radv_buffer_get_va(traversal->bo) + traversal->alloc->offset, traversal->alloc->size);
+      log_resource_bind_locked(device, (uint64_t)_pipeline, traversal->bo, traversal->alloc->offset,
+                               traversal->alloc->size);
 
    for (uint32_t i = 0; i < pipeline->non_imported_stage_count; i++) {
       struct radv_shader *shader = pipeline->stages[i].shader;
       if (shader)
-         log_resource_bind_locked(device, (uint64_t)_pipeline, shader->bo->initial_domain,
-                                  radv_buffer_get_va(shader->bo) + shader->alloc->offset, shader->alloc->size);
+         log_resource_bind_locked(device, (uint64_t)_pipeline, shader->bo, shader->alloc->offset, shader->alloc->size);
    }
 
    simple_mtx_unlock(&device->vk.memory_trace_data.token_mtx);
@@ -905,11 +913,11 @@ radv_rmv_log_event_create(struct radv_device *device, VkEvent _event, VkEventCre
    create_token.resource_id = vk_rmv_get_resource_id_locked(&device->vk, (uint64_t)_event);
 
    vk_rmv_emit_token(&device->vk.memory_trace_data, VK_RMV_TOKEN_TYPE_RESOURCE_CREATE, &create_token);
-   log_resource_bind_locked(device, (uint64_t)_event, event->bo->initial_domain, radv_buffer_get_va(event->bo), 8);
+   log_resource_bind_locked(device, (uint64_t)_event, event->bo, 0, 8);
    simple_mtx_unlock(&device->vk.memory_trace_data.token_mtx);
 
    if (event->map)
-      vk_rmv_log_cpu_map(&device->vk, radv_buffer_get_va(event->bo), false);
+      vk_rmv_log_cpu_map(&device->vk, event->bo->va, false);
 }
 
 void
@@ -929,7 +937,7 @@ radv_rmv_log_submit(struct radv_device *device, enum amd_ip_type type)
       vk_rmv_log_misc_token(&device->vk, VK_RMV_MISC_EVENT_TYPE_SUBMIT_COPY);
       break;
    default:
-      UNREACHABLE("invalid ip type");
+      unreachable("invalid ip type");
    }
 }
 

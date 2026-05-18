@@ -37,7 +37,6 @@ struct asm_context {
    std::map<unsigned, constaddr_info> resumeaddrs;
    std::vector<struct aco_symbol>* symbols;
    uint32_t loop_header = -1u;
-   uint32_t loop_exit = 0u;
    const int16_t* opcode;
    // TODO: keep track of branch instructions referring blocks
    // and, when emitting the block, correct the offset in instr
@@ -63,13 +62,9 @@ unsigned
 get_mimg_nsa_dwords(const Instruction* instr)
 {
    unsigned addr_dwords = instr->operands.size() - 3;
-   for (unsigned i = 3; i < instr->operands.size(); i++) {
-      if (instr->operands[i].isVectorAligned())
-         addr_dwords--;
-   }
-   for (unsigned i = 4; i < instr->operands.size(); i++) {
-      if (instr->operands[i].physReg() !=
-          instr->operands[i - 1].physReg().advance(instr->operands[i - 1].bytes()))
+   for (unsigned i = 1; i < addr_dwords; i++) {
+      if (instr->operands[3 + i].physReg() !=
+          instr->operands[3 + (i - 1)].physReg().advance(instr->operands[3 + (i - 1)].bytes()))
          return DIV_ROUND_UP(addr_dwords - 1, 4);
    }
    return 0;
@@ -405,7 +400,7 @@ emit_vintrp_instruction(asm_context& ctx, std::vector<uint32_t>& out, const Inst
       } else if (ctx.gfx_level >= GFX10) {
          encoding = (0b110101 << 26);
       } else {
-         UNREACHABLE("Unknown gfx_level.");
+         unreachable("Unknown gfx_level.");
       }
 
       unsigned opsel = instr->opcode == aco_opcode::v_interp_p2_hi_f16 ? 0x8 : 0;
@@ -513,17 +508,11 @@ emit_ds_instruction(asm_context& ctx, std::vector<uint32_t>& out, const Instruct
    out.push_back(encoding);
    encoding = 0;
    if (!instr->definitions.empty())
-      encoding |= reg(ctx, instr->definitions.back(), 8) << 24;
-   unsigned op_idx = 0;
-   for (unsigned vector_idx = 0; op_idx < MIN2(instr->operands.size(), 3); vector_idx++) {
-      assert(vector_idx < 3);
-
-      const Operand& op = instr->operands[op_idx];
+      encoding |= reg(ctx, instr->definitions[0], 8) << 24;
+   for (unsigned i = 0; i < MIN2(instr->operands.size(), 3); i++) {
+      const Operand& op = instr->operands[i];
       if (op.physReg() != m0 && !op.isUndefined())
-         encoding |= reg(ctx, op, 8) << (8 * vector_idx);
-      while (instr->operands[op_idx].isVectorAligned())
-         ++op_idx;
-      ++op_idx;
+         encoding |= reg(ctx, op, 8) << (8 * i);
    }
    out.push_back(encoding);
 }
@@ -555,7 +544,10 @@ emit_mubuf_instruction(asm_context& ctx, std::vector<uint32_t>& out, const Instr
    bool dlc = mubuf.cache.value & ac_dlc;
 
    uint32_t encoding = (0b111000 << 26);
-   encoding |= (mubuf.lds ? 1 : 0) << 16;
+   if (ctx.gfx_level >= GFX11 && mubuf.lds) /* GFX11 has separate opcodes for LDS loads */
+      opcode = opcode == 0 ? 0x32 : (opcode + 0x1d);
+   else
+      encoding |= (mubuf.lds ? 1 : 0) << 16;
    encoding |= opcode << 18;
    encoding |= (glc ? 1 : 0) << 14;
    if (ctx.gfx_level <= GFX10_3)
@@ -809,12 +801,8 @@ emit_mimg_instruction(asm_context& ctx, std::vector<uint32_t>& out, const Instru
    if (nsa_dwords) {
       out.resize(out.size() + nsa_dwords);
       std::vector<uint32_t>::iterator nsa = std::prev(out.end(), nsa_dwords);
-      for (unsigned i = 4, k = 0; i < instr->operands.size(); i++) {
-         if (instr->operands[i - 1].isVectorAligned())
-            continue;
-         nsa[k / 4] |= reg(ctx, instr->operands[i], 8) << (k % 4 * 8);
-         k++;
-      }
+      for (unsigned i = 0; i < instr->operands.size() - 4u; i++)
+         nsa[i / 4] |= reg(ctx, instr->operands[4 + i], 8) << (i % 4 * 8);
    }
 }
 
@@ -841,18 +829,15 @@ emit_mimg_instruction_gfx12(asm_context& ctx, std::vector<uint32_t>& out, const 
    out.push_back(encoding);
 
    uint8_t vaddr[5] = {0, 0, 0, 0, 0};
-   for (unsigned i = 3, k = 0; i < instr->operands.size(); i++) {
-      if (instr->operands[i - 1].isVectorAligned())
-         continue;
-      vaddr[k++] = reg(ctx, instr->operands[i], 8);
-   }
-   int num_vaddr = instr->operands.size() - 3;
-   for (int i = 0; i < (int)MIN2(instr->operands.back().size() - 1, ARRAY_SIZE(vaddr) - num_vaddr); i++)
+   for (unsigned i = 3; i < instr->operands.size(); i++)
+      vaddr[i - 3] = reg(ctx, instr->operands[i], 8);
+   unsigned num_vaddr = instr->operands.size() - 3;
+   for (unsigned i = 0; i < MIN2(instr->operands.back().size() - 1, 5 - num_vaddr); i++)
       vaddr[num_vaddr + i] = reg(ctx, instr->operands.back(), 8) + i + 1;
 
    encoding = 0;
    if (!instr->definitions.empty())
-      encoding |= reg(ctx, instr->definitions.back(), 8); /* VDATA */
+      encoding |= reg(ctx, instr->definitions[0], 8); /* VDATA */
    else if (!instr->operands[2].isUndefined())
       encoding |= reg(ctx, instr->operands[2], 8); /* VDATA */
    encoding |= reg(ctx, instr->operands[0]) << 9;  /* T# (resource) */
@@ -999,14 +984,6 @@ emit_exp_instruction(asm_context& ctx, std::vector<uint32_t>& out, const Instruc
    encoding |= exp.done ? 0b1 << 11 : 0;
    encoding |= exp.dest << 4;
    encoding |= exp.enabled_mask;
-
-   /* GFX6 (except OLAND and HAINAN) has a bug that it only looks at the X
-    * writemask component.
-    */
-   if (ctx.program->dev.has_gfx6_mrt_export_bug && exp.enabled_mask && exp.dest <= V_008DFC_SQ_EXP_MRTZ) {
-      encoding |= 0x1;
-   }
-
    out.push_back(encoding);
    encoding = reg(ctx, exp.operands[0], 8);
    encoding |= reg(ctx, exp.operands[1], 8) << 8;
@@ -1090,7 +1067,7 @@ emit_vop3_instruction(asm_context& ctx, std::vector<uint32_t>& out, const Instru
    } else if (ctx.gfx_level >= GFX10) {
       encoding = (0b110101 << 26);
    } else {
-      UNREACHABLE("Unknown gfx_level.");
+      unreachable("Unknown gfx_level.");
    }
 
    if (ctx.gfx_level <= GFX7) {
@@ -1141,7 +1118,7 @@ emit_vop3p_instruction(asm_context& ctx, std::vector<uint32_t>& out, const Instr
    } else if (ctx.gfx_level >= GFX10) {
       encoding = (0b110011 << 26);
    } else {
-      UNREACHABLE("Unknown gfx_level.");
+      unreachable("Unknown gfx_level.");
    }
 
    encoding |= opcode << 16;
@@ -1258,7 +1235,7 @@ emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction* inst
    } else if (instr->opcode == aco_opcode::p_debug_info) {
       assert(instr->operands[0].isConstant());
       uint32_t index = instr->operands[0].constantValue();
-      ctx.program->debug_info[index].offset = out.size() * 4;
+      ctx.program->debug_info[index].offset = (out.size() - 1) * 4;
       return;
    }
 
@@ -1388,7 +1365,7 @@ emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction* inst
    case Format::PSEUDO:
    case Format::PSEUDO_BARRIER:
       if (instr->opcode != aco_opcode::p_unit_test)
-         UNREACHABLE("Pseudo instructions should be lowered before assembly.");
+         unreachable("Pseudo instructions should be lowered before assembly.");
       break;
    default:
       if (instr->isDPP16()) {
@@ -1404,7 +1381,7 @@ emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction* inst
       } else if (instr->isSDWA()) {
          emit_sdwa_instruction(ctx, out, instr);
       } else {
-         UNREACHABLE("unimplemented instruction format");
+         unreachable("unimplemented instruction format");
       }
       break;
    }
@@ -1560,8 +1537,6 @@ chain_branches(asm_context& ctx, std::vector<uint32_t>& out, branch_info& branch
    unsigned target = branch.target;
    branch.target = new_block->index;
 
-   unsigned skip_branch_target = 0; /* Target of potentially inserted short jump. */
-
    /* Find suitable insertion point:
     * We define two offset ranges within our new branch instruction should be placed.
     * Then we try to maximize the distance from either the previous branch or the target.
@@ -1597,20 +1572,15 @@ chain_branches(asm_context& ctx, std::vector<uint32_t>& out, branch_info& branch
    if (insert_at == 0) {
       /* Find the last block that is still within reach. */
       unsigned insertion_block_idx = 0;
-      unsigned next_block = 0;
-      while (ctx.program->blocks[next_block + 1].offset < upper_end) {
-         if (!ctx.program->blocks[next_block].instructions.empty())
-            insertion_block_idx = next_block;
-         next_block++;
-      }
+      while (ctx.program->blocks[insertion_block_idx + 1].offset < upper_end)
+         insertion_block_idx++;
 
-      insert_at = ctx.program->blocks[next_block].offset;
+      insert_at = ctx.program->blocks[insertion_block_idx].offset;
+      auto it = ctx.program->blocks[insertion_block_idx].instructions.begin();
+      int skip = 0;
       if (insert_at < upper_start) {
          /* Ensure some forward progress by splitting the block if necessary. */
-         auto it = ctx.program->blocks[next_block].instructions.begin();
-         int skip = 0;
          while (skip-- > 0 || insert_at < upper_start) {
-            assert(it != ctx.program->blocks[next_block].instructions.end());
             Instruction* instr = (it++)->get();
             if (instr->isSOPP()) {
                if (instr->opcode == aco_opcode::s_clause)
@@ -1630,11 +1600,9 @@ chain_branches(asm_context& ctx, std::vector<uint32_t>& out, branch_info& branch
 
          /* If the insertion point is in the middle of the block, insert the branch instructions
           * into that block instead. */
-         bld.reset(&ctx.program->blocks[next_block].instructions, it);
+         bld.reset(&ctx.program->blocks[insertion_block_idx].instructions, it);
       } else {
-         /* Insert the additional branches at the end of the previous non-empty block. */
-         bld.reset(&ctx.program->blocks[insertion_block_idx].instructions);
-         skip_branch_target = next_block;
+         bld.reset(&ctx.program->blocks[insertion_block_idx - 1].instructions);
       }
 
       /* Since we insert a branch into existing code, mitigate LdsBranchVmemWARHazard on GFX10. */
@@ -1647,7 +1615,6 @@ chain_branches(asm_context& ctx, std::vector<uint32_t>& out, branch_info& branch
       branch_instr = bld.sopp(aco_opcode::s_branch, 1).instr;
       emit_sopp_instruction(ctx, code, branch_instr, true);
    }
-   assert(insert_at >= upper_start);
    const unsigned block_offset = insert_at + code.size();
 
    branch_instr = bld.sopp(aco_opcode::s_branch, 0);
@@ -1655,11 +1622,6 @@ chain_branches(asm_context& ctx, std::vector<uint32_t>& out, branch_info& branch
    insert_code(ctx, out, insert_at, code.size(), code.data());
 
    new_block->offset = block_offset;
-   if (skip_branch_target) {
-      /* If we insert a short jump over the new branch at the end of a block,
-       * ensure that it gets updated accordingly after additional changes. */
-      ctx.branches.push_back({block_offset - 1, skip_branch_target});
-   }
    ctx.branches.push_back({block_offset, target});
    assert(out[ctx.branches.back().pos] == code.back());
 }
@@ -1713,14 +1675,13 @@ fix_constaddrs(asm_context& ctx, std::vector<uint32_t>& out)
 void
 align_block(asm_context& ctx, std::vector<uint32_t>& code, Block& block)
 {
-   /* Align the previous loop. */
-   if (ctx.loop_header != -1u &&
+   /* Blocks with block_kind_loop_exit might be eliminated after jump threading, so we instead find
+    * loop exits using loop_nest_depth.
+    */
+   if (ctx.loop_header != -1u && !block.linear_preds.empty() &&
        block.loop_nest_depth < ctx.program->blocks[ctx.loop_header].loop_nest_depth) {
-      assert(ctx.loop_exit != -1u);
       Block& loop_header = ctx.program->blocks[ctx.loop_header];
-      Block& loop_exit = ctx.program->blocks[ctx.loop_exit];
       ctx.loop_header = -1u;
-      ctx.loop_exit = -1u;
       std::vector<uint32_t> nops;
 
       const unsigned loop_num_cl = DIV_ROUND_UP(block.offset - loop_header.offset, 16);
@@ -1739,14 +1700,9 @@ align_block(asm_context& ctx, std::vector<uint32_t>& code, Block& block)
          emit_instruction(ctx, nops, instr);
          insert_code(ctx, code, loop_header.offset, nops.size(), nops.data());
 
-         /* Change prefetch mode back to default (0x3) at the loop exit. */
-         bld.reset(&loop_exit.instructions, loop_exit.instructions.begin());
-         instr = bld.sopp(aco_opcode::s_inst_prefetch, 0x3);
-         if (ctx.loop_exit < block.index) {
-            nops.clear();
-            emit_instruction(ctx, nops, instr);
-            insert_code(ctx, code, loop_exit.offset, nops.size(), nops.data());
-         }
+         /* Change prefetch mode back to default (0x3). */
+         bld.reset(&block.instructions, block.instructions.begin());
+         bld.sopp(aco_opcode::s_inst_prefetch, 0x3);
       }
 
       const unsigned loop_start_cl = loop_header.offset >> 4;
@@ -1770,22 +1726,8 @@ align_block(asm_context& ctx, std::vector<uint32_t>& code, Block& block)
        * to not break the alignment of inner loops by handling outer loops.
        * Also ignore loops without back-edge.
        */
-      if (block.linear_preds.size() > 1) {
+      if (block.linear_preds.size() > 1)
          ctx.loop_header = block.index;
-         ctx.loop_exit = -1u;
-      }
-   }
-
-   /* Blocks with block_kind_loop_exit might be eliminated after jump threading,
-    * so we instead find loop exits using the successors when in loop_nest_depth.
-    * This works, because control flow always re-converges after loops.
-    */
-   if (ctx.loop_header != -1u && ctx.loop_exit == -1u) {
-      for (uint32_t succ_idx : block.linear_succs) {
-         Block& succ = ctx.program->blocks[succ_idx];
-         if (succ.loop_nest_depth < ctx.program->blocks[ctx.loop_header].loop_nest_depth)
-            ctx.loop_exit = succ_idx;
-      }
    }
 
    /* align resume shaders with cache line */
@@ -1838,7 +1780,6 @@ emit_program(Program* program, std::vector<uint32_t>& code, std::vector<struct a
 
    program->config->scratch_bytes_per_wave =
       align(program->config->scratch_bytes_per_wave, program->dev.scratch_alloc_granule);
-   program->config->wgp_mode = program->wgp_mode;
 
    return exec_size;
 }

@@ -5,11 +5,9 @@ llvmpipe-piglit-rusticl:
   extends:
     - .llvmpipe-piglit-cl
     - .llvmpipe-rusticl-rules
-    - .test-piglit
   needs:
-    - job: debian-x86_64
-    - job: debian/x86_64_test-gl
-      optional: true
+    - debian-testing
+    - debian/x86_64_test-gl
   variables:
     DEQP_SUITE: llvmpipe-rusticl
     GPU_VERSION: llvmpipe-rusticl
@@ -23,27 +21,23 @@ llvmpipe-traces:
     EGL_PLATFORM: "surfaceless"
     PIGLIT_TRACES_FILE: traces-llvmpipe.yml
     PIGLIT_REPLAY_DEVICE_NAME: "gl-vmware-llvmpipe"
-  script:
-    - section_start variables "Variables passed through:"
-    - filter_env_vars
-    - section_end variables
-    - $HWCI_TEST_SCRIPT
+    PIGLIT_RESULTS: "llvmpipe-replay"
 
 llvmpipe:
   variables:
     DEQP_SUITE: llvmpipe
+    XVFB_SCRIPT: "install/deqp-runner.sh"
     DEQP_FRACTION: 4
-  extends:
-    - .llvmpipe-deqp-test
-    - .test-piglit
+  extends: .llvmpipe-deqp-test
   script: |
     . "$SCRIPTS_DIR"/setup-test-env.sh
     export LD_LIBRARY_PATH="$CI_PROJECT_DIR/install/lib"
     export LIBGL_DRIVERS_PATH="$CI_PROJECT_DIR/install/lib/dri"
     section_start weston "weston: prepare"
-    . "$CI_PROJECT_DIR/install/common/weston.sh"
+    weston -Bheadless-backend.so -Swayland-0 --idle-time=0 &
+    export WAYLAND_DISPLAY=wayland-0
     section_end weston
-    $CI_PROJECT_DIR/install/deqp-runner.sh
+    xvfb-run -e results/xvfb.log --server-args='-noreset' bash -c ". $SCRIPTS_DIR/setup-test-env.sh && ${XVFB_SCRIPT}"
 
 llvmpipe-full:
   extends:
@@ -63,19 +57,7 @@ llvmpipe-deqp-asan:
     # shared runners
     LP_NUM_THREADS: 0
     DEQP_FORCE_ASAN: 1
-    S3_ARTIFACT_NAME: mesa-x86_64-asan-debugoptimized
   extends: .llvmpipe-deqp-test
   needs:
-    - job: debian/x86_64_test-gl
-      optional: true
-    - job: debian-x86_64-asan
-
-.android-llvmpipe:
-  extends:
-    - .test-android
-    - .llvmpipe-rules
-  variables:
-    CUTTLEFISH_GPU_MODE: mesa_swrast
-    GPU_VERSION: llvmpipe
-    DEQP_SUITE: android-llvmpipe
-    # TODO: define DEQP_FRACTION?
+    - debian/x86_64_test-gl
+    - debian-testing-asan

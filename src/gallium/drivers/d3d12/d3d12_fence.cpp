@@ -33,37 +33,12 @@
 static void
 destroy_fence(struct d3d12_fence *fence)
 {
-   if (fence->type == PIPE_FD_TYPE_NATIVE_SYNC)
-      d3d12_fence_close_event(fence->event, fence->event_fd);
-   else
-      fence->cmdqueue_fence->Release();
+   d3d12_fence_close_event(fence->event, fence->event_fd);
    FREE(fence);
 }
 
 struct d3d12_fence *
-d3d12_create_fence(struct d3d12_screen *screen, bool signal_new)
-{
-   struct d3d12_fence *ret =
-      d3d12_create_fence_raw(screen->fence, screen->fence_value + (signal_new ? 1 : 0));
-   if (!ret) {
-      debug_printf("CALLOC_STRUCT failed\n");
-      return NULL;
-   }
-
-   if (signal_new) {
-      ++screen->fence_value;
-      if (FAILED(screen->cmdqueue->Signal(screen->fence, ret->value)))
-         goto fail;
-   }
-   return ret;
-
-fail:
-   destroy_fence(ret);
-   return NULL;
-}
-
-struct d3d12_fence *
-d3d12_create_fence_raw(ID3D12Fence *fence, uint64_t value)
+d3d12_create_fence(struct d3d12_screen *screen)
 {
    struct d3d12_fence *ret = CALLOC_STRUCT(d3d12_fence);
    if (!ret) {
@@ -71,13 +46,12 @@ d3d12_create_fence_raw(ID3D12Fence *fence, uint64_t value)
       return NULL;
    }
 
-   ret->type = PIPE_FD_TYPE_NATIVE_SYNC;
-   ret->cmdqueue_fence = fence;
-   ret->value = value;
+   ret->cmdqueue_fence = screen->fence;
+   ret->value = ++screen->fence_value;
    ret->event = d3d12_fence_create_event(&ret->event_fd);
-   ret->signaled = false;
-
-   if (FAILED(fence->SetEventOnCompletion(value, ret->event)))
+   if (FAILED(screen->cmdqueue->Signal(screen->fence, ret->value)))
+      goto fail;
+   if (FAILED(screen->fence->SetEventOnCompletion(ret->value, ret->event)))
       goto fail;
 
    pipe_reference_init(&ret->reference, 1);
@@ -89,7 +63,7 @@ fail:
 }
 
 struct d3d12_fence *
-d3d12_open_fence(struct d3d12_screen *screen, HANDLE handle, const void *name, pipe_fd_type type)
+d3d12_open_fence(struct d3d12_screen *screen, HANDLE handle, const void *name)
 {
    struct d3d12_fence *ret = CALLOC_STRUCT(d3d12_fence);
    if (!ret) {
@@ -110,7 +84,8 @@ d3d12_open_fence(struct d3d12_screen *screen, HANDLE handle, const void *name, p
       return NULL;
    }
 
-   ret->type = type;
+   /* A new value will be assigned later */
+   ret->value = 0;
    pipe_reference_init(&ret->reference, 1);
    return ret;
 }
@@ -124,12 +99,6 @@ d3d12_fence_reference(struct d3d12_fence **ptr, struct d3d12_fence *fence)
    *ptr = fence;
 }
 
-void
-d3d12_video_destroy_fence(struct pipe_video_codec *codec, struct pipe_fence_handle *fence)
-{
-   d3d12_fence_reference((struct d3d12_fence **)&fence, nullptr);
-}
-
 static void
 fence_reference(struct pipe_screen *pscreen,
                 struct pipe_fence_handle **pptr,
@@ -141,10 +110,9 @@ fence_reference(struct pipe_screen *pscreen,
 bool
 d3d12_fence_finish(struct d3d12_fence *fence, uint64_t timeout_ns)
 {
-   assert(fence->type == PIPE_FD_TYPE_NATIVE_SYNC);
    if (fence->signaled)
       return true;
-
+   
    bool complete = fence->cmdqueue_fence->GetCompletedValue() >= fence->value;
    if (!complete && timeout_ns)
       complete = d3d12_fence_wait_event(fence->event, fence->event_fd, timeout_ns);
@@ -165,22 +133,6 @@ fence_finish(struct pipe_screen *pscreen, struct pipe_context *pctx,
          d3d12_reset_batch(ctx, batch, 0);
    }
    return ret;
-}
-
-void
-d3d12_fence_signal_impl(struct d3d12_fence *fence, ID3D12CommandQueue *queue, uint64_t value)
-{
-   if (fence->type == PIPE_FD_TYPE_NATIVE_SYNC)
-      value = fence->value;
-   queue->Signal(fence->cmdqueue_fence, value);
-}
-
-void
-d3d12_fence_wait_impl(struct d3d12_fence *fence, ID3D12CommandQueue *queue, uint64_t value)
-{
-   if (fence->type == PIPE_FD_TYPE_NATIVE_SYNC)
-      value = fence->value;
-   queue->Wait(fence->cmdqueue_fence, value);
 }
 
 void

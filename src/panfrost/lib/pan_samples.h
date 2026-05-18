@@ -26,10 +26,10 @@
 
 #include <genxml/gen_macros.h>
 
-unsigned pan_sample_positions_buffer_size(void);
+unsigned panfrost_sample_positions_buffer_size(void);
 
-void pan_upload_sample_positions(void *buffer);
+void panfrost_upload_sample_positions(void *buffer);
 
-unsigned pan_sample_positions_offset(enum mali_sample_pattern pattern);
+unsigned panfrost_sample_positions_offset(enum mali_sample_pattern pattern);
 
 #endif

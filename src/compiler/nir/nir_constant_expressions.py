@@ -60,18 +60,14 @@ template = """\
 #include "util/half_float.h"
 #include "util/double.h"
 #include "util/softfloat.h"
-#include "util/bfloat.h"
-#include "util/float8.h"
 #include "util/bigmath.h"
 #include "util/format/format_utils.h"
 #include "util/format_r11g11b10f.h"
 #include "util/u_math.h"
-#include "util/u_overflow.h"
 #include "nir_constant_expressions.h"
-#include "nir.h"
 
 /**
- * Checks if the provided value is a denorm and flushes it to zero.
+ * \brief Checks if the provided value is a denorm and flushes it to zero.
  */
 static void
 constant_denorm_flush_to_zero(nir_const_value *value, unsigned bit_size)
@@ -393,26 +389,6 @@ typedef bool bool8_t;
 typedef bool bool16_t;
 typedef bool bool32_t;
 typedef bool bool64_t;
-
-static inline bool
-util_add_check_overflow_int1_t(int1_t a, int1_t b)
-{
-   return (a & 1 && b & 1);
-}
-static inline bool
-util_add_check_overflow_uint1_t(uint1_t a, int1_t b)
-{
-   return (a & 1 && b & 1);
-}
-static inline bool
-util_sub_check_overflow_int1_t(int1_t a, int1_t b)
-{
-   /* int1_t uses 0/-1 convention, so the only
-    * overflow case is "0 - (-1)".
-    */
-   return a == 0 && b != 0;
-}
-
 % for type in ["float", "int", "uint", "bool"]:
 % for width in type_sizes(type):
 struct ${type}${width}_vec {
@@ -498,15 +474,12 @@ struct ${type}${width}_vec {
          ## Create an appropriately-typed variable dst and assign the
          ## result of the const_expr to it.  If const_expr already contains
          ## writes to dst, just include const_expr directly.
-         <%
-         expr = op.render(output_type + '_t')
-         %>
          % if "dst" in op.const_expr:
             ${output_type}_t dst;
 
-            ${expr}
+            ${op.const_expr}
          % else:
-            ${output_type}_t dst = ${expr};
+            ${output_type}_t dst = ${op.const_expr};
          % endif
 
          ## Store the current component of the actual destination to the
@@ -590,6 +563,11 @@ struct ${type}${width}_vec {
 </%def>
 
 % for name, op in sorted(opcodes.items()):
+% if op.name == "fsat":
+#if defined(_MSC_VER) && (defined(_M_ARM64) || defined(_M_ARM64EC))
+#pragma optimize("", off) /* Temporary work-around for MSVC compiler bug, present in VS2019 16.9.2 */
+#endif
+% endif
 static void
 evaluate_${name}(nir_const_value *_dst_val,
                  UNUSED unsigned num_components,
@@ -607,12 +585,17 @@ evaluate_${name}(nir_const_value *_dst_val,
       % endfor
 
       default:
-         UNREACHABLE("unknown bit width");
+         unreachable("unknown bit width");
       }
    % else:
       ${evaluate_op(op, 0, execution_mode)}
    % endif
 }
+% if op.name == "fsat":
+#if defined(_MSC_VER) && (defined(_M_ARM64) || defined(_M_ARM64EC))
+#pragma optimize("", on) /* Temporary work-around for MSVC compiler bug, present in VS2019 16.9.2 */
+#endif
+% endif
 % endfor
 
 void
@@ -628,7 +611,7 @@ nir_eval_const_opcode(nir_op op, nir_const_value *dest,
       return;
 % endfor
    default:
-      UNREACHABLE("shouldn't get here");
+      unreachable("shouldn't get here");
    }
 }"""
 

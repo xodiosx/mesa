@@ -33,8 +33,8 @@ struct radv_image_plane {
 struct radv_image_binding {
    /* Set when bound */
    struct radeon_winsys_bo *bo;
-   void *host_ptr;
-   uint64_t addr;
+   VkDeviceSize offset;
+   uint64_t bo_va;
    uint64_t range;
 };
 
@@ -46,6 +46,7 @@ struct radv_image {
 
    unsigned queue_family_mask;
    bool exclusive;
+   bool shareable;
    bool dcc_sign_reinterpret;
    bool support_comp_to_single;
 
@@ -64,11 +65,6 @@ struct radv_image {
     */
    uint64_t tc_compat_zrange_offset;
 
-   /* Metadata for the HiZ workaround on GFX12 with both depth and stencil planes. It's used to
-    * track whether HiZ metadata are in-sync with main image data, per-level.
-    */
-   uint64_t hiz_valid_offset;
-
    /* For VK_ANDROID_native_buffer, the WSI image owns the memory, */
    VkDeviceMemory owned_memory;
 
@@ -78,6 +74,12 @@ struct radv_image {
 };
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(radv_image, vk.base, VkImage, VK_OBJECT_TYPE_IMAGE)
+
+static inline uint64_t
+radv_image_get_va(const struct radv_image *image, uint32_t bind_idx)
+{
+   return radv_buffer_get_va(image->bindings[bind_idx].bo) + image->bindings[bind_idx].offset;
+}
 
 static inline bool
 radv_image_extent_compare(const struct radv_image *image, const VkExtent3D *extent)
@@ -184,47 +186,22 @@ radv_image_is_tc_compat_htile(const struct radv_image *image)
 }
 
 /**
- * Return whether the image is TC-compatible HTILE for a level.
- */
-static inline bool
-radv_tc_compat_htile_enabled(const struct radv_image *image, unsigned level)
-{
-   return radv_htile_enabled(image, level) && (image->planes[0].surface.flags & RADEON_SURF_TC_COMPATIBLE_HTILE);
-}
-
-/**
  * Return whether the entire HTILE buffer can be used for depth in order to
  * improve HiZ Z-Range precision.
  */
 static inline bool
 radv_image_tile_stencil_disabled(const struct radv_device *device, const struct radv_image *image)
 {
-   if (vk_format_has_stencil(image->vk.format))
-      return false;
-
    const struct radv_physical_device *pdev = radv_device_physical(device);
 
-   /* Need to use the base and delta Z encoding for the workaround. */
-   if (pdev->info.has_htile_tc_z_clear_bug_without_stencil && radv_image_is_tc_compat_htile(image))
-      return false;
-
-   return !radv_image_has_vrs_htile(device, image);
-}
-
-/**
- * Return whether the image requires setting ZRANGE_PRECISION based on the last depth clear value to work around the
- * hardware bug that may cause the HTILE depth clear value used by the TC to be changed.
- */
-static inline bool
-radv_image_has_tc_compat_zrange_metadata(const struct radv_device *device, const struct radv_image *image)
-{
-   if (!radv_image_is_tc_compat_htile(image))
-      return false;
-
-   const struct radv_physical_device *pdev = radv_device_physical(device);
-
-   return radv_image_tile_stencil_disabled(device, image) ? pdev->info.has_htile_tc_z_clear_bug_without_stencil
-                                                          : pdev->info.has_htile_tc_z_clear_bug_with_stencil;
+   if (pdev->info.gfx_level >= GFX9) {
+      return !vk_format_has_stencil(image->vk.format) && !radv_image_has_vrs_htile(device, image);
+   } else {
+      /* Due to a hw bug, TILE_STENCIL_DISABLE must be set to 0 for
+       * the TC-compat ZRANGE issue even if no stencil is used.
+       */
+      return !vk_format_has_stencil(image->vk.format) && !radv_image_is_tc_compat_htile(image);
+   }
 }
 
 static inline bool
@@ -238,7 +215,7 @@ radv_image_get_fast_clear_va(const struct radv_image *image, uint32_t base_level
 {
    assert(radv_image_has_clear_value(image));
 
-   uint64_t va = image->bindings[0].addr;
+   uint64_t va = radv_image_get_va(image, 0);
    va += image->clear_value_offset + base_level * 8;
    return va;
 }
@@ -248,7 +225,7 @@ radv_image_get_fce_pred_va(const struct radv_image *image, uint32_t base_level)
 {
    assert(image->fce_pred_offset != 0);
 
-   uint64_t va = image->bindings[0].addr;
+   uint64_t va = radv_image_get_va(image, 0);
    va += image->fce_pred_offset + base_level * 8;
    return va;
 }
@@ -258,7 +235,7 @@ radv_image_get_dcc_pred_va(const struct radv_image *image, uint32_t base_level)
 {
    assert(image->dcc_pred_offset != 0);
 
-   uint64_t va = image->bindings[0].addr;
+   uint64_t va = radv_image_get_va(image, 0);
    va += image->dcc_pred_offset + base_level * 8;
    return va;
 }
@@ -268,7 +245,7 @@ radv_get_tc_compat_zrange_va(const struct radv_image *image, uint32_t base_level
 {
    assert(image->tc_compat_zrange_offset != 0);
 
-   uint64_t va = image->bindings[0].addr;
+   uint64_t va = radv_image_get_va(image, 0);
    va += image->tc_compat_zrange_offset + base_level * 4;
    return va;
 }
@@ -278,18 +255,8 @@ radv_get_ds_clear_value_va(const struct radv_image *image, uint32_t base_level)
 {
    assert(radv_image_has_clear_value(image));
 
-   uint64_t va = image->bindings[0].addr;
+   uint64_t va = radv_image_get_va(image, 0);
    va += image->clear_value_offset + base_level * 8;
-   return va;
-}
-
-static inline uint64_t
-radv_get_hiz_valid_va(const struct radv_image *image, uint32_t base_level)
-{
-   assert(image->hiz_valid_offset != 0);
-
-   uint64_t va = image->bindings[0].addr;
-   va += image->hiz_valid_offset + base_level * 4;
    return va;
 }
 
@@ -332,31 +299,6 @@ radv_get_htile_initial_value(const struct radv_device *device, const struct radv
    return initial_value;
 }
 
-static inline uint32_t
-radv_gfx12_get_hiz_initial_value(void)
-{
-   const uint16_t zmin = 0;
-   const uint16_t zmax = 0xffff;
-
-   /* The first component is the minimum value accross the s-tile, and the second component is the
-    * maximum value.
-    */
-   return zmin | (zmax << 16);
-}
-
-static inline uint32_t
-radv_gfx12_get_hiz_clear_value(VkClearDepthStencilValue value)
-{
-   const uint32_t max_zval = UINT16_MAX;
-   uint32_t zmin, zmax;
-
-   zmin = lroundf(value.depth * max_zval);
-   zmin &= max_zval;
-   zmax = zmin;
-
-   return zmin | (zmax << 16);
-}
-
 static inline bool
 radv_image_get_iterate256(const struct radv_device *device, struct radv_image *image)
 {
@@ -376,7 +318,7 @@ bool radv_image_use_dcc_predication(const struct radv_device *device, const stru
 void radv_compose_swizzle(const struct util_format_description *desc, const VkComponentMapping *mapping,
                           enum pipe_swizzle swizzle[4]);
 
-void radv_image_bo_set_metadata(struct radv_device *device, struct radv_image *image, struct radeon_winsys_bo *bo);
+void radv_init_metadata(struct radv_device *device, struct radv_image *image, struct radeon_bo_metadata *metadata);
 
 void radv_image_override_offset_stride(struct radv_device *device, struct radv_image *image, uint64_t offset,
                                        uint32_t stride);
@@ -410,7 +352,7 @@ VkFormat radv_get_aspect_format(struct radv_image *image, VkImageAspectFlags mas
  * If this is false reads that don't use the htile should be able to return
  * correct results.
  */
-bool radv_layout_is_htile_compressed(const struct radv_device *device, const struct radv_image *image, unsigned level,
+bool radv_layout_is_htile_compressed(const struct radv_device *device, const struct radv_image *image,
                                      VkImageLayout layout, unsigned queue_mask);
 
 bool radv_layout_can_fast_clear(const struct radv_device *device, const struct radv_image *image, unsigned level,

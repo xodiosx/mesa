@@ -24,7 +24,7 @@
 #ifndef NIR_SCHEDULE_H
 #define NIR_SCHEDULE_H
 
-#include "nir_defines.h"
+#include "nir.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -83,7 +83,7 @@ typedef struct nir_schedule_options {
 
 } nir_schedule_options;
 
-bool nir_schedule(nir_shader *shader, const nir_schedule_options *options);
+void nir_schedule(nir_shader *shader, const nir_schedule_options *options);
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -46,7 +46,7 @@ vertex_element_comp_control(enum isl_format format, unsigned comp)
    case 1: bits = isl_format_layouts[format].channels.g.bits; break;
    case 2: bits = isl_format_layouts[format].channels.b.bits; break;
    case 3: bits = isl_format_layouts[format].channels.a.bits; break;
-   default: UNREACHABLE("Invalid component");
+   default: unreachable("Invalid component");
    }
 
    /*
@@ -273,7 +273,8 @@ void
 genX(emit_urb_setup)(struct anv_device *device, struct anv_batch *batch,
                      const struct intel_l3_config *l3_config,
                      VkShaderStageFlags active_stages,
-                     const unsigned entry_size[4])
+                     const unsigned entry_size[4],
+                     enum intel_urb_deref_block_size *deref_block_size)
 {
    const struct intel_device_info *devinfo = device->info;
    struct intel_urb_config urb_cfg = {
@@ -285,7 +286,7 @@ genX(emit_urb_setup)(struct anv_device *device, struct anv_batch *batch,
                         active_stages &
                            VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
                         active_stages & VK_SHADER_STAGE_GEOMETRY_BIT,
-                        &urb_cfg, &constrained);
+                        &urb_cfg, deref_block_size, &constrained);
 
 #if GFX_VERx10 == 70
    /* From the IVB PRM Vol. 2, Part 1, Section 3.2.1:
@@ -314,7 +315,8 @@ genX(emit_urb_setup)(struct anv_device *device, struct anv_batch *batch,
 }
 
 static void
-emit_urb_setup(struct anv_graphics_pipeline *pipeline)
+emit_urb_setup(struct anv_graphics_pipeline *pipeline,
+               enum intel_urb_deref_block_size *deref_block_size)
 {
    unsigned entry_size[4];
    for (int i = MESA_SHADER_VERTEX; i <= MESA_SHADER_GEOMETRY; i++) {
@@ -327,7 +329,8 @@ emit_urb_setup(struct anv_graphics_pipeline *pipeline)
 
    genX(emit_urb_setup)(pipeline->base.device, &pipeline->base.batch,
                         pipeline->base.l3_config,
-                        pipeline->active_stages, entry_size);
+                        pipeline->active_stages, entry_size,
+                        deref_block_size);
 }
 
 static void
@@ -471,7 +474,7 @@ genX(raster_polygon_mode)(struct anv_graphics_pipeline *pipeline,
       case _3DPRIM_POLYGON:
          return pipeline->polygon_mode;
       }
-      UNREACHABLE("Unsupported GS output topology");
+      unreachable("Unsupported GS output topology");
    } else if (anv_pipeline_has_stage(pipeline, MESA_SHADER_TESS_EVAL)) {
       switch (get_tes_prog_data(pipeline)->output_topology) {
       case INTEL_TESS_OUTPUT_TOPOLOGY_POINT:
@@ -484,7 +487,7 @@ genX(raster_polygon_mode)(struct anv_graphics_pipeline *pipeline,
       case INTEL_TESS_OUTPUT_TOPOLOGY_TRI_CCW:
          return pipeline->polygon_mode;
       }
-      UNREACHABLE("Unsupported TCS output topology");
+      unreachable("Unsupported TCS output topology");
    } else {
       switch (primitive_topology) {
       case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
@@ -504,7 +507,7 @@ genX(raster_polygon_mode)(struct anv_graphics_pipeline *pipeline,
          return pipeline->polygon_mode;
 
       default:
-         UNREACHABLE("Unsupported primitive topology");
+         unreachable("Unsupported primitive topology");
       }
    }
 }
@@ -524,14 +527,14 @@ genX(ms_rasterization_mode)(struct anv_graphics_pipeline *pipeline,
          return MSRASTMODE_OFF_PIXEL;
 
       default:
-         UNREACHABLE("Unsupported line rasterization mode");
+         unreachable("Unsupported line rasterization mode");
       }
    } else {
       return pipeline->rasterization_samples > 1 ?
          MSRASTMODE_ON_PATTERN : MSRASTMODE_OFF_PIXEL;
    }
 #else
-   UNREACHABLE("Only on gen7");
+   unreachable("Only on gen7");
 #endif
 }
 
@@ -591,14 +594,14 @@ genX(rasterization_mode)(VkPolygonMode raster_mode,
          break;
 
       default:
-         UNREACHABLE("Unsupported line rasterization mode");
+         unreachable("Unsupported line rasterization mode");
       }
    } else {
       *api_mode = DX100;
       *msaa_rasterization_enable = true;
    }
 #else
-   UNREACHABLE("Invalid call");
+   unreachable("Invalid call");
 #endif
 }
 
@@ -607,7 +610,8 @@ emit_rs_state(struct anv_graphics_pipeline *pipeline,
               const struct vk_input_assembly_state *ia,
               const struct vk_rasterization_state *rs,
               const struct vk_multisample_state *ms,
-              const struct vk_render_pass_state *rp)
+              const struct vk_render_pass_state *rp,
+              enum intel_urb_deref_block_size urb_deref_block_size)
 {
    struct GENX(3DSTATE_SF) sf = {
       GENX(3DSTATE_SF_header),
@@ -632,7 +636,7 @@ emit_rs_state(struct anv_graphics_pipeline *pipeline,
       break;
 
    default:
-      UNREACHABLE("Invalid provoking vertex mode");
+      unreachable("Invalid provoking vertex mode");
    }
 
 #if GFX_VERx10 == 75
@@ -845,8 +849,7 @@ write_disabled_blend(uint32_t *state)
 static void
 emit_cb_state(struct anv_graphics_pipeline *pipeline,
               const struct vk_color_blend_state *cb,
-              const struct vk_multisample_state *ms,
-              const struct vk_render_pass_state *rp)
+              const struct vk_multisample_state *ms)
 {
    struct anv_device *device = pipeline->base.device;
    const struct elk_wm_prog_data *wm_prog_data = get_wm_prog_data(pipeline);
@@ -892,16 +895,12 @@ emit_cb_state(struct anv_graphics_pipeline *pipeline,
       const struct vk_color_blend_attachment_state *a =
          &cb->attachments[binding->index];
 
-      VkFormat att_format = rp->color_attachment_formats[binding->index];
-      bool ignore_logic_op =
-         vk_format_is_float(att_format) || vk_format_is_srgb(att_format);
-
       struct GENX(BLEND_STATE_ENTRY) entry = {
 #if GFX_VER < 8
          .AlphaToCoverageEnable = ms && ms->alpha_to_coverage_enable,
          .AlphaToOneEnable = ms && ms->alpha_to_one_enable,
 #endif
-         .LogicOpEnable = cb->logic_op_enable && !ignore_logic_op,
+         .LogicOpEnable = cb->logic_op_enable,
 
          /* Vulkan specification 1.2.168, VkLogicOp:
           *
@@ -1043,7 +1042,7 @@ emit_3dstate_clip(struct anv_graphics_pipeline *pipeline,
       break;
 
    default:
-      UNREACHABLE("Invalid provoking vertex mode");
+      unreachable("Invalid provoking vertex mode");
    }
 
    clip.MinimumPointWidth = 0.125;
@@ -1240,7 +1239,7 @@ emit_3dstate_streamout(struct anv_graphics_pipeline *pipeline,
          break;
 
       default:
-         UNREACHABLE("Invalid provoking vertex mode");
+         unreachable("Invalid provoking vertex mode");
       }
 
       so.RenderStreamSelect = rs->rasterization_stream;
@@ -1303,7 +1302,7 @@ get_sampler_count(const struct anv_shader_bin *bin)
 
 static UNUSED struct anv_address
 get_scratch_address(struct anv_pipeline *pipeline,
-                    mesa_shader_stage stage,
+                    gl_shader_stage stage,
                     const struct anv_shader_bin *bin)
 {
    return (struct anv_address) {
@@ -1515,7 +1514,7 @@ emit_3dstate_gs(struct anv_graphics_pipeline *pipeline,
          break;
 
       default:
-         UNREACHABLE("Invalid provoking vertex mode");
+         unreachable("Invalid provoking vertex mode");
       }
 
 #if GFX_VER >= 8
@@ -1825,12 +1824,14 @@ void
 genX(graphics_pipeline_emit)(struct anv_graphics_pipeline *pipeline,
                              const struct vk_graphics_pipeline_state *state)
 {
-   emit_urb_setup(pipeline);
+   enum intel_urb_deref_block_size urb_deref_block_size;
+   emit_urb_setup(pipeline, &urb_deref_block_size);
 
    assert(state->rs != NULL);
-   emit_rs_state(pipeline, state->ia, state->rs, state->ms, state->rp);
+   emit_rs_state(pipeline, state->ia, state->rs, state->ms, state->rp,
+                           urb_deref_block_size);
    emit_ms_state(pipeline, state->ms);
-   emit_cb_state(pipeline, state->cb, state->ms, state->rp);
+   emit_cb_state(pipeline, state->cb, state->ms);
    compute_kill_pixel(pipeline, state->ms, state);
 
    emit_3dstate_clip(pipeline, state->ia, state->vp, state->rs);
@@ -1885,7 +1886,7 @@ genX(compute_pipeline_emit)(struct anv_compute_pipeline *pipeline)
    const struct intel_cs_dispatch_info dispatch =
       elk_cs_get_dispatch_info(devinfo, cs_prog_data, NULL);
    const uint32_t vfe_curbe_allocation =
-      align(cs_prog_data->push.per_thread.regs * dispatch.threads +
+      ALIGN(cs_prog_data->push.per_thread.regs * dispatch.threads +
             cs_prog_data->push.cross_thread.regs, 2);
 
    const struct anv_shader_bin *cs_bin = pipeline->cs;

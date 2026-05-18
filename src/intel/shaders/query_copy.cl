@@ -2,8 +2,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include "libintel_shaders.h"
-
 void
 genX(libanv_query_copy)(global void *destination_base,
                         uint32_t destination_stride,

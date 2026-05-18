@@ -20,7 +20,6 @@
 #include <unistd.h>
 #include <libgen.h>
 #if FD_REPLAY_KGSL
-#define __user
 #include "../vulkan/msm_kgsl.h"
 #elif FD_REPLAY_MSM
 #include <xf86drm.h>
@@ -584,7 +583,7 @@ device_submit_cmdstreams(struct device *dev)
       .out_syncobjs = 0,
       .nr_in_syncobjs = 0,
       .nr_out_syncobjs = 0,
-      .syncobj_stride = sizeof(struct drm_msm_syncobj),
+      .syncobj_stride = sizeof(struct drm_msm_gem_submit_syncobj),
    };
 
    int ret = drmCommandWriteRead(dev->fd, DRM_MSM_GEM_SUBMIT, &submit_req,

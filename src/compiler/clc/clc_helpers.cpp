@@ -55,21 +55,15 @@
 #include <clang/Frontend/Utils.h>
 #include <clang/Basic/TargetInfo.h>
 
-#include <spirv-tools/libspirv.h>
 #include <spirv-tools/libspirv.hpp>
 #include <spirv-tools/linker.hpp>
 #include <spirv-tools/optimizer.hpp>
-
-#if LLVM_VERSION_MAJOR >= 16
-#include <llvm/TargetParser/Triple.h>
-#endif
 
 #if LLVM_VERSION_MAJOR >= 20
 #include <llvm/Support/VirtualFileSystem.h>
 #endif
 
 #include "util/macros.h"
-#include "util/u_dl.h"
 #include "glsl_types.h"
 
 #include "spirv.h"
@@ -88,7 +82,7 @@
 namespace fs = std::filesystem;
 
 /* Use the highest version of SPIRV supported by SPIRV-Tools. */
-constexpr spv_target_env spirv_target = SPV_ENV_UNIVERSAL_1_6;
+constexpr spv_target_env spirv_target = SPV_ENV_UNIVERSAL_1_5;
 
 constexpr SPIRV::VersionNumber invalid_spirv_trans_version = static_cast<SPIRV::VersionNumber>(0);
 
@@ -532,10 +526,10 @@ public:
             literalType = CLC_SPEC_CONSTANT_DOUBLE;
             break;
          case 16:
-            literalType = CLC_SPEC_CONSTANT_HALF;
+            /* Can't be used for a spec constant */
             break;
          default:
-            UNREACHABLE("Unexpected float bit size");
+            unreachable("Unexpected float bit size");
          }
          break;
       }
@@ -557,7 +551,7 @@ public:
                literalType = CLC_SPEC_CONSTANT_INT64;
                break;
             default:
-               UNREACHABLE("Unexpected int bit size");
+               unreachable("Unexpected int bit size");
             }
          } else {
             switch (sizeInBits) {
@@ -574,13 +568,13 @@ public:
                literalType = CLC_SPEC_CONSTANT_UINT64;
                break;
             default:
-               UNREACHABLE("Unexpected uint bit size");
+               unreachable("Unexpected uint bit size");
             }
          }
          break;
       }
       default:
-         UNREACHABLE("Unexpected type opcode");
+         unreachable("Unexpected type opcode");
       }
    }
 
@@ -606,7 +600,7 @@ public:
                data.type = CLC_SPEC_CONSTANT_BOOL;
                break;
             default:
-               UNREACHABLE("Composites and Ops are not directly specializable.");
+               unreachable("Composites and Ops are not directly specializable.");
             }
          }
       }
@@ -805,17 +799,11 @@ clc_compile_to_llvm_module(LLVMContext &llvm_ctx,
       c->addDependencyCollector(dep);
    }
 
-#if LLVM_VERSION_MAJOR >= 21
-   auto diag_opts = c->getDiagnosticOpts();
-#else
-   auto diag_opts = &c->getDiagnosticOpts();
-#endif
-
    clang::DiagnosticsEngine diag {
       new clang::DiagnosticIDs,
-      diag_opts,
+      new clang::DiagnosticOptions,
       new clang::TextDiagnosticPrinter(diag_log_stream,
-                                       diag_opts)
+                                       &c->getDiagnosticOpts())
    };
 
 #if LLVM_VERSION_MAJOR >= 17
@@ -851,7 +839,7 @@ clc_compile_to_llvm_module(LLVMContext &llvm_ctx,
    if (!clang::CompilerInvocation::CreateFromArgs(c->getInvocation(),
                                                   clang_opts,
                                                   diag)) {
-      clc_error(logger, "Couldn't create Clang invocation.\n%s\n", diag_log_str.c_str());
+      clc_error(logger, "Couldn't create Clang invocation.\n");
       return {};
    }
 
@@ -867,19 +855,15 @@ clc_compile_to_llvm_module(LLVMContext &llvm_ctx,
    c->getDiagnosticOpts().ShowCarets = false;
 
    c->createDiagnostics(
-#if LLVM_VERSION_MAJOR >= 20 && LLVM_VERSION_MAJOR < 22
+#if LLVM_VERSION_MAJOR >= 20
                    *llvm::vfs::getRealFileSystem(),
 #endif
                    new clang::TextDiagnosticPrinter(
                            diag_log_stream,
-                           diag_opts));
+                           &c->getDiagnosticOpts()));
 
    c->setTarget(clang::TargetInfo::CreateTargetInfo(
-#if LLVM_VERSION_MAJOR >= 21
-                   c->getDiagnostics(), c->getInvocation().getTargetOpts()));
-#else
                    c->getDiagnostics(), c->getInvocation().TargetOpts));
-#endif
 
    c->getFrontendOpts().ProgramAction = clang::frontend::EmitLLVMOnly;
 
@@ -906,7 +890,14 @@ clc_compile_to_llvm_module(LLVMContext &llvm_ctx,
          ::llvm::MemoryBuffer::getMemBuffer(llvm::StringRef(opencl_c_source, ARRAY_SIZE(opencl_c_source) - 1)).release());
    }
 #else
-   char *clang_path = util_dl_get_path_from_proc((const void *)clang::CompilerInvocation::CreateFromArgs);
+
+   Dl_info info;
+   if (dladdr((void *)clang::CompilerInvocation::CreateFromArgs, &info) == 0) {
+      clc_error(logger, "Couldn't find libclang path.\n");
+      return {};
+   }
+
+   char *clang_path = realpath(info.dli_fname, NULL);
    if (clang_path == nullptr) {
       clc_error(logger, "Couldn't find libclang path.\n");
       return {};
@@ -953,15 +944,9 @@ clc_compile_to_llvm_module(LLVMContext &llvm_ctx,
    c->getTargetOpts().OpenCLExtensionsAsWritten.push_back("+cl_khr_global_int32_extended_atomics");
    c->getTargetOpts().OpenCLExtensionsAsWritten.push_back("+cl_khr_local_int32_base_atomics");
    c->getTargetOpts().OpenCLExtensionsAsWritten.push_back("+cl_khr_local_int32_extended_atomics");
-   if (args->c_compatible) {
-      c->getTargetOpts().OpenCLExtensionsAsWritten.push_back("+__cl_clang_bitfields");
-   }
    c->getPreprocessorOpts().addMacroDef("cl_khr_expect_assume=1");
 
    bool needs_opencl_c_h = false;
-   if (args->features.extended_bit_ops) {
-      c->getPreprocessorOpts().addMacroDef("cl_khr_extended_bit_ops=1");
-   }
    if (args->features.fp16) {
       c->getTargetOpts().OpenCLExtensionsAsWritten.push_back("+cl_khr_fp16");
    }
@@ -1004,23 +989,9 @@ clc_compile_to_llvm_module(LLVMContext &llvm_ctx,
    if (args->features.images_gl_msaa) {
       c->getTargetOpts().OpenCLExtensionsAsWritten.push_back("+cl_khr_gl_msaa_sharing");
    }
-   if (args->features.images_unorm_int_2_101010) {
-      c->getPreprocessorOpts().addMacroDef("__opencl_c_ext_image_unorm_int_2_101010=1");
-      if (LLVM_VERSION_MAJOR < 20 || (LLVM_VERSION_MAJOR == 20 && LLVM_VERSION_MINOR < 1)) {
-         /* This feature doesn't really need any compiler support, but it does define a CLK_
-          * macro for the type, which is only available with llvm-20.1 or newer.
-          */
-         c->getPreprocessorOpts().addMacroDef("CLK_UNORM_INT_2_101010_EXT=0x10E5");
-      }
-   }
    if (args->features.intel_subgroups) {
       c->getTargetOpts().OpenCLExtensionsAsWritten.push_back("+cl_intel_subgroups");
       needs_opencl_c_h = true;
-   }
-   if (args->features.kernel_clock && LLVM_VERSION_MAJOR >= 19) {
-      c->getPreprocessorOpts().addMacroDef("cl_khr_kernel_clock=1");
-      c->getPreprocessorOpts().addMacroDef("__opencl_c_kernel_clock_scope_device=1");
-      c->getPreprocessorOpts().addMacroDef("__opencl_c_kernel_clock_scope_sub_group=1");
    }
    if (args->features.subgroups) {
       c->getTargetOpts().OpenCLExtensionsAsWritten.push_back("+__opencl_c_subgroups");
@@ -1155,12 +1126,7 @@ llvm_mod_to_spirv(std::unique_ptr<::llvm::Module> mod,
       auto target = TargetRegistry::lookupTarget(triple, error_msg);
       if (target) {
          auto TM = target->createTargetMachine(
-#if LLVM_VERSION_MAJOR >= 21
-            llvm::Triple(triple),
-#else
-            triple,
-#endif
-            "", "", {}, std::nullopt, std::nullopt,
+            triple, "", "", {}, std::nullopt, std::nullopt,
 #if LLVM_VERSION_MAJOR >= 18
             ::llvm::CodeGenOptLevel::None
 #else
@@ -1300,10 +1266,6 @@ private:
    const struct clc_logger *logger;
 };
 
-const char* clc_spirv_tools_version() {
-   return spvSoftwareVersionString();
-}
-
 int
 clc_link_spirv_binaries(const struct clc_linker_args *args,
                         const struct clc_logger *logger,
@@ -1322,7 +1284,6 @@ clc_link_spirv_binaries(const struct clc_linker_args *args,
    context.SetMessageConsumer(msgconsumer);
    spvtools::LinkerOptions options;
    options.SetAllowPartialLinkage(args->create_library);
-   options.SetUseHighestVersion(true);
    #if defined(HAS_SPIRV_LINK_LLVM_WORKAROUND) && LLVM_VERSION_MAJOR >= 17
       options.SetAllowPtrTypeMismatch(true);
    #endif
@@ -1394,7 +1355,6 @@ clc_spirv_specialize(const struct clc_binary *in_spirv,
       case CLC_SPEC_CONSTANT_INT8:
          words.push_back((uint32_t)(int32_t)consts->specializations[i].value.i8);
          break;
-      case CLC_SPEC_CONSTANT_HALF:
       case CLC_SPEC_CONSTANT_UINT16:
          words.push_back((uint32_t)consts->specializations[i].value.u16);
          break;

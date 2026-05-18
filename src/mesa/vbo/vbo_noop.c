@@ -34,7 +34,7 @@
 
 #include "util/glheader.h"
 #include "main/context.h"
-#include "dispatch.h"
+#include "main/dispatch.h"
 #include "main/dlist.h"
 #include "main/eval.h"
 #include "vbo_attrib.h"

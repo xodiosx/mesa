@@ -183,6 +183,6 @@ void
 st_init_flush_functions(struct pipe_screen *screen,
                         struct dd_function_table *functions)
 {
-   if (screen->caps.device_reset_status_query)
+   if (screen->get_param(screen, PIPE_CAP_DEVICE_RESET_STATUS_QUERY))
       functions->GetGraphicsResetStatus = st_get_graphics_reset_status;
 }

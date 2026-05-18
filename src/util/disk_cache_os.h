@@ -25,7 +25,6 @@
 #define DISK_CACHE_OS_H
 
 #include "util/u_queue.h"
-#include "util/disk_cache.h"
 
 #if DETECT_OS_WINDOWS
 
@@ -128,12 +127,10 @@ struct disk_cache_put_job {
    struct cache_item_metadata cache_item_metadata;
 };
 
-const char *
+char *
 disk_cache_generate_cache_dir(void *mem_ctx, const char *gpu_name,
                               const char *driver_id,
-                              const char *cache_dir_name_custom,
-                              enum disk_cache_type cache_type,
-                              bool mkdir);
+                              enum disk_cache_type cache_type);
 
 void
 disk_cache_evict_lru_item(struct disk_cache *cache);
@@ -168,7 +165,8 @@ void
 disk_cache_touch_cache_user_marker(char *path);
 
 bool
-disk_cache_mmap_cache_index(void *mem_ctx, struct disk_cache *cache);
+disk_cache_mmap_cache_index(void *mem_ctx, struct disk_cache *cache,
+                            char *path);
 
 void
 disk_cache_destroy_mmap(struct disk_cache *cache);

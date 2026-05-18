@@ -11,6 +11,8 @@
 #include "util/list.h"
 #include "util/u_atomic.h"
 
+#include "panfrost-job.h"
+
 struct panvk_kmod_bo;
 
 /* Used for internal object allocation. */
@@ -20,12 +22,12 @@ struct panvk_priv_bo {
    struct panvk_device *dev;
    struct pan_kmod_bo *bo;
    struct {
-      uint64_t dev;
+      mali_ptr dev;
       void *host;
    } addr;
 };
 
-VkResult panvk_priv_bo_create(struct panvk_device *dev, uint64_t size,
+VkResult panvk_priv_bo_create(struct panvk_device *dev, size_t size,
                               uint32_t flags, VkSystemAllocationScope scope,
                               struct panvk_priv_bo **out);
 
@@ -36,9 +38,6 @@ panvk_priv_bo_ref(struct panvk_priv_bo *bo)
    p_atomic_inc(&bo->refcnt);
    return bo;
 }
-
-void panvk_priv_bo_flush(struct panvk_priv_bo *bo, size_t offset, size_t size);
-void panvk_priv_bo_invalidate(struct panvk_priv_bo *bo, size_t offset, size_t size);
 
 void panvk_priv_bo_unref(struct panvk_priv_bo *bo);
 

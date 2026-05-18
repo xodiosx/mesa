@@ -165,6 +165,8 @@ struct _egl_surface {
    /* True if the surface is bound to an OpenGL ES texture */
    EGLBoolean BoundToTexture;
 
+   EGLBoolean PostSubBufferSupportedNV;
+
    EGLBoolean ProtectedContent;
 
    EGLBoolean PresentOpaque;

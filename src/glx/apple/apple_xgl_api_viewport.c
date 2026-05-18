@@ -30,8 +30,7 @@
 #include "glxclient.h"
 #include "apple_glx_context.h"
 #include "apple_xgl_api.h"
-#include "glapi.h"
-#include "dispatch.h"
+#include "glapitable.h"
 
 extern struct _glapi_table * __ogl_framework_api;
 
@@ -44,5 +43,5 @@ __applegl_glViewport(GLint x, GLint y, GLsizei width, GLsizei height)
    if (gc != &dummyContext && gc->driContext)
       apple_glx_context_update(dpy, gc->driContext);
 
-   CALL_Viewport(__ogl_framework_api, (x, y, width, height));
+   __ogl_framework_api->Viewport(x, y, width, height);
 }

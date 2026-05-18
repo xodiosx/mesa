@@ -16,8 +16,11 @@
 
 #include "util/u_math.h"
 
+#include "adreno_common.xml.h"
+#include "adreno_pm4.xml.h"
 #include "freedreno_pm4.h"
-#include "fd6_hw.h"
+
+#include "a6xx.xml.h"
 
 #include "ir3/ir3_assembler.h"
 #include "ir3/ir3_compiler.h"
@@ -301,7 +304,7 @@ replay_context_finish(struct replay_context *ctx)
    fclose(out);
 }
 
-UNUSED static void
+static void
 upload_shader(struct replay_context *ctx, uint64_t id, const char *source)
 {
    FILE *in = fmemopen((void *)source, strlen(source), "r");
@@ -322,7 +325,7 @@ upload_shader(struct replay_context *ctx, uint64_t id, const char *source)
    _mesa_hash_table_u64_insert(ctx->compiled_shaders, id, shader_iova);
 }
 
-UNUSED static void
+static void
 emit_shader_iova(struct replay_context *ctx, struct cmdstream *cs, uint64_t id)
 {
    uint64_t *shader_iova = (uint64_t *)

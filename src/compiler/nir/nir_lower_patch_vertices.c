@@ -89,7 +89,9 @@ nir_lower_patch_vertices(nir_shader *nir,
          }
       }
 
-      nir_progress(progress, impl, nir_metadata_control_flow);
+      if (progress) {
+         nir_metadata_preserve(impl, nir_metadata_control_flow);
+      }
    }
 
    return progress;

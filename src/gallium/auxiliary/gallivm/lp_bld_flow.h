@@ -35,13 +35,12 @@
 #define LP_BLD_FLOW_H
 
 
-#include "gallivm/lp_bld_type.h"
+#include "gallivm/lp_bld.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-struct gallivm_state;
 struct lp_type;
 
 
@@ -203,9 +202,6 @@ lp_build_endif(struct lp_build_if_state *ctx);
 
 LLVMBasicBlockRef
 lp_build_insert_new_block(struct gallivm_state *gallivm, const char *name);
-
-LLVMBuilderRef
-lp_create_builder_at_entry(struct gallivm_state *gallivm);
 
 LLVMValueRef
 lp_build_alloca(struct gallivm_state *gallivm,

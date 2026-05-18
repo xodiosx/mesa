@@ -1,45 +1,25 @@
 # Copyright © 2017 Intel Corporation
 # SPDX-License-Identifier: MIT
 
-libintel_tools = static_library(
-  'intel_tools',
-  files(
-    'aub_mem.c',
-    'aub_mem.h',
-    'aub_read.c',
-    'aub_read.h',
-    'intel_tools.c',
-    'intel_tools.h'
-  ),
-  dependencies : [
-    idep_mesautil,
-    idep_intel_dev,
-    idep_intel_decoder_brw,
-    idep_intel_decoder_elk,
-    idep_intel_compiler_brw,
-    idep_intel_compiler_elk,
-    idep_libintel_common,
-  ],
+libaub = static_library(
+  'aub',
+  files('aub_read.c', 'aub_mem.c'),
   include_directories : [inc_include, inc_src, inc_intel],
-  c_args : [intel_common_args, no_override_init_args],
+  dependencies : [idep_mesautil, idep_intel_dev, idep_intel_decoder_brw, idep_intel_decoder_elk],
+  link_with : [libintel_common],
+  c_args : [no_override_init_args],
   gnu_symbol_visibility : 'hidden',
-  install : false,
-)
-
-idep_libintel_tools = declare_dependency(
-  link_with : libintel_tools,
-  dependencies : [
-    idep_intel_decoder_brw,
-    idep_intel_decoder_elk,
-  ]
+  install : false
 )
 
 aubinator = executable(
   'aubinator',
   files('aubinator.c'),
   dependencies : [idep_mesautil, dep_expat, dep_zlib, dep_dl, dep_thread, dep_m, idep_intel_dev,
-                  idep_libintel_common, idep_libintel_tools],
+                  idep_intel_decoder_brw, idep_intel_decoder_elk,
+                  idep_intel_compiler_brw, idep_intel_compiler_elk],
   include_directories : [inc_include, inc_src, inc_intel],
+  link_with : [libintel_common, libaub],
   c_args : [no_override_init_args],
   gnu_symbol_visibility : 'hidden',
   install : true
@@ -57,8 +37,10 @@ aubinator_error_decode = executable(
         'error_decode_xe_lib.c',
         'error_decode_xe_lib.h'),
   dependencies : [idep_mesautil, dep_zlib, dep_thread, idep_intel_dev,
-                  idep_libintel_common, idep_libintel_tools],
+                  idep_intel_decoder_brw, idep_intel_decoder_elk,
+                  idep_intel_compiler_brw, idep_intel_compiler_elk],
   include_directories : [inc_include, inc_src, inc_intel],
+  link_with : [libintel_common],
   c_args : [no_override_init_args],
   gnu_symbol_visibility : 'hidden',
   install : true
@@ -83,8 +65,6 @@ error2hangdump = executable(
   files('error2hangdump.c',
         'error2hangdump_lib.c',
         'error2hangdump_lib.h',
-        'error2hangdump_xe_lib.c',
-        'error2hangdump_xe_lib.h',
         'error2hangdump_xe.c',
         'error2hangdump_xe.h',
         'error_decode_lib.c',
@@ -101,24 +81,8 @@ error2hangdump = executable(
 intel_hang_replay = executable(
   'intel_hang_replay',
   files('intel_hang_replay.c'),
-  files('intel_hang_replay_lib.c'),
-  files('intel_hang_replay_lib.h'),
-  files('intel_hang_replay_xe.c'),
-  files('intel_hang_replay_xe.h'),
   dependencies : [idep_intel_dev, idep_libintel_common, dep_libdrm, dep_dl, dep_thread, dep_m,
-                  idep_libintel_tools],
-  include_directories : [inc_include, inc_src, inc_intel],
-  c_args : [no_override_init_args],
-  gnu_symbol_visibility : 'hidden',
-  install : true
-)
-
-intel_monitor = executable(
-  'intel_monitor',
-  files('intel_monitor.c',
-        'intel_monitor_eustall.c',
-        'intel_monitor_eustall.h'),
-  dependencies : [idep_intel_dev, idep_intel_perf, idep_mesautil, dep_libdrm, dep_valgrind],
+                  idep_intel_compiler_brw, idep_intel_compiler_elk],
   include_directories : [inc_include, inc_src, inc_intel],
   c_args : [no_override_init_args],
   gnu_symbol_visibility : 'hidden',
@@ -145,9 +109,9 @@ configure_file(
 libintel_sanitize_gpu = shared_library(
   'intel_sanitize_gpu',
   files('intel_sanitize_gpu.c'),
-  dependencies : [idep_mesautil, dep_dl, dep_thread, idep_intel_dev,
-                  idep_libintel_common],
+  dependencies : [idep_mesautil, dep_dl, dep_thread, idep_intel_dev],
   include_directories : [inc_include, inc_src, inc_intel],
+  link_with : libintel_common,
   c_args : [no_override_init_args, sse2_args],
   gnu_symbol_visibility : 'hidden',
   install_dir : get_option('libexecdir'),
@@ -168,8 +132,9 @@ libintel_dump_gpu = shared_library(
     'intel_context.h', 'gfx8_context.h', 'gfx10_context.h', 'intel_aub.h',
     'aub_write.h', 'aub_write.c', 'intel_dump_gpu.c',
   ),
-  dependencies : [dep_dl, idep_mesautil, idep_intel_dev, idep_libintel_common],
+  dependencies : [dep_dl, idep_mesautil, idep_intel_dev],
   include_directories : [inc_include, inc_src, inc_intel],
+  link_with : [libintel_common],
   c_args : [no_override_init_args],
   gnu_symbol_visibility : 'hidden',
   install_dir : get_option('libexecdir'),
@@ -202,11 +167,12 @@ if with_tools.contains('intel-ui')
     'aubinator_viewer',
     files('aubinator_viewer.cpp', 'aubinator_viewer_decoder.cpp'),
     dependencies : [idep_mesautil, dep_zlib, dep_dl, dep_thread, dep_m, libintel_imgui_gtk_dep, idep_intel_dev,
-                    idep_libintel_common, idep_libintel_tools],
+                    idep_intel_compiler_brw, idep_intel_compiler_elk],
     include_directories : [inc_include, inc_src, inc_intel],
+    link_with : [libintel_common, libaub],
     c_args : [no_override_init_args],
     gnu_symbol_visibility : 'hidden',
-    cpp_args : cpp.get_supported_arguments('-fpermissive', '-Wno-parentheses', '-Wno-error=stringop-overflow'),
+    cpp_args : ['-fpermissive', '-Wno-parentheses'],
     install : true
   )
 
@@ -222,12 +188,15 @@ if with_tools.contains('intel-ui')
       libintel_imgui_gtk_dep,
       idep_intel_dev,
       idep_libintel_common,
-      idep_libintel_tools,
+      idep_intel_compiler_brw,
+      idep_intel_compiler_elk,
+      idep_intel_decoder_brw,
+      idep_intel_decoder_elk,
     ],
     include_directories : [inc_include, inc_src, inc_intel],
     c_args : [no_override_init_args],
     gnu_symbol_visibility : 'hidden',
-    cpp_args : cpp.get_supported_arguments('-fpermissive', '-Wno-parentheses', '-Wno-error=stringop-overflow'),
+    cpp_args : ['-fpermissive', '-Wno-parentheses'],
     install : true
   )
 endif
@@ -244,9 +213,3 @@ if with_intel_tools
     install : true
   )
 endif
-
-install_data(
-  'intel_measure.py',
-  install_dir : get_option('bindir'),
-  install_mode : 'rwxr-xr-x'
-)

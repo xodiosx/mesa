@@ -35,7 +35,8 @@ view_relocation(struct svga_winsys_context *swc, // IN
       struct svga_surface *s = svga_surface(surface);
       assert(s->handle);
       swc->surface_relocation(swc, id, NULL, s->handle, flags);
-   } else {
+   }
+   else {
       swc->surface_relocation(swc, id, NULL, NULL, flags);
    }
 }
@@ -52,7 +53,8 @@ surface_to_resourceid(struct svga_winsys_context *swc, // IN
 {
    if (surface) {
       swc->surface_relocation(swc, sid, NULL, surface, flags);
-   } else {
+   }
+   else {
       swc->surface_relocation(swc, sid, NULL, NULL, flags);
    }
 }
@@ -241,12 +243,15 @@ SVGA3D_vgpu10_SetShaderResources(struct svga_winsys_context *swc,
                                  const SVGA3dShaderResourceViewId ids[],
                                  struct svga_winsys_surface **views)
 {
-   SVGA3dCmdDXSetShaderResources *cmd =
-      SVGA3D_FIFOReserve(swc,
-                         SVGA_3D_CMD_DX_SET_SHADER_RESOURCES,
-                         sizeof(SVGA3dCmdDXSetShaderResources) +
-                         count * sizeof(SVGA3dShaderResourceViewId),
-                         count); /* 'count' relocations */
+   SVGA3dCmdDXSetShaderResources *cmd;
+   SVGA3dShaderResourceViewId *cmd_ids;
+   unsigned i;
+
+   cmd = SVGA3D_FIFOReserve(swc,
+                            SVGA_3D_CMD_DX_SET_SHADER_RESOURCES,
+                            sizeof(SVGA3dCmdDXSetShaderResources) +
+                            count * sizeof(SVGA3dShaderResourceViewId),
+                            count); /* 'count' relocations */
    if (!cmd)
       return PIPE_ERROR_OUT_OF_MEMORY;
 
@@ -254,9 +259,8 @@ SVGA3D_vgpu10_SetShaderResources(struct svga_winsys_context *swc,
    cmd->type = type;
    cmd->startView = startView;
 
-   SVGA3dShaderResourceViewId *cmd_ids =
-      (SVGA3dShaderResourceViewId *) (cmd + 1);
-   for (unsigned i = 0; i < count; i++) {
+   cmd_ids = (SVGA3dShaderResourceViewId *) (cmd + 1);
+   for (i = 0; i < count; i++) {
       swc->surface_relocation(swc, cmd_ids + i, NULL, views[i],
                               SVGA_RELOC_READ);
       cmd_ids[i] = ids[i];
@@ -323,15 +327,18 @@ SVGA3D_vgpu10_SetRenderTargets(struct svga_winsys_context *swc,
                                struct pipe_surface *depth_stencil_surf)
 {
    const unsigned surf_count = color_count + 1;
+   SVGA3dCmdDXSetRenderTargets *cmd;
+   SVGA3dRenderTargetViewId *ctarget;
+   struct svga_surface *ss;
+   unsigned i;
 
    assert(surf_count > 0);
 
-   SVGA3dCmdDXSetRenderTargets *cmd =
-      SVGA3D_FIFOReserve(swc,
-                         SVGA_3D_CMD_DX_SET_RENDERTARGETS,
-                         sizeof(SVGA3dCmdDXSetRenderTargets) +
-                         color_count * sizeof(SVGA3dRenderTargetViewId),
-                         surf_count); /* 'surf_count' relocations */
+   cmd = SVGA3D_FIFOReserve(swc,
+                            SVGA_3D_CMD_DX_SET_RENDERTARGETS,
+                            sizeof(SVGA3dCmdDXSetRenderTargets) +
+                            color_count * sizeof(SVGA3dRenderTargetViewId),
+                            surf_count); /* 'surf_count' relocations */
    if (!cmd)
       return PIPE_ERROR_OUT_OF_MEMORY;
 
@@ -340,11 +347,12 @@ SVGA3D_vgpu10_SetRenderTargets(struct svga_winsys_context *swc,
 
    /* Depth / Stencil buffer */
    if (depth_stencil_surf) {
-      struct svga_surface *ss = svga_surface(depth_stencil_surf);
+      ss = svga_surface(depth_stencil_surf);
       view_relocation(swc, depth_stencil_surf, &cmd->depthStencilViewId,
                       SVGA_RELOC_WRITE);
       cmd->depthStencilViewId = ss->view_id;
-   } else {
+   }
+   else {
       /* no depth/stencil buffer - still need a relocation */
       view_relocation(swc, NULL, &cmd->depthStencilViewId,
                       SVGA_RELOC_WRITE);
@@ -352,13 +360,14 @@ SVGA3D_vgpu10_SetRenderTargets(struct svga_winsys_context *swc,
    }
 
    /* Color buffers */
-   SVGA3dRenderTargetViewId *ctarget = (SVGA3dRenderTargetViewId *) &cmd[1];
-   for (unsigned i = 0; i < color_count; i++) {
+   ctarget = (SVGA3dRenderTargetViewId *) &cmd[1];
+   for (i = 0; i < color_count; i++) {
       if (color_surfs[i]) {
-         struct svga_surface *ss = svga_surface(color_surfs[i]);
+         ss = svga_surface(color_surfs[i]);
          view_relocation(swc, color_surfs[i], ctarget + i, SVGA_RELOC_WRITE);
          ctarget[i] = ss->view_id;
-      } else {
+      }
+      else {
          view_relocation(swc, NULL, ctarget + i, SVGA_RELOC_WRITE);
          ctarget[i] = SVGA3D_INVALID_ID;
       }
@@ -384,7 +393,6 @@ SVGA3D_vgpu10_SetBlendState(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_SetDepthStencilState(struct svga_winsys_context *swc,
                                    SVGA3dDepthStencilStateId depthStencilId,
@@ -398,7 +406,6 @@ SVGA3D_vgpu10_SetDepthStencilState(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_SetRasterizerState(struct svga_winsys_context *swc,
                                  SVGA3dRasterizerStateId rasterizerId)
@@ -411,15 +418,15 @@ SVGA3D_vgpu10_SetRasterizerState(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_SetPredication(struct svga_winsys_context *swc,
                              SVGA3dQueryId queryId,
                              uint32 predicateValue)
 {
-   SVGA3dCmdDXSetPredication *cmd =
-      SVGA3D_FIFOReserve(swc, SVGA_3D_CMD_DX_SET_PREDICATION,
-                         sizeof *cmd, 0);
+   SVGA3dCmdDXSetPredication *cmd;
+
+   cmd = SVGA3D_FIFOReserve(swc, SVGA_3D_CMD_DX_SET_PREDICATION,
+                            sizeof *cmd, 0);
 
    if (!cmd)
       return PIPE_ERROR_OUT_OF_MEMORY;
@@ -430,32 +437,35 @@ SVGA3D_vgpu10_SetPredication(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_SetSOTargets(struct svga_winsys_context *swc,
                            unsigned count,
                            const SVGA3dSoTarget *targets,
                            struct svga_winsys_surface **surfaces)
 {
-   SVGA3dCmdDXSetSOTargets *cmd =
-      SVGA3D_FIFOReserve(swc,
-                         SVGA_3D_CMD_DX_SET_SOTARGETS,
-                         sizeof(SVGA3dCmdDXSetSOTargets) +
-                         count * sizeof(SVGA3dSoTarget),
-                         count);
+   SVGA3dCmdDXSetSOTargets *cmd;
+   SVGA3dSoTarget *sot;
+   unsigned i;
+
+   cmd = SVGA3D_FIFOReserve(swc,
+                            SVGA_3D_CMD_DX_SET_SOTARGETS,
+                            sizeof(SVGA3dCmdDXSetSOTargets) +
+                            count * sizeof(SVGA3dSoTarget),
+                            count);
 
    if (!cmd)
       return PIPE_ERROR_OUT_OF_MEMORY;
 
    cmd->pad0 = 0;
-   SVGA3dSoTarget *sot = (SVGA3dSoTarget *)(cmd + 1);
-   for (unsigned i = 0; i < count; i++, sot++) {
+   sot = (SVGA3dSoTarget *)(cmd + 1);
+   for (i = 0; i < count; i++, sot++) {
       if (surfaces[i]) {
          sot->offset = targets[i].offset;
          sot->sizeInBytes = targets[i].sizeInBytes;
          swc->surface_relocation(swc, &sot->sid, NULL, surfaces[i],
                                  SVGA_RELOC_WRITE);
-      } else {
+      }
+      else {
          sot->offset = 0;
          sot->sizeInBytes = ~0u;
          swc->surface_relocation(swc, &sot->sid, NULL, NULL,
@@ -466,19 +476,18 @@ SVGA3D_vgpu10_SetSOTargets(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_SetScissorRects(struct svga_winsys_context *swc,
                               unsigned count,
                               const SVGASignedRect *rects)
 {
-   assert(count > 0);
+   SVGA3dCmdDXSetScissorRects *cmd;
 
-   SVGA3dCmdDXSetScissorRects *cmd =
-      SVGA3D_FIFOReserve(swc, SVGA_3D_CMD_DX_SET_SCISSORRECTS,
-                         sizeof(SVGA3dCmdDXSetScissorRects) +
-                         count * sizeof(SVGASignedRect),
-                         0);
+   assert(count > 0);
+   cmd = SVGA3D_FIFOReserve(swc, SVGA_3D_CMD_DX_SET_SCISSORRECTS,
+                            sizeof(SVGA3dCmdDXSetScissorRects) +
+                            count * sizeof(SVGASignedRect),
+                            0);
    if (!cmd)
       return PIPE_ERROR_OUT_OF_MEMORY;
 
@@ -488,7 +497,6 @@ SVGA3D_vgpu10_SetScissorRects(struct svga_winsys_context *swc,
    swc->commit(swc);
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_SetStreamOutput(struct svga_winsys_context *swc,
@@ -501,7 +509,6 @@ SVGA3D_vgpu10_SetStreamOutput(struct svga_winsys_context *swc,
    swc->commit(swc);
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_Draw(struct svga_winsys_context *swc,
@@ -517,7 +524,6 @@ SVGA3D_vgpu10_Draw(struct svga_winsys_context *swc,
    swc->num_draw_commands++;
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_DrawIndexed(struct svga_winsys_context *swc,
@@ -536,7 +542,6 @@ SVGA3D_vgpu10_DrawIndexed(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_DrawInstanced(struct svga_winsys_context *swc,
                             uint32 vertexCountPerInstance,
@@ -554,7 +559,6 @@ SVGA3D_vgpu10_DrawInstanced(struct svga_winsys_context *swc,
    swc->num_draw_commands++;
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_DrawIndexedInstanced(struct svga_winsys_context *swc,
@@ -577,7 +581,6 @@ SVGA3D_vgpu10_DrawIndexedInstanced(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_DrawAuto(struct svga_winsys_context *swc)
 {
@@ -589,7 +592,6 @@ SVGA3D_vgpu10_DrawAuto(struct svga_winsys_context *swc)
    swc->num_draw_commands++;
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_DefineQuery(struct svga_winsys_context *swc,
@@ -605,7 +607,6 @@ SVGA3D_vgpu10_DefineQuery(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_DestroyQuery(struct svga_winsys_context *swc,
                            SVGA3dQueryId queryId)
@@ -617,7 +618,6 @@ SVGA3D_vgpu10_DestroyQuery(struct svga_winsys_context *swc,
    swc->commit(swc);
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_BindQuery(struct svga_winsys_context *swc,
@@ -638,7 +638,6 @@ SVGA3D_vgpu10_BindQuery(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_SetQueryOffset(struct svga_winsys_context *swc,
                              SVGA3dQueryId queryId,
@@ -650,7 +649,6 @@ SVGA3D_vgpu10_SetQueryOffset(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_BeginQuery(struct svga_winsys_context *swc,
                          SVGA3dQueryId queryId)
@@ -660,7 +658,6 @@ SVGA3D_vgpu10_BeginQuery(struct svga_winsys_context *swc,
    swc->commit(swc);
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_EndQuery(struct svga_winsys_context *swc,
@@ -706,7 +703,6 @@ SVGA3D_vgpu10_ClearDepthStencilView(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_DefineShaderResourceView(struct svga_winsys_context *swc,
                              SVGA3dShaderResourceViewId shaderResourceViewId,
@@ -733,7 +729,6 @@ SVGA3D_vgpu10_DefineShaderResourceView(struct svga_winsys_context *swc,
    swc->commit(swc);
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_DestroyShaderResourceView(struct svga_winsys_context *swc,
@@ -775,7 +770,6 @@ SVGA3D_vgpu10_DefineRenderTargetView(struct svga_winsys_context *swc,
    swc->commit(swc);
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_DestroyRenderTargetView(struct svga_winsys_context *swc,
@@ -822,7 +816,6 @@ SVGA3D_vgpu10_DefineDepthStencilView(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_DestroyDepthStencilView(struct svga_winsys_context *swc,
                                  SVGA3dDepthStencilViewId depthStencilViewId)
@@ -834,7 +827,6 @@ SVGA3D_vgpu10_DestroyDepthStencilView(struct svga_winsys_context *swc,
    swc->commit(swc);
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_DefineElementLayout(struct svga_winsys_context *swc,
@@ -857,7 +849,6 @@ SVGA3D_vgpu10_DefineElementLayout(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_DestroyElementLayout(struct svga_winsys_context *swc,
                                    SVGA3dElementLayoutId elementLayoutId)
@@ -870,7 +861,6 @@ SVGA3D_vgpu10_DestroyElementLayout(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_DefineBlendState(struct svga_winsys_context *swc,
                                SVGA3dBlendStateId blendId,
@@ -878,9 +868,11 @@ SVGA3D_vgpu10_DefineBlendState(struct svga_winsys_context *swc,
                                uint8 independentBlendEnable,
                                const SVGA3dDXBlendStatePerRT *perRT)
 {
+   int i;
+
    SVGA3D_CREATE_COMMAND(DefineBlendState, DEFINE_BLEND_STATE);
 
-   for (unsigned i = 0; i < SVGA3D_DX_MAX_RENDER_TARGETS; i++) {
+   for (i = 0; i < SVGA3D_DX_MAX_RENDER_TARGETS; i++) {
       /* At most, one of blend or logicop can be enabled */
       assert(perRT[i].blendEnable == 0 || perRT[i].logicOpEnable == 0);
    }
@@ -895,7 +887,6 @@ SVGA3D_vgpu10_DefineBlendState(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_DestroyBlendState(struct svga_winsys_context *swc,
                                 SVGA3dBlendStateId blendId)
@@ -907,7 +898,6 @@ SVGA3D_vgpu10_DestroyBlendState(struct svga_winsys_context *swc,
    swc->commit(swc);
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_DefineDepthStencilState(struct svga_winsys_context *swc,
@@ -945,7 +935,6 @@ SVGA3D_vgpu10_DefineDepthStencilState(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_DestroyDepthStencilState(struct svga_winsys_context *swc,
                                     SVGA3dDepthStencilStateId depthStencilId)
@@ -958,7 +947,6 @@ SVGA3D_vgpu10_DestroyDepthStencilState(struct svga_winsys_context *swc,
    swc->commit(swc);
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_DefineRasterizerState(struct svga_winsys_context *swc,
@@ -997,7 +985,6 @@ SVGA3D_vgpu10_DefineRasterizerState(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_DestroyRasterizerState(struct svga_winsys_context *swc,
                                      SVGA3dRasterizerStateId rasterizerId)
@@ -1009,7 +996,6 @@ SVGA3D_vgpu10_DestroyRasterizerState(struct svga_winsys_context *swc,
    swc->commit(swc);
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_DefineSamplerState(struct svga_winsys_context *swc,
@@ -1040,7 +1026,6 @@ SVGA3D_vgpu10_DefineSamplerState(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_DestroySamplerState(struct svga_winsys_context *swc,
                                   SVGA3dSamplerId samplerId)
@@ -1064,8 +1049,8 @@ SVGA3D_vgpu10_DefineAndBindShader(struct svga_winsys_context *swc,
    SVGA3dCmdHeader *header;
    SVGA3dCmdDXDefineShader *dcmd;
    SVGA3dCmdDXBindShader *bcmd;
-   const unsigned totalSize =
-      2 * sizeof(*header) + sizeof(*dcmd) + sizeof(*bcmd);
+   unsigned totalSize = 2 * sizeof(*header) +
+                        sizeof(*dcmd) + sizeof(*bcmd);
 
    /* Make sure there is room for both commands */
    header = swc->reserve(swc, totalSize, 2);
@@ -1097,7 +1082,6 @@ SVGA3D_vgpu10_DefineAndBindShader(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_DestroyShader(struct svga_winsys_context *swc,
                             SVGA3dShaderId shaderId)
@@ -1110,7 +1094,6 @@ SVGA3D_vgpu10_DestroyShader(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_DefineStreamOutput(struct svga_winsys_context *swc,
        SVGA3dStreamOutputId soid,
@@ -1118,12 +1101,13 @@ SVGA3D_vgpu10_DefineStreamOutput(struct svga_winsys_context *swc,
        uint32 streamOutputStrideInBytes[SVGA3D_DX_MAX_SOTARGETS],
        const SVGA3dStreamOutputDeclarationEntry decl[SVGA3D_MAX_STREAMOUT_DECLS])
 {
+   unsigned i;
    SVGA3D_CREATE_COMMAND(DefineStreamOutput, DEFINE_STREAMOUTPUT);
 
    cmd->soid = soid;
    cmd->numOutputStreamEntries = numOutputStreamEntries;
 
-   for (unsigned i = 0; i < ARRAY_SIZE(cmd->streamOutputStrideInBytes); i++)
+   for (i = 0; i < ARRAY_SIZE(cmd->streamOutputStrideInBytes); i++)
       cmd->streamOutputStrideInBytes[i] = streamOutputStrideInBytes[i];
 
    memcpy(cmd->decl, decl,
@@ -1134,7 +1118,6 @@ SVGA3D_vgpu10_DefineStreamOutput(struct svga_winsys_context *swc,
    swc->commit(swc);
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_DestroyStreamOutput(struct svga_winsys_context *swc,
@@ -1148,7 +1131,6 @@ SVGA3D_vgpu10_DestroyStreamOutput(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_SetInputLayout(struct svga_winsys_context *swc,
                              SVGA3dElementLayoutId elementLayoutId)
@@ -1161,7 +1143,6 @@ SVGA3D_vgpu10_SetInputLayout(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_SetVertexBuffers(struct svga_winsys_context *swc,
                                unsigned count,
@@ -1171,6 +1152,7 @@ SVGA3D_vgpu10_SetVertexBuffers(struct svga_winsys_context *swc,
 {
    SVGA3dCmdDXSetVertexBuffers *cmd;
    SVGA3dVertexBuffer *bufs;
+   unsigned i;
 
    assert(count > 0);
 
@@ -1184,7 +1166,7 @@ SVGA3D_vgpu10_SetVertexBuffers(struct svga_winsys_context *swc,
    cmd->startBuffer = startBuffer;
 
    bufs = (SVGA3dVertexBuffer *) &cmd[1];
-   for (unsigned i = 0; i < count; i++) {
+   for (i = 0; i < count; i++) {
       bufs[i].stride = bufferInfo[i].stride;
       bufs[i].offset = bufferInfo[i].offset;
       swc->surface_relocation(swc, &bufs[i].sid, NULL, surfaces[i],
@@ -1195,7 +1177,6 @@ SVGA3D_vgpu10_SetVertexBuffers(struct svga_winsys_context *swc,
    return PIPE_OK;
 }
 
-
 enum pipe_error
 SVGA3D_vgpu10_SetVertexBuffersOffsetAndSize(struct svga_winsys_context *swc,
                            unsigned count,
@@ -1204,6 +1185,7 @@ SVGA3D_vgpu10_SetVertexBuffersOffsetAndSize(struct svga_winsys_context *swc,
 {
    SVGA3dCmdDXSetVertexBuffersOffsetAndSize *cmd;
    SVGA3dVertexBufferOffsetAndSize *bufs;
+   unsigned i;
 
    assert(count > 0);
 
@@ -1218,7 +1200,7 @@ SVGA3D_vgpu10_SetVertexBuffersOffsetAndSize(struct svga_winsys_context *swc,
    cmd->startBuffer = startBuffer;
 
    bufs = (SVGA3dVertexBufferOffsetAndSize *) &cmd[1];
-   for (unsigned i = 0; i < count; i++) {
+   for (i = 0; i < count; i++) {
       bufs[i].stride = bufferInfo[i].stride;
       bufs[i].offset = bufferInfo[i].offset;
       bufs[i].sizeInBytes = bufferInfo[i].sizeInBytes;
@@ -1227,7 +1209,6 @@ SVGA3D_vgpu10_SetVertexBuffersOffsetAndSize(struct svga_winsys_context *swc,
    swc->commit(swc);
    return PIPE_OK;
 }
-
 
 enum pipe_error
 SVGA3D_vgpu10_SetTopology(struct svga_winsys_context *swc,
@@ -1462,7 +1443,7 @@ SVGA3D_vgpu10_TransferFromBuffer(struct svga_winsys_context *swc,
                                  SVGA3dBox *dstBox)
 {
    SVGA3dCmdDXTransferFromBuffer *cmd;
-
+ 
    cmd = SVGA3D_FIFOReserve(swc, SVGA_3D_CMD_DX_TRANSFER_FROM_BUFFER,
                             sizeof(SVGA3dCmdDXTransferFromBuffer), 2);
 
@@ -1476,7 +1457,7 @@ SVGA3D_vgpu10_TransferFromBuffer(struct svga_winsys_context *swc,
    cmd->srcSlicePitch = srcSlicePitch;
    cmd->destSubResource = dstSubResource;
    cmd->destBox = *dstBox;
-
+ 
    swc->commit(swc);
    return PIPE_OK;
 }
@@ -1627,6 +1608,7 @@ SVGA3D_sm5_SetUAViews(struct svga_winsys_context *swc,
 {
    SVGA3dCmdDXSetUAViews *cmd;
    SVGA3dUAViewId *cmd_uavIds;
+   unsigned i;
 
    cmd = SVGA3D_FIFOReserve(swc,
                             SVGA_3D_CMD_DX_SET_UA_VIEWS,
@@ -1639,7 +1621,7 @@ SVGA3D_sm5_SetUAViews(struct svga_winsys_context *swc,
    cmd->uavSpliceIndex = uavSpliceIndex;
    cmd_uavIds = (SVGA3dUAViewId *) (cmd + 1);
 
-   for (unsigned i = 0; i < count; i++, cmd_uavIds++) {
+   for (i = 0; i < count; i++, cmd_uavIds++) {
       swc->surface_relocation(swc, cmd_uavIds, NULL,
                               uaViews[i],
                               SVGA_RELOC_READ | SVGA_RELOC_WRITE);
@@ -1704,6 +1686,7 @@ SVGA3D_sm5_SetCSUAViews(struct svga_winsys_context *swc,
 {
    SVGA3dCmdDXSetCSUAViews *cmd;
    SVGA3dUAViewId *cmd_uavIds;
+   unsigned i;
 
    cmd = SVGA3D_FIFOReserve(swc,
                             SVGA_3D_CMD_DX_SET_CS_UA_VIEWS,
@@ -1716,7 +1699,7 @@ SVGA3D_sm5_SetCSUAViews(struct svga_winsys_context *swc,
    cmd->startIndex = 0;
    cmd_uavIds = (SVGA3dUAViewId *) (cmd + 1);
 
-   for (unsigned i = 0; i < count; i++, cmd_uavIds++) {
+   for (i = 0; i < count; i++, cmd_uavIds++) {
       swc->surface_relocation(swc, cmd_uavIds, NULL,
                               uaViews[i],
                               SVGA_RELOC_READ | SVGA_RELOC_WRITE);
@@ -1744,6 +1727,7 @@ SVGA3D_sm5_DefineAndBindStreamOutput(struct svga_winsys_context *swc,
        uint32 rasterizedStream,
        uint32 sizeInBytes)
 {
+   unsigned i;
    SVGA3dCmdHeader *header;
    SVGA3dCmdDXDefineStreamOutputWithMob *dcmd;
    SVGA3dCmdDXBindStreamOutput *bcmd;
@@ -1765,7 +1749,7 @@ SVGA3D_sm5_DefineAndBindStreamOutput(struct svga_winsys_context *swc,
    dcmd->numOutputStreamStrides = numOutputStreamStrides;
    dcmd->rasterizedStream = rasterizedStream;
 
-   for (unsigned i = 0; i < ARRAY_SIZE(dcmd->streamOutputStrideInBytes); i++)
+   for (i = 0; i < ARRAY_SIZE(dcmd->streamOutputStrideInBytes); i++)
       dcmd->streamOutputStrideInBytes[i] = streamOutputStrideInBytes[i];
 
 
@@ -1847,7 +1831,7 @@ SVGA3D_DefineGBSurface_v2(struct svga_winsys_context *swc,
                          sizeof(*cmd),
                          0);
 
-   if (!cmd)
+   if(!cmd)
       return PIPE_ERROR_OUT_OF_MEMORY;
 
    cmd->sid = sid;
@@ -1883,7 +1867,7 @@ SVGA3D_DefineGBSurface_v3(struct svga_winsys_context *swc,
                          sizeof(*cmd),
                          0);
 
-   if (!cmd)
+   if(!cmd)
       return PIPE_ERROR_OUT_OF_MEMORY;
 
    cmd->sid = sid;
@@ -1922,7 +1906,7 @@ SVGA3D_DefineGBSurface_v4(struct svga_winsys_context *swc,
                          sizeof(*cmd),
                          0);
 
-   if (!cmd)
+   if(!cmd)
       return PIPE_ERROR_OUT_OF_MEMORY;
 
    cmd->sid = sid;
@@ -1952,7 +1936,7 @@ SVGA3D_DestroyGBSurface(struct svga_winsys_context *swc,
                          sizeof(*cmd),
                          0);
 
-   if (!cmd)
+   if(!cmd)
       return PIPE_ERROR_OUT_OF_MEMORY;
 
    cmd->sid = sid;

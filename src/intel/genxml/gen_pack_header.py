@@ -72,13 +72,8 @@ class Field(object):
         self.parser = parser
         if "name" in attrs:
             self.name = safe_name(attrs["name"])
-
-        dword = int(attrs["dword"])
-        end_bit, start_bit = map(int, attrs["bits"].split(":"))
-
-        self.start = dword * 32 + start_bit
-        self.end = dword * 32 + end_bit
-
+        self.start = int(attrs["start"])
+        self.end = int(attrs["end"])
         self.type = attrs["type"]
         self.nonzero = bool_from_str(attrs.get("nonzero", "false"))
         self.prefix = attrs["prefix"] if "prefix" in attrs else None
@@ -463,13 +458,8 @@ class Parser(object):
             self.group = Group(self, None, 0, 1, size)
 
         elif name == "group":
-            dword = int(attrs["dword"])
-            offset_bits = int(attrs.get("offset_bits", 0))
-            start = dword * 32 + offset_bits
-
-
             group = Group(self, self.group,
-                          start, int(attrs["count"]), int(attrs["size"]))
+                          int(attrs["start"]), int(attrs["count"]), int(attrs["size"]))
             self.group.fields.append(group)
             self.group = group
         elif name == "field":
@@ -665,7 +655,7 @@ def main():
     pargs = parse_args()
 
     engines = set(pargs.engines.split(','))
-    valid_engines = [ 'render', 'blitter', 'video', 'compute' ]
+    valid_engines = [ 'render', 'blitter', 'video' ]
     if engines - set(valid_engines):
         print("Invalid engine specified, valid engines are:\n")
         for e in valid_engines:

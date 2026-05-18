@@ -1,8 +1,6 @@
 # Copyright © 2017 Dylan Baker
 # SPDX-License-Identifier: MIT
 
-subdir('codegen')
-
 files_libnouveau = files(
   'nouveau_buffer.c',
   'nouveau_buffer.h',
@@ -110,6 +108,7 @@ files_libnouveau = files(
   'nvc0/cla0c0qmd.h',
   'nvc0/clc0c0qmd.h',
   'nvc0/clc3c0qmd.h',
+  'nvc0/drf.h',
   'nvc0/qmd.h',
   'nvc0/qmda0c0.c',
   'nvc0/qmdc0c0.c',
@@ -166,7 +165,7 @@ libnouveau = static_library(
   'nouveau',
   [files_libnouveau, sha1_h],
   include_directories : [
-    inc_src, inc_include, inc_gallium, inc_gallium_aux,
+    inc_src, inc_include, inc_gallium, inc_gallium_aux, inc_mapi, inc_mesa,
   ],
   gnu_symbol_visibility : 'hidden',
   link_with : [libnouveauwinsys],

@@ -29,14 +29,13 @@ you're willing to maintain support for other compiler get in touch.
 
 - GCC 8.0.0 or later (some parts of Mesa may require later versions)
 - Clang 5.0 or later (some parts of Mesa may require later versions)
-- Microsoft Visual C++ compiler
-  - Windows SDK of at least 20348 is required
-  - Visual Studio 2022 version 17.9 or later for (ARM, AARCH64, ARM64EC, X86, X64)
+- Microsoft Visual Studio 2019 Version 16.11 or later and
+  Windows SDK of at least 20348 is required, for building on Windows.
 
 Third party/extra tools.
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-- `Python <https://www.python.org/>`__ - Python 3.9 or newer is required.
+- `Python <https://www.python.org/>`__ - Python 3.6 or newer is required.
 - Python package ``packaging`` is required on Python 3.12+:
   ``pip install packaging``
 - `Python Mako module <https://www.makotemplates.org/>`__ - Python Mako
@@ -67,7 +66,7 @@ Check/install the respective development package as prompted by the
 configure error message.
 
 Here are some common ways to retrieve most/all of the dependencies based
-on the packaging tool used by your distribution.
+on the packaging tool used by your distro.
 
 .. code-block:: sh
 
@@ -77,7 +76,7 @@ on the packaging tool used by your distribution.
      apt-get build-dep mesa # Debian and derivatives
      ... # others
 
-2. Building with meson
+1. Building with meson
 ----------------------
 
 Meson is the latest build system in mesa, it is currently able to build
@@ -102,7 +101,7 @@ On Windows you can also use the Visual Studio backend
 Please read the :doc:`detailed meson instructions <meson>` for more
 information
 
-3. Running against a local build (easy way)
+1. Running against a local build (easy way)
 -------------------------------------------
 
 It's often necessary or useful when debugging driver issues or testing new
@@ -117,7 +116,7 @@ This will run the given command against the build in ``builddir``. Note that mes
 will ``chdir`` into the directory first, so any relative paths in the command line
 will be relative to ``builddir`` which may not be what you expect.
 
-4. Running against a local build (hard way)
+1. Running against a local build (hard way)
 -------------------------------------------
 
 If you prefer you can configure your test environment manually. To do this,
@@ -139,7 +138,7 @@ like this:
 .. code-block:: sh
 
    meson setup builddir/ -Dprefix="$MESA_INSTALLDIR" \
-      -Dgallium-drivers=llvmpipe -Dvulkan-drivers=swrast
+      -Dgallium-drivers=swrast -Dvulkan-drivers=swrast
    meson install -C builddir/
 
 Once Mesa has built and installed to ``$MESA_INSTALLDIR``, you can run any app
@@ -162,7 +161,7 @@ Vulkan
 
 .. code-block:: sh
 
-   VK_DRIVER_FILES="$MESA_INSTALLDIR/share/vulkan/icd.d/my_icd.json" vulkaninfo
+   VK_DRIVER_FILES="$MESA_INSTALLDIR/share/vulkan/icd/my_icd.json" vulkaninfo
 
 where ``my_icd.json`` is replaced with the actual ICD json file name.  This
 will depend on your driver.  For instance, the 64-bit Lavapipe driver ICD file
@@ -201,12 +200,12 @@ here are a few things to check:
     recently built 64-bit and are now building 32-bit, throw away the install
     directory first to prevent conflicts.
 
-5. Building with AOSP (Android)
+1. Building with AOSP (Android)
 -------------------------------
 
-See :doc:`detailed Android instructions <android>`.
+<TODO>
 
-6. Library Information
+1. Library Information
 ----------------------
 
 When compilation has finished, look in the top-level ``lib/`` (or
@@ -218,8 +217,12 @@ this:
    lrwxrwxrwx    1 brian    users          10 Mar 26 07:53 libGL.so -> libGL.so.1*
    lrwxrwxrwx    1 brian    users          19 Mar 26 07:53 libGL.so.1 -> libGL.so.1.5.060100*
    -rwxr-xr-x    1 brian    users     3375861 Mar 26 07:53 libGL.so.1.5.060100*
+   lrwxrwxrwx    1 brian    users          14 Mar 26 07:53 libOSMesa.so -> libOSMesa.so.6*
+   lrwxrwxrwx    1 brian    users          23 Mar 26 07:53 libOSMesa.so.6 -> libOSMesa.so.6.1.060100*
+   -rwxr-xr-x    1 brian    users       23871 Mar 26 07:53 libOSMesa.so.6.1.060100*
 
-**libGL** is the main OpenGL library (i.e. Mesa).
+**libGL** is the main OpenGL library (i.e. Mesa), while **libOSMesa** is
+the OSMesa (Off-Screen) interface library.
 
 If you built the DRI hardware drivers, you'll also see the DRI drivers:
 
@@ -233,7 +236,7 @@ If you built the DRI hardware drivers, you'll also see the DRI drivers:
 If you built with Gallium support, look in lib/gallium/ for
 Gallium-based versions of libGL and device drivers.
 
-7. Building OpenGL programs with pkg-config
+1. Building OpenGL programs with pkg-config
 -------------------------------------------
 
 Running ``meson install`` will install package configuration files for

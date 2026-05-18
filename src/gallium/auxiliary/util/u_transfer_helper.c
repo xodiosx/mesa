@@ -376,7 +376,7 @@ u_transfer_helper_transfer_map(struct pipe_context *pctx,
                                                 width, height);
             break;
          default:
-            UNREACHABLE("Unexpected format");
+            unreachable("Unexpected format");
          }
       }
    } else if (prsc->format == PIPE_FORMAT_Z24X8_UNORM) {
@@ -385,7 +385,7 @@ u_transfer_helper_transfer_map(struct pipe_context *pctx,
                                               trans->ptr, trans->trans->stride,
                                               width, height);
    } else {
-      UNREACHABLE("bleh");
+      unreachable("bleh");
    }
 
    *pptrans = ptrans;

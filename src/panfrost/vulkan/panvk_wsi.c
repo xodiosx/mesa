@@ -1,6 +1,5 @@
 /*
  * Copyright © 2021 Collabora Ltd.
- * Copyright © 2025 Arm Ltd.
  *
  * Derived from tu_wsi.c:
  * Copyright © 2016 Red Hat
@@ -42,17 +41,6 @@ panvk_wsi_proc_addr(VkPhysicalDevice physicalDevice, const char *pName)
    return vk_instance_get_proc_addr_unchecked(&instance->vk, pName);
 }
 
-static bool
-panvk_can_present_on_device(VkPhysicalDevice pdevice, int fd)
-{
-   drmDevicePtr device;
-   if (drmGetDevice2(fd, 0, &device) != 0)
-      return false;
-   /* Allow on-device presentation for all devices with bus type PLATFORM.
-    * Other device types such as PCI or USB should use the PRIME blit path. */
-   return device->bustype == DRM_BUS_PLATFORM;
-}
-
 VkResult
 panvk_wsi_init(struct panvk_physical_device *physical_device)
 {
@@ -62,15 +50,12 @@ panvk_wsi_init(struct panvk_physical_device *physical_device)
 
    result = wsi_device_init(&physical_device->wsi_device,
                             panvk_physical_device_to_handle(physical_device),
-                            panvk_wsi_proc_addr, &instance->vk.alloc, -1,
-                            &instance->dri_options,
+                            panvk_wsi_proc_addr, &instance->vk.alloc, -1, NULL,
                             &(struct wsi_device_options){.sw_device = false});
    if (result != VK_SUCCESS)
       return result;
 
    physical_device->wsi_device.supports_modifiers = true;
-   physical_device->wsi_device.can_present_on_device =
-      panvk_can_present_on_device;
 
    physical_device->vk.wsi_device = &physical_device->wsi_device;
 

@@ -76,7 +76,7 @@ vk_texcompress_etc2_image_view_type(VkImageType image_type)
    case VK_IMAGE_TYPE_3D:
       return VK_IMAGE_VIEW_TYPE_3D;
    default:
-      UNREACHABLE("bad image type");
+      unreachable("bad image type");
    }
 }
 

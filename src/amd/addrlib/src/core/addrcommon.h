@@ -1,7 +1,7 @@
 /*
 ************************************************************************************************************************
 *
-*  Copyright (C) 2007-2024 Advanced Micro Devices, Inc. All rights reserved.
+*  Copyright (C) 2007-2022 Advanced Micro Devices, Inc.  All rights reserved.
 *  SPDX-License-Identifier: MIT
 *
 ***********************************************************************************************************************/
@@ -17,7 +17,6 @@
 #define __ADDR_COMMON_H__
 
 #include "addrinterface.h"
-#include <stdint.h>
 
 
 #if !defined(__APPLE__) || defined(HAVE_TSERVER)
@@ -27,6 +26,7 @@
 
 #if defined(__GNUC__)
     #include <signal.h>
+    #include <assert.h>
 #endif
 
 #if defined(_WIN32)
@@ -36,15 +36,21 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Platform specific debug break defines
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+#if !defined(DEBUG)
+    #ifdef NDEBUG
+        #define DEBUG 0
+    #else
+        #define DEBUG 1
+    #endif
+#endif
+
 #if DEBUG
-    #if defined(_WIN32)
-        #define ADDR_DBG_BREAK()    { __debugbreak(); }
-    #elif defined(__GNUC__)
-        #define ADDR_DBG_BREAK()    { raise(SIGTRAP); }
+    #if defined(__GNUC__)
+        #define ADDR_DBG_BREAK()    { assert(false); }
     #elif defined(__APPLE__)
         #define ADDR_DBG_BREAK()    { IOPanic("");}
     #else
-        #define ADDR_DBG_BREAK()
+        #define ADDR_DBG_BREAK()    { __debugbreak(); }
     #endif
 #else
     #define ADDR_DBG_BREAK()
@@ -188,17 +194,17 @@ do { if (!(cond))                                           \
 #if defined(static_assert)
 #define ADDR_C_ASSERT(__e) static_assert(__e, "")
 #else
-#define ADDR_C_ASSERT(__e) typedef char __ADDR_C_ASSERT__[(__e) ? 1 : -1]
+   /* This version of STATIC_ASSERT() relies on VLAs.  If COND is
+    * false/zero, the array size will be -1 and we'll get a compile
+    * error
+    */
+#  define ADDR_C_ASSERT(__e) do {         \
+      (void) sizeof(char [1 - 2*!(__e)]); \
+   } while (0)
 #endif
 
 namespace Addr
 {
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// Common constants
-////////////////////////////////////////////////////////////////////////////////////////////////////
-static const UINT_32 MaxElementBytesLog2 = 5; ///< Max number of bpp (8bpp/16bpp/32bpp/64bpp/128bpp)
-
 
 namespace V1
 {
@@ -349,13 +355,13 @@ static inline UINT_32 UnsetLeastBit(
 
 /**
 ****************************************************************************************************
-*   BitMaskScanForward
+*   BitScanForward
 *
 *   @brief
 *       Returns the index-position of the least-significant '1' bit. Must not be 0.
 ****************************************************************************************************
 */
-static inline UINT_32 BitMaskScanForward(
+static inline UINT_32 BitScanForward(
     UINT_32 mask) ///< [in] Bitmask to scan
 {
     ADDR_ASSERT(mask > 0);
@@ -372,36 +378,6 @@ static inline UINT_32 BitMaskScanForward(
         mask >>= 1;
         out++;
     }
-#endif
-    return out;
-}
-
-/**
-****************************************************************************************************
-*   BitMaskScanReverse
-*
-*   @brief
-*       Returns the reverse-position of the most-significant '1' bit. Must not be 0.
-****************************************************************************************************
-*/
-static inline UINT_32 BitMaskScanReverse(
-    UINT_32 mask) ///< [in] Bitmask to scan
-{
-    ADDR_ASSERT(mask > 0);
-    unsigned long out = 0;
-#if (defined(_WIN32) || defined(_WIN64))
-    ::_BitScanReverse(&out, mask);
-    out ^= 31;
-#elif defined(__GNUC__)
-    out = __builtin_clz(mask);
-#else
-    out = 32;
-    while (mask != 0)
-    {
-        mask >>= 1;
-        out++;
-    }
-    out = sizeof(mask) * 8 - out;
 #endif
     return out;
 }
@@ -438,10 +414,10 @@ static inline UINT_64 IsPow2(
 
 /**
 ****************************************************************************************************
-*   PowTwoAlign
+*   ByteAlign
 *
 *   @brief
-*       Align UINT_32 "x" up to "align" alignment, "align" should be power of 2
+*       Align UINT_32 "x" to "align" alignment, "align" should be power of 2
 ****************************************************************************************************
 */
 static inline UINT_32 PowTwoAlign(
@@ -457,10 +433,10 @@ static inline UINT_32 PowTwoAlign(
 
 /**
 ****************************************************************************************************
-*   PowTwoAlign
+*   ByteAlign
 *
 *   @brief
-*       Align UINT_64 "x" up to "align" alignment, "align" should be power of 2
+*       Align UINT_64 "x" to "align" alignment, "align" should be power of 2
 ****************************************************************************************************
 */
 static inline UINT_64 PowTwoAlign(
@@ -472,44 +448,6 @@ static inline UINT_64 PowTwoAlign(
     //
     ADDR_ASSERT(IsPow2(align));
     return (x + (align - 1)) & (~(align - 1));
-}
-
-/**
-****************************************************************************************************
-*   PowTwoAlignDown
-*
-*   @brief
-*       Align UINT_32 "x" down to "align" alignment, "align" should be power of 2
-****************************************************************************************************
-*/
-static inline UINT_32 PowTwoAlignDown(
-    UINT_32 x,
-    UINT_32 align)
-{
-    //
-    // Assert that x is a power of two.
-    //
-    ADDR_ASSERT(IsPow2(align));
-    return (x & ~(align - 1));
-}
-
-/**
-****************************************************************************************************
-*   PowTwoAlignDown
-*
-*   @brief
-*       Align UINT_64 "x" down to "align" alignment, "align" should be power of 2
-****************************************************************************************************
-*/
-static inline UINT_64 PowTwoAlignDown(
-    UINT_64 x,
-    UINT_64 align)
-{
-    //
-    // Assert that x is a power of two.
-    //
-    ADDR_ASSERT(IsPow2(align));
-    return (x & ~(align - 1));
 }
 
 /**
@@ -635,16 +573,42 @@ static inline UINT_32 NextPow2(
 
 /**
 ****************************************************************************************************
+*   Log2NonPow2
+*
+*   @brief
+*       Compute log of base 2 no matter the target is power of 2 or not
+****************************************************************************************************
+*/
+static inline UINT_32 Log2NonPow2(
+    UINT_32 x)      ///< [in] the value should calculate log based 2
+{
+    UINT_32 y;
+
+    y = 0;
+    while (x > 1)
+    {
+        x >>= 1;
+        y++;
+    }
+
+    return y;
+}
+
+/**
+****************************************************************************************************
 *   Log2
 *
 *   @brief
-*       Compute log of base 2 no matter the target is power of 2 or not. Returns 0 if 0.
+*       Compute log of base 2
 ****************************************************************************************************
 */
 static inline UINT_32 Log2(
     UINT_32 x)      ///< [in] the value should calculate log based 2
 {
-    return (x != 0) ? (31 ^ BitMaskScanReverse(x)) : 0;
+    // Assert that x is a power of two.
+    ADDR_ASSERT(IsPow2(x));
+
+    return Log2NonPow2(x);
 }
 
 /**
@@ -1115,72 +1079,6 @@ static inline UINT_32 ShiftRight(
     UINT_32 b)  ///< [in] number of bits to shift
 {
     return Max(a >> b, 1u);
-}
-
-/**
-****************************************************************************************************
-*   VoidPtrDec
-*
-*   @brief
-*       Subtracts a value to the given pointer directly.
-****************************************************************************************************
-*/
-static inline void* VoidPtrDec(
-    void*  pIn,
-    size_t offset)
-{
-    return (void*)(((char*)(pIn)) - offset);
-}
-
-static inline const void* VoidPtrDec(
-    const void* pIn,
-    size_t      offset)
-{
-    return (const void*)(((const char*)(pIn)) - offset);
-}
-
-/**
-****************************************************************************************************
-*   VoidPtrInc
-*
-*   @brief
-*       Adds a value to the given pointer directly.
-****************************************************************************************************
-*/
-static inline void* VoidPtrInc(
-    void*  pIn,
-    size_t offset)
-{
-    return (void*)(((char*)(pIn)) + offset);
-}
-
-static inline const void* VoidPtrInc(
-    const void* pIn,
-    size_t      offset)
-{
-    return (const void*)(((const char*)(pIn)) + offset);
-}
-
-/**
-****************************************************************************************************
-*   VoidPtrXor
-*
-*   @brief
-*       Xors a value to the given pointer directly.
-****************************************************************************************************
-*/
-static inline void* VoidPtrXor(
-    void*  pIn,
-    size_t offset)
-{
-    return (void*)(((uintptr_t)(pIn)) ^ offset);
-}
-
-static inline const void* VoidPtrXor(
-    const void* pIn,
-    size_t      offset)
-{
-    return (const void*)(((uintptr_t)(pIn)) ^ offset);
 }
 
 } // Addr

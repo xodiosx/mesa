@@ -1515,7 +1515,6 @@ BEGIN_TEST(insert_nops.valu_read_sgpr.basic)
    bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(exec_lo, s1));
    bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(m0, s1));
    bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(scc, s1));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(vcc, s1));
 
    /* no hazard: SALU write missing */
    //>> p_unit_test 0
@@ -1674,86 +1673,6 @@ BEGIN_TEST(insert_nops.valu_read_sgpr.basic)
    bld.sopp(aco_opcode::s_nop, 0);
    bld.sop1(aco_opcode::s_mov_b32, Definition(PhysReg(64), s1), Operand(PhysReg(4), s1));
 
-   /* VALU -> VALU non-VCC SGPR */
-   //! p_unit_test 17
-   //! s1: %0:s[4] = v_readfirstlane_b32 %0:v[0]
-   //! s_waitcnt_depctr va_sdst(0)
-   //! v1: %0:v[0] = v_mov_b32 %0:s[4]
-   bld.pseudo(aco_opcode::p_unit_test, Operand::c32(17));
-   bld.vop1(aco_opcode::v_readfirstlane_b32, Definition(PhysReg(4), s1), Operand(PhysReg(256), v1));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(PhysReg(4), s1));
-
-   /* VALU -> VALU VCC SGPR */
-   //! p_unit_test 18
-   //! s1: %0:vcc_hi = v_readfirstlane_b32 %0:v[0]
-   //! s_waitcnt_depctr va_vcc(0)
-   //! v1: %0:v[0] = v_mov_b32 %0:vcc_hi
-   bld.pseudo(aco_opcode::p_unit_test, Operand::c32(18));
-   bld.vop1(aco_opcode::v_readfirstlane_b32, Definition(vcc_hi, s1), Operand(PhysReg(256), v1));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(vcc_hi, s1));
-
-   /* va_sdst=0 from SALU reading an SGPR: hazard mitigated */
-   //! p_unit_test 19
-   //! s1: %0:s[4] = v_readfirstlane_b32 %0:v[0]
-   //! s1: %0:s[64] = s_mov_b32 %0:s[6]
-   //! v1: %0:v[0] = v_mov_b32 %0:s[4]
-   bld.pseudo(aco_opcode::p_unit_test, Operand::c32(19));
-   bld.vop1(aco_opcode::v_readfirstlane_b32, Definition(PhysReg(4), s1), Operand(PhysReg(256), v1));
-   bld.sop1(aco_opcode::s_mov_b32, Definition(PhysReg(64), s1), Operand(PhysReg(6), s1));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(PhysReg(4), s1));
-
-   /* va_vcc=0 from SALU reading VCC: hazard mitigated */
-   //! p_unit_test 20
-   //! s1: %0:vcc_hi = v_readfirstlane_b32 %0:v[0]
-   //! s1: %0:s[64] = s_mov_b32 %0:vcc_lo
-   //! v1: %0:v[0] = v_mov_b32 %0:vcc_hi
-   bld.pseudo(aco_opcode::p_unit_test, Operand::c32(20));
-   bld.vop1(aco_opcode::v_readfirstlane_b32, Definition(vcc_hi, s1), Operand(PhysReg(256), v1));
-   bld.sop1(aco_opcode::s_mov_b32, Definition(PhysReg(64), s1), Operand(vcc, s1));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(vcc_hi, s1));
-
-   /* VALU -> VALU read VCC and then SGPR */
-   //! p_unit_test 21
-   //! s1: %0:vcc_hi = v_readfirstlane_b32 %0:v[0]
-   //! s1: %0:s[4] = v_readfirstlane_b32 %0:v[0]
-   //! s_waitcnt_depctr va_vcc(0)
-   //! v1: %0:v[0] = v_mov_b32 %0:vcc_hi
-   //! s_waitcnt_depctr va_sdst(0)
-   //! v1: %0:v[0] = v_mov_b32 %0:s[4]
-   bld.pseudo(aco_opcode::p_unit_test, Operand::c32(21));
-   bld.vop1(aco_opcode::v_readfirstlane_b32, Definition(vcc_hi, s1), Operand(PhysReg(256), v1));
-   bld.vop1(aco_opcode::v_readfirstlane_b32, Definition(PhysReg(4), s1), Operand(PhysReg(256), v1));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(vcc_hi, s1));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(PhysReg(4), s1));
-
-   /* VALU -> VALU read SGPR and then VCC */
-   //! p_unit_test 22
-   //! s1: %0:vcc_hi = v_readfirstlane_b32 %0:v[0]
-   //! s1: %0:s[4] = v_readfirstlane_b32 %0:v[0]
-   //! s_waitcnt_depctr va_sdst(0)
-   //! v1: %0:v[0] = v_mov_b32 %0:s[4]
-   //! s_waitcnt_depctr va_vcc(0)
-   //! v1: %0:v[0] = v_mov_b32 %0:vcc_hi
-   bld.pseudo(aco_opcode::p_unit_test, Operand::c32(22));
-   bld.vop1(aco_opcode::v_readfirstlane_b32, Definition(vcc_hi, s1), Operand(PhysReg(256), v1));
-   bld.vop1(aco_opcode::v_readfirstlane_b32, Definition(PhysReg(4), s1), Operand(PhysReg(256), v1));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(PhysReg(4), s1));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(vcc_hi, s1));
-
-   /* VALU writes VCC and SALU writes SGPR */
-   //! p_unit_test 23
-   //! s1: %0:vcc_hi = v_readfirstlane_b32 %0:v[0]
-   //! s1: %0:s[4] = s_mov_b32 0
-   //! s_waitcnt_depctr va_vcc(0)
-   //! v1: %0:v[0] = v_mov_b32 %0:vcc_hi
-   //! s_waitcnt_depctr sa_sdst(0)
-   //! v1: %0:v[0] = v_mov_b32 %0:s[4]
-   bld.pseudo(aco_opcode::p_unit_test, Operand::c32(23));
-   bld.vop1(aco_opcode::v_readfirstlane_b32, Definition(vcc_hi, s1), Operand(PhysReg(256), v1));
-   bld.sop1(aco_opcode::s_mov_b32, Definition(PhysReg(4), s1), Operand::zero(4));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(vcc_hi, s1));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(PhysReg(4), s1));
-
    finish_insert_nops_test();
 END_TEST
 
@@ -1764,12 +1683,8 @@ BEGIN_TEST(insert_nops.valu_read_sgpr.previous_part)
    /* Raytracing shaders have a prolog and may also be split into several parts. */
    program->stage = raytracing_cs;
 
-   /* Despite the SGPR never being read by a VALU in this shader, a sa_sdst(0) is needed.
-    * The first instruction is also a sa_sdst(0) in RT shaders to protect against reads of the
-    * setpc target.
-    */
+   /* Despite the SGPR never being read by a VALU in this shader, a sa_sdst(0) is needed. */
    //>> p_unit_test 0
-   //! s_waitcnt_depctr sa_sdst(0)
    //! s1: %0:s[4] = s_mov_b32 0
    //! s_waitcnt_depctr sa_sdst(0)
    //! s1: %0:s[64] = s_mov_b32 %0:s[4]
@@ -2020,17 +1935,6 @@ BEGIN_TEST(insert_nops.setpc_gfx10)
    bld.vop3(aco_opcode::v_writelane_b32_e64, Definition(PhysReg(256), v1),
             Operand(PhysReg(257), v1), Operand::zero(4), Operand(PhysReg(256), v1));
    finish_insert_nops_test(false);
-
-   /* FPAtomicToDenormModeHazard */
-   //>> p_unit_test 10
-   //! flat_atomic_fmin %0:v[0-1], s1: undef, %0:v[0]
-   //! s_nop imm:2
-   //! s_waitcnt_depctr vm_vsrc(0)
-   create_program(GFX10, compute_cs, 64, CHIP_UNKNOWN);
-   bld.pseudo(aco_opcode::p_unit_test, Operand::c32(10));
-   bld.flat(aco_opcode::flat_atomic_fmin, Operand(PhysReg(256), v2), Operand(s1),
-            Operand(PhysReg(256), v1));
-   finish_insert_nops_test(false);
 END_TEST
 
 BEGIN_TEST(insert_nops.setpc_gfx11)
@@ -2217,127 +2121,5 @@ BEGIN_TEST(insert_nops.setpc_gfx12)
       bld.sop1(aco_opcode::s_mov_b32, Definition(PhysReg(64), s1), Operand::zero(4));
    bld.sop1(aco_opcode::s_setpc_b64, Operand::zero(8));
 
-   //! p_unit_test 7
-   //! v1: %0:v[0] = v_mov_b32 %0:s[4]
-   //! s1: %0:s[4] = v_readfirstlane_b32 %0:v[0]
-   //! s_waitcnt_depctr va_vdst(0) va_sdst(0)
-   //! s_setpc_b64 0
-   bld.pseudo(aco_opcode::p_unit_test, Operand::c32(7));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(PhysReg(4), s1));
-   bld.vop1(aco_opcode::v_readfirstlane_b32, Definition(PhysReg(4), s1), Operand(PhysReg(256), v1));
-   bld.sop1(aco_opcode::s_setpc_b64, Operand::zero(8));
-
-   //! p_unit_test 8
-   //! v1: %0:v[0] = v_mov_b32 %0:vcc_lo
-   //! s1: %0:vcc_lo = v_readfirstlane_b32 %0:v[0]
-   //! s_waitcnt_depctr va_vdst(0) va_vcc(0)
-   //! s_setpc_b64 0
-   bld.pseudo(aco_opcode::p_unit_test, Operand::c32(8));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(PhysReg(vcc), s1));
-   bld.vop1(aco_opcode::v_readfirstlane_b32, Definition(vcc, s1), Operand(PhysReg(256), v1));
-   bld.sop1(aco_opcode::s_setpc_b64, Operand::zero(8));
-
-   //! p_unit_test 9
-   //! v1: %0:v[0] = v_mov_b32 %0:s[4]
-   //! v1: %0:v[2] = v_mov_b32 %0:vcc_lo
-   //! s1: %0:vcc_lo = v_readfirstlane_b32 %0:v[1]
-   //! s1: %0:s[4] = s_mov_b32 0
-   //! s_waitcnt_depctr va_vdst(0) va_vcc(0) sa_sdst(0)
-   //! s_setpc_b64 0
-   bld.pseudo(aco_opcode::p_unit_test, Operand::c32(9));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(256), v1), Operand(PhysReg(4), s1));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(258), v1), Operand(PhysReg(vcc), s1));
-   bld.vop1(aco_opcode::v_readfirstlane_b32, Definition(vcc, s1), Operand(PhysReg(257), v1));
-   bld.sop1(aco_opcode::s_mov_b32, Definition(PhysReg(4), s1), Operand::zero(4));
-   bld.sop1(aco_opcode::s_setpc_b64, Operand::zero(8));
-
-   //! p_unit_test 10
-   //! v1: %0:v[1] = v_mov_b32 %0:s[5]
-   //! v1: %0:v[2] = v_mov_b32 %0:vcc_lo
-   //! s1: %0:s[5] = v_readfirstlane_b32 %0:v[0]
-   //! s1: %0:vcc_lo = v_readfirstlane_b32 %0:v[1]
-   //! s_waitcnt_depctr va_vdst(0) va_sdst(0) va_vcc(0)
-   //! s_setpc_b64 0
-   bld.pseudo(aco_opcode::p_unit_test, Operand::c32(10));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(257), v1), Operand(PhysReg(5), s1));
-   bld.vop1(aco_opcode::v_mov_b32, Definition(PhysReg(258), v1), Operand(PhysReg(vcc), s1));
-   bld.vop1(aco_opcode::v_readfirstlane_b32, Definition(PhysReg(5), s1), Operand(PhysReg(256), v1));
-   bld.vop1(aco_opcode::v_readfirstlane_b32, Definition(vcc, s1), Operand(PhysReg(257), v1));
-   bld.sop1(aco_opcode::s_setpc_b64, Operand::zero(8));
-
    finish_insert_nops_test(true);
-END_TEST
-
-BEGIN_TEST(insert_nops.fpatomic_to_denorm_mode)
-   for (amd_gfx_level lvl : {GFX10, GFX10_3}) {
-      if (!setup_cs(NULL, lvl))
-         continue;
-
-      //>> p_unit_test 0
-      //! global_atomic_fmin %0:v[0-1], s1: undef, %0:v[0]
-      //! s_nop imm:2
-      //! s_denorm_mode imm:42
-      bld.pseudo(aco_opcode::p_unit_test, Operand::c32(0));
-      bld.global(aco_opcode::global_atomic_fmin, Operand(PhysReg(256), v2), Operand(s1),
-                 Operand(PhysReg(256), v1));
-      bld.sopp(aco_opcode::s_denorm_mode, 42);
-
-      //! p_unit_test 1
-      //! global_atomic_fmin %0:v[0-1], s1: undef, %0:v[0]
-      //! s_nop
-      //! s_nop imm:1
-      //! s_denorm_mode imm:42
-      bld.pseudo(aco_opcode::p_unit_test, Operand::c32(1));
-      bld.global(aco_opcode::global_atomic_fmin, Operand(PhysReg(256), v2), Operand(s1),
-                 Operand(PhysReg(256), v1));
-      bld.sopp(aco_opcode::s_nop, 0);
-      bld.sopp(aco_opcode::s_denorm_mode, 42);
-
-      // VALU, waitcnt or enough wait states mitigates the hazard
-      //! p_unit_test 2
-      //! global_atomic_fmin %0:v[0-1], s1: undef, %0:v[0]
-      //! v_nop
-      //! s_denorm_mode imm:42
-      bld.pseudo(aco_opcode::p_unit_test, Operand::c32(2));
-      bld.global(aco_opcode::global_atomic_fmin, Operand(PhysReg(256), v2), Operand(s1),
-                 Operand(PhysReg(256), v1));
-      bld.vop1(aco_opcode::v_nop);
-      bld.sopp(aco_opcode::s_denorm_mode, 42);
-
-      //! p_unit_test 3
-      //! global_atomic_fmin %0:v[0-1], s1: undef, %0:v[0]
-      //! s_waitcnt expcnt(0) lgkmcnt(0) vmcnt(0)
-      //! s_denorm_mode imm:42
-      bld.pseudo(aco_opcode::p_unit_test, Operand::c32(3));
-      bld.global(aco_opcode::global_atomic_fmin, Operand(PhysReg(256), v2), Operand(s1),
-                 Operand(PhysReg(256), v1));
-      bld.sopp(aco_opcode::s_waitcnt, 0);
-      bld.sopp(aco_opcode::s_denorm_mode, 42);
-
-      //! p_unit_test 4
-      //! global_atomic_fmin %0:v[0-1], s1: undef, %0:v[0]
-      //! s_nop imm:2
-      //! s_denorm_mode imm:42
-      bld.pseudo(aco_opcode::p_unit_test, Operand::c32(4));
-      bld.global(aco_opcode::global_atomic_fmin, Operand(PhysReg(256), v2), Operand(s1),
-                 Operand(PhysReg(256), v1));
-      bld.sopp(aco_opcode::s_nop, 2);
-      bld.sopp(aco_opcode::s_denorm_mode, 42);
-
-      //! p_unit_test 5
-      //! global_atomic_fmin %0:v[0-1], s1: undef, %0:v[0]
-      //! s_nop
-      //! s_nop
-      //! s_nop
-      //! s_denorm_mode imm:42
-      bld.pseudo(aco_opcode::p_unit_test, Operand::c32(5));
-      bld.global(aco_opcode::global_atomic_fmin, Operand(PhysReg(256), v2), Operand(s1),
-                 Operand(PhysReg(256), v1));
-      bld.sopp(aco_opcode::s_nop, 0);
-      bld.sopp(aco_opcode::s_nop, 0);
-      bld.sopp(aco_opcode::s_nop, 0);
-      bld.sopp(aco_opcode::s_denorm_mode, 42);
-
-      finish_insert_nops_test();
-   }
 END_TEST

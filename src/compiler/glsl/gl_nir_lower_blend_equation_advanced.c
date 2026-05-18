@@ -216,9 +216,9 @@ satv3(nir_builder *b, nir_def *c)
 static nir_variable *
 add_temp_var(nir_builder *b, char *name, const struct glsl_type *type)
 {
-   nir_variable *var = nir_variable_create_zeroed(b->shader);
+   nir_variable *var = rzalloc(b->shader, nir_variable);
    var->type = type;
-   nir_variable_set_name(b->shader, var, name);
+   var->name = ralloc_strdup(var, name);
    var->data.mode = nir_var_function_temp;
    nir_function_impl_add_variable(b->impl, var);
 
@@ -414,7 +414,7 @@ calc_blend_result(nir_builder *b,
          set_lum(b, factor, dst_rgb, src_rgb);
          break;
       case BLEND_NONE:
-         UNREACHABLE("not real cases");
+         unreachable("not real cases");
       }
 
       if (val)
@@ -489,7 +489,8 @@ gl_nir_lower_blend_equation_advanced(nir_shader *sh, bool coherent)
    nir_function_impl *impl = nir_shader_get_entrypoint(sh);
 
    if (sh->info.fs.advanced_blend_modes == 0) {
-      return nir_no_progress(impl);
+      nir_metadata_preserve(impl, nir_metadata_all);
+      return false;
    }
 
    sh->info.fs.uses_sample_shading = true;
@@ -510,7 +511,7 @@ gl_nir_lower_blend_equation_advanced(nir_shader *sh, bool coherent)
                                             glsl_uint_type(),
                                             "gl_AdvancedBlendModeMESA");
    mode->data.how_declared = nir_var_hidden;
-   mode->state_slots = rzalloc_array(sh, nir_state_slot, 1);
+   mode->state_slots = rzalloc_array(mode, nir_state_slot, 1);
    mode->num_state_slots = 1;
    mode->state_slots[0].tokens[0] = STATE_ADVANCED_BLENDING_MODE;
 
@@ -574,7 +575,7 @@ gl_nir_lower_blend_equation_advanced(nir_shader *sh, bool coherent)
       }
    }
 
-   nir_progress(true, impl, nir_metadata_none);
+   nir_metadata_preserve(impl, nir_metadata_none);
 
    /* Remove any dead writes before assigning location to __blend_fb_fetch
     * otherwise they will be unable to be removed.

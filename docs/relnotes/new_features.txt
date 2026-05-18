@@ -1,26 +1,31 @@
-VK_KHR_relaxed_block_layout on pvr
-VK_KHR_storage_buffer_storage_class on pvr
-VK_EXT_external_memory_acquire_unmodified on panvk
-VK_EXT_discard_rectangles on NVK
-VK_KHR_present_id on HoneyKrisp
-VK_KHR_present_id2 on HoneyKrisp
-VK_KHR_present_wait on HoneyKrisp
-VK_KHR_present_wait2 on HoneyKrisp
-VK_KHR_maintenance10 on ANV, NVK, RADV
-VK_EXT_shader_uniform_buffer_unsized_array on ANV, HK, NVK, RADV
-VK_EXT_device_memory_report on panvk
-VK_VALVE_video_encode_rgb_conversion on radv
-VK_EXT_custom_resolve on RADV
-GL_EXT_shader_pixel_local_storage on Panfrost v6+
-VK_EXT_image_drm_format_modifier on panvk/v7
-VK_KHR_sampler_ycbcr_conversion on panvk/v7
-sparseResidencyImage2D on panvk v10+
-sparseResidencyStandard2DBlockShape on panvk v10+
-VK_KHR_surface_maintenance1 promotion everywhere EXT is exposed
-VK_KHR_swapchain_maintenance1 promotion everywhere EXT is exposed
-VK_KHR_dynamic_rendering on PowerVR
-VK_EXT_multisampled_render_to_single_sampled on panvk
-VK_KHR_pipeline_binary on HoneyKrisp
-VK_KHR_incremental_present on pvr
-VK_KHR_xcb_surface on pvr
-VK_KHR_xlib_surface on pvr
+cl_khr_depth_images in rusticl
+Vulkan 1.4 on radv/gfx8+
+VK_KHR_dedicated_allocation on panvk
+VK_KHR_global_priority on panvk
+VK_KHR_index_type_uint8 on panvk
+VK_KHR_map_memory2 on panvk
+VK_KHR_multiview on panvk/v10+
+VK_KHR_shader_non_semantic_info on panvk
+VK_KHR_shader_relaxed_extended_instruction on panvk
+VK_KHR_vertex_attribute_divisor on panvk
+VK_KHR_zero_initialize_workgroup_memory on panvk
+VK_KHR_shader_float16_int8 on panvk
+VK_KHR_8bit_storage on panvk
+VK_EXT_4444_formats on panvk
+VK_EXT_global_priority on panvk
+VK_EXT_global_priority_query on panvk
+VK_EXT_host_query_reset on panvk
+VK_EXT_image_robustness on panvk
+VK_EXT_pipeline_robustness on panvk
+VK_EXT_provoking_vertex on panvk
+VK_EXT_queue_family_foreign on panvk
+VK_EXT_sampler_filter_minmax on panvk
+VK_EXT_scalar_block_layout on panvk
+VK_EXT_tooling_info on panvk
+depthClamp on panvk
+depthBiasClamp on panvk
+sampleRateShading on panvk
+occlusionQueryPrecise on panvk
+shaderInt16 on panvk
+shaderInt64 on panvk
+imageCubeArray on panvk/v10+

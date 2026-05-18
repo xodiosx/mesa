@@ -11,6 +11,7 @@
 
 #include "freedreno_resource.h"
 
-uint32_t fd4_layout_resource(struct fd_resource *rsc, enum fd_layout_type type);
+uint32_t fd4_setup_slices(struct fd_resource *rsc);
+unsigned fd4_tile_mode(const struct pipe_resource *tmpl);
 
 #endif /* FD4_RESOURCE_H_ */

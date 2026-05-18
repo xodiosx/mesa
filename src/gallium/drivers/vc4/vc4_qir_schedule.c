@@ -91,7 +91,9 @@ add_dep(enum direction dir,
         assert(before != after);
 
         if (dir == R) {
-                SWAP(before, after);
+                struct schedule_node *t = before;
+                before = after;
+                after = t;
         }
 
         dag_add_edge(&after->dag, &before->dag, 0);

@@ -41,7 +41,7 @@
 #include "varray.h"
 #include "arrayobj.h"
 #include "get.h"
-#include "dispatch.h"
+#include "main/dispatch.h"
 #include "api_exec_decl.h"
 
 #include "state_tracker/st_atom.h"
@@ -236,7 +236,7 @@ _mesa_vertex_attrib_binding(struct gl_context *ctx,
       array->BufferBindingIndex = bindingIndex;
 
       if (vao->Enabled & array_bit) {
-         ST_SET_STATE(ctx->NewDriverState, ST_NEW_VERTEX_ARRAYS);
+         ctx->NewDriverState |= ST_NEW_VERTEX_ARRAYS;
          ctx->Array.NewVertexElements = true;
       }
 
@@ -303,7 +303,7 @@ _mesa_bind_vertex_buffer(struct gl_context *ctx,
       }
 
       if (vao->Enabled & binding->_BoundArrays) {
-         ST_SET_STATE(ctx->NewDriverState, ST_NEW_VERTEX_ARRAYS);
+         ctx->NewDriverState |= ST_NEW_VERTEX_ARRAYS;
          /* The slow path merges vertex buffers, which affects vertex elements.
           * Stride changes also require new vertex elements.
           */
@@ -345,7 +345,7 @@ vertex_binding_divisor(struct gl_context *ctx,
          vao->NonZeroDivisorMask &= ~binding->_BoundArrays;
 
       if (vao->Enabled & binding->_BoundArrays) {
-         ST_SET_STATE(ctx->NewDriverState, ST_NEW_VERTEX_ARRAYS);
+         ctx->NewDriverState |= ST_NEW_VERTEX_ARRAYS;
          ctx->Array.NewVertexElements = true;
       }
 
@@ -671,7 +671,7 @@ static const uint8_t bgra_vertex_formats[4][2] = {
 /**
  * Return a PIPE_FORMAT_x for the given GL datatype and size.
  */
-ALWAYS_INLINE static enum pipe_format
+static enum pipe_format
 vertex_format_to_pipe_format(GLubyte size, GLenum16 type, GLenum16 format,
                              bool normalized, bool integer, bool doubles)
 {
@@ -705,7 +705,7 @@ vertex_format_to_pipe_format(GLubyte size, GLenum16 type, GLenum16 format,
    return pipe_format;
 }
 
-ALWAYS_INLINE static void
+static void
 set_vertex_format_user(union gl_vertex_format_user *vertex_format,
                        GLubyte size, GLenum16 type, GLenum16 format,
                        GLboolean normalized, GLboolean integer,
@@ -720,7 +720,7 @@ set_vertex_format_user(union gl_vertex_format_user *vertex_format,
    vertex_format->Doubles = doubles;
 }
 
-ALWAYS_INLINE static void
+static void
 recompute_vertex_format_fields(struct gl_vertex_format *vertex_format,
                                GLubyte size, GLenum16 type, GLenum16 format,
                                GLboolean normalized, GLboolean integer,
@@ -830,7 +830,7 @@ get_array_format(const struct gl_context *ctx, GLint sizeMax, GLint *size)
  * \param relativeOffset Offset of the first element relative to the binding
  *                       offset.
  */
-ALWAYS_INLINE void
+void
 _mesa_update_array_format(struct gl_context *ctx,
                           struct gl_vertex_array_object *vao,
                           gl_vert_attrib attrib, GLint size, GLenum type,
@@ -857,7 +857,7 @@ _mesa_update_array_format(struct gl_context *ctx,
                                   normalized, integer, doubles);
 
    if (vao->Enabled & VERT_BIT(attrib)) {
-      ST_SET_STATE(ctx->NewDriverState, ST_NEW_VERTEX_ARRAYS);
+      ctx->NewDriverState |= ST_NEW_VERTEX_ARRAYS;
       ctx->Array.NewVertexElements = true;
    }
 
@@ -1122,7 +1122,7 @@ update_array(struct gl_context *ctx,
       array->Ptr = ptr;
 
       if (vao->Enabled & VERT_BIT(attrib)) {
-         ST_SET_STATE(ctx->NewDriverState, ST_NEW_VERTEX_ARRAYS);
+         ctx->NewDriverState |= ST_NEW_VERTEX_ARRAYS;
          /* The slow path merges vertex buffers, which affects vertex
           * elements.
           */
@@ -2096,16 +2096,11 @@ _mesa_update_edgeflag_state_explicit(struct gl_context *ctx,
    if (ctx->API != API_OPENGL_COMPAT)
       return;
 
-   /* Edge flags take effect only if the polygon mode is not FILL on the side
-    * of the face that isn't culled.
-    *
-    * Edge flags determine whether a line or a point is drawn by polygon mode.
+   /* Edge flags take effect only if the polygon mode is not FILL, and they
+    * determine whether a line or point is drawn with that polygon mode.
     */
-   bool edgeflags_have_effect =
-      (ctx->Polygon.FrontMode != GL_FILL &&
-       (!ctx->Polygon.CullFlag || ctx->Polygon.CullFaceMode == GL_BACK)) ||
-      (ctx->Polygon.BackMode != GL_FILL &&
-       (!ctx->Polygon.CullFlag || ctx->Polygon.CullFaceMode == GL_FRONT));
+   bool edgeflags_have_effect = ctx->Polygon.FrontMode != GL_FILL ||
+                                ctx->Polygon.BackMode != GL_FILL;
    per_vertex_enable &= edgeflags_have_effect;
 
    if (per_vertex_enable != ctx->Array._PerVertexEdgeFlagsEnabled) {
@@ -2113,7 +2108,8 @@ _mesa_update_edgeflag_state_explicit(struct gl_context *ctx,
 
       struct gl_program *vp = ctx->VertexProgram._Current;
       if (vp) {
-         ST_SET_STATE2(ctx->NewDriverState, ST_NEW_VS_STATE, ST_NEW_VERTEX_ARRAYS);
+         ctx->NewDriverState |= ST_NEW_VS_STATE |
+                                ST_NEW_VERTEX_ARRAYS;
          ctx->Array.NewVertexElements = true;
       }
    }
@@ -2127,7 +2123,7 @@ _mesa_update_edgeflag_state_explicit(struct gl_context *ctx,
                                     !ctx->Current.Attrib[VERT_ATTRIB_EDGEFLAG][0];
    if (polygon_mode_always_culls != ctx->Array._PolygonModeAlwaysCulls) {
       ctx->Array._PolygonModeAlwaysCulls = polygon_mode_always_culls;
-      ST_SET_STATE(ctx->NewDriverState, ST_NEW_RASTERIZER);
+      ctx->NewDriverState |= ST_NEW_RASTERIZER;
    }
 }
 
@@ -2156,7 +2152,7 @@ _mesa_enable_vertex_array_attribs(struct gl_context *ctx,
       /* was disabled, now being enabled */
       vao->Enabled |= attrib_bits;
       vao->NonDefaultStateMask |= attrib_bits;
-      ST_SET_STATE(ctx->NewDriverState, ST_NEW_VERTEX_ARRAYS);
+      ctx->NewDriverState |= ST_NEW_VERTEX_ARRAYS;
       ctx->Array.NewVertexElements = true;
 
       /* Update the map mode if needed */
@@ -2259,7 +2255,7 @@ _mesa_disable_vertex_array_attribs(struct gl_context *ctx,
    if (attrib_bits) {
       /* was enabled, now being disabled */
       vao->Enabled &= ~attrib_bits;
-      ST_SET_STATE(ctx->NewDriverState, ST_NEW_VERTEX_ARRAYS);
+      ctx->NewDriverState |= ST_NEW_VERTEX_ARRAYS;
       ctx->Array.NewVertexElements = true;
 
       /* Update the map mode if needed */
@@ -3202,7 +3198,7 @@ vertex_array_vertex_buffer(struct gl_context *ctx,
    struct gl_buffer_object *current_buf =
       vao->BufferBinding[VERT_ATTRIB_GENERIC(bindingIndex)].BufferObj;
 
-   if (_mesa_is_same_buffer_object(current_buf, buffer)) {
+   if (current_buf && buffer == current_buf->Name) {
       vbo = current_buf;
    } else if (buffer != 0) {
       vbo = _mesa_lookup_bufferobj(ctx, buffer);
@@ -3463,7 +3459,7 @@ vertex_array_vertex_buffers(struct gl_context *ctx,
 
          if (buffers[i] == 0)
             vbo = NULL;
-         else if (_mesa_is_same_buffer_object(binding->BufferObj, buffers[i]))
+         else if (binding->BufferObj && binding->BufferObj->Name == buffers[i])
             vbo = binding->BufferObj;
          else {
             bool error;

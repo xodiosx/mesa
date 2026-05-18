@@ -6,10 +6,8 @@
  */
 #include "hk_descriptor_set.h"
 #include "asahi/lib/agx_bo.h"
-#include "util/half_float.h"
 #include "vulkan/vulkan_core.h"
 
-#include "agx_helpers.h"
 #include "hk_buffer.h"
 #include "hk_buffer_view.h"
 #include "hk_descriptor_set_layout.h"
@@ -59,11 +57,7 @@ write_sampled_image_view_desc(struct hk_descriptor_set *set,
                               VkDescriptorType descriptor_type)
 {
    struct hk_sampled_image_descriptor desc[3] = {};
-
-   /* "Zero" initialize */
-   for (unsigned i = 0; i < 3; ++i) {
-      agx_set_null_texture(&desc[i].tex);
-   }
+   assert(HK_NULL_TEX_OFFSET == 0 && "zero initialized so null descs implicit");
 
    uint8_t plane_count = 1;
    bool ia = (descriptor_type == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT);
@@ -74,13 +68,11 @@ write_sampled_image_view_desc(struct hk_descriptor_set *set,
 
       plane_count = view->plane_count;
       for (uint8_t plane = 0; plane < plane_count; plane++) {
-         desc[plane].tex =
-            ia ? view->planes[plane].ia : view->planes[plane].sampled;
+         unsigned index = ia ? view->planes[plane].ia_desc_index
+                             : view->planes[plane].sampled_desc_index;
 
-         float min_lod = MAX2(view->vk.min_lod - view->vk.base_mip_level, 0.0);
-
-         desc[plane].min_lod_fp16 = _mesa_float_to_half(min_lod);
-         desc[plane].min_lod_uint16 = min_lod;
+         assert(index < (1 << 20));
+         desc[plane].image_offset = index * HK_IMAGE_STRIDE;
       }
    }
 
@@ -114,18 +106,13 @@ write_sampled_image_view_desc(struct hk_descriptor_set *set,
           */
          desc[plane].sampler_index =
             sampler->planes[sampler_plane].hw->index + 28;
-         desc[plane].sampler = sampler->planes[sampler_plane].hw->key;
          desc[plane].lod_bias_fp16 = sampler->lod_bias_fp16;
-         desc[plane].clamp_0_sampler_index_or_negative = -1;
+         desc[plane].has_border = sampler->has_border;
       }
 
       if (sampler->has_border) {
          assert(sampler->plane_count == 2);
-         desc[0].clamp_0_sampler_index_or_negative =
-            sampler->planes[1].hw->index + 28;
-
-         assert(desc[0].clamp_0_sampler_index_or_negative >= 0 &&
-                "we have a border colour");
+         desc[0].clamp_0_sampler_index = sampler->planes[1].hw->index + 28;
 
          static_assert(sizeof(desc[0].border) == sizeof(sampler->custom_border),
                        "fixed format");
@@ -151,52 +138,56 @@ write_storage_image_view_desc(struct hk_descriptor_set *set,
       assert(view->plane_count == 1);
       uint8_t plane = 0;
 
-      desc.tex = view->planes[plane].ro_storage;
-      desc.pbe = view->planes[plane].storage;
+      desc.tex_offset =
+         view->planes[plane].ro_storage_desc_index * HK_IMAGE_STRIDE;
+
+      desc.pbe_offset =
+         view->planes[plane].storage_desc_index * HK_IMAGE_STRIDE;
    } else {
-      agx_set_null_texture(&desc.tex);
-      agx_set_null_pbe(&desc.pbe);
+      desc.tex_offset = HK_NULL_TEX_OFFSET;
+      desc.pbe_offset = HK_NULL_PBE_OFFSET;
    }
 
    write_desc(set, binding, elem, &desc, sizeof(desc));
 }
 
-static struct hk_buffer_address
-get_buffer_address(const VkDescriptorBufferInfo *const info, bool read_only)
-{
-   VK_FROM_HANDLE(hk_buffer, buffer, info->buffer);
-   const struct hk_addr_range addr_range =
-      hk_buffer_addr_range(buffer, info->offset, info->range, read_only);
-   assert(addr_range.range <= UINT32_MAX);
-
-   return (struct hk_buffer_address){
-      .base_addr = addr_range.addr,
-      .size = addr_range.range,
-   };
-}
-
 static void
 write_buffer_desc(struct hk_descriptor_set *set,
                   const VkDescriptorBufferInfo *const info, uint32_t binding,
-                  uint32_t elem, bool read_only)
+                  uint32_t elem)
 {
-   const struct hk_buffer_address desc = get_buffer_address(info, read_only);
+   VK_FROM_HANDLE(hk_buffer, buffer, info->buffer);
 
+   const struct hk_addr_range addr_range =
+      hk_buffer_addr_range(buffer, info->offset, info->range);
+   assert(addr_range.range <= UINT32_MAX);
+
+   const struct hk_buffer_address desc = {
+      .base_addr = addr_range.addr,
+      .size = addr_range.range,
+   };
    write_desc(set, binding, elem, &desc, sizeof(desc));
 }
 
 static void
 write_dynamic_buffer_desc(struct hk_descriptor_set *set,
                           const VkDescriptorBufferInfo *const info,
-                          uint32_t binding, uint32_t elem, bool read_only)
+                          uint32_t binding, uint32_t elem)
 {
+   VK_FROM_HANDLE(hk_buffer, buffer, info->buffer);
    const struct hk_descriptor_set_binding_layout *binding_layout =
       &set->layout->binding[binding];
 
+   const struct hk_addr_range addr_range =
+      hk_buffer_addr_range(buffer, info->offset, info->range);
+   assert(addr_range.range <= UINT32_MAX);
+
    struct hk_buffer_address *desc =
       &set->dynamic_buffers[binding_layout->dynamic_buffer_index + elem];
-
-   *desc = get_buffer_address(info, read_only);
+   *desc = (struct hk_buffer_address){
+      .base_addr = addr_range.addr,
+      .size = addr_range.range,
+   };
 }
 
 static void
@@ -204,15 +195,18 @@ write_buffer_view_desc(struct hk_descriptor_set *set,
                        const VkBufferView bufferView, uint32_t binding,
                        uint32_t elem)
 {
-   struct hk_storage_image_descriptor desc = {};
+   struct hk_buffer_view_descriptor desc = {};
    if (bufferView != VK_NULL_HANDLE) {
       VK_FROM_HANDLE(hk_buffer_view, view, bufferView);
 
-      desc.tex = view->tex;
-      desc.pbe = view->pbe;
+      assert(view->tex_desc_index < (1 << 20));
+      assert(view->pbe_desc_index < (1 << 20));
+
+      desc.tex_offset = view->tex_desc_index * HK_IMAGE_STRIDE;
+      desc.pbe_offset = view->pbe_desc_index * HK_IMAGE_STRIDE;
    } else {
-      agx_set_null_texture(&desc.tex);
-      agx_set_null_pbe(&desc.pbe);
+      desc.tex_offset = HK_NULL_TEX_OFFSET;
+      desc.pbe_offset = HK_NULL_PBE_OFFSET;
    }
 
    write_desc(set, binding, elem, &desc, sizeof(desc));
@@ -269,21 +263,17 @@ hk_UpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount,
       case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
       case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
          for (uint32_t j = 0; j < write->descriptorCount; j++) {
-            write_buffer_desc(
-               set, write->pBufferInfo + j, write->dstBinding,
-               write->dstArrayElement + j,
-               write->descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+            write_buffer_desc(set, write->pBufferInfo + j, write->dstBinding,
+                              write->dstArrayElement + j);
          }
          break;
 
       case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
       case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
          for (uint32_t j = 0; j < write->descriptorCount; j++) {
-            write_dynamic_buffer_desc(
-               set, write->pBufferInfo + j, write->dstBinding,
-               write->dstArrayElement + j,
-               write->descriptorType ==
-                  VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC);
+            write_dynamic_buffer_desc(set, write->pBufferInfo + j,
+                                      write->dstBinding,
+                                      write->dstArrayElement + j);
          }
          break;
 
@@ -326,7 +316,9 @@ hk_UpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount,
          }
       }
 
-      if (vk_descriptor_type_is_dynamic(src_binding_layout->type)) {
+      switch (src_binding_layout->type) {
+      case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+      case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: {
          const uint32_t dst_dyn_start =
             dst_binding_layout->dynamic_buffer_index + copy->dstArrayElement;
          const uint32_t src_dyn_start =
@@ -334,6 +326,10 @@ hk_UpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount,
          typed_memcpy(&dst->dynamic_buffers[dst_dyn_start],
                       &src->dynamic_buffers[src_dyn_start],
                       copy->descriptorCount);
+         break;
+      }
+      default:
+         break;
       }
    }
 }
@@ -387,10 +383,8 @@ hk_push_descriptor_set_update(struct hk_push_descriptor_set *push_set,
       case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
       case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
          for (uint32_t j = 0; j < write->descriptorCount; j++) {
-            write_buffer_desc(
-               &set, write->pBufferInfo + j, write->dstBinding,
-               write->dstArrayElement + j,
-               write->descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+            write_buffer_desc(&set, write->pBufferInfo + j, write->dstBinding,
+                              write->dstArrayElement + j);
          }
          break;
 
@@ -751,8 +745,7 @@ hk_descriptor_set_write_template(
                data + entry->offset + j * entry->stride;
 
             write_buffer_desc(set, info, entry->binding,
-                              entry->array_element + j,
-                              entry->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                              entry->array_element + j);
          }
          break;
 
@@ -762,9 +755,8 @@ hk_descriptor_set_write_template(
             const VkDescriptorBufferInfo *info =
                data + entry->offset + j * entry->stride;
 
-            write_dynamic_buffer_desc(
-               set, info, entry->binding, entry->array_element + j,
-               entry->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC);
+            write_dynamic_buffer_desc(set, info, entry->binding,
+                                      entry->array_element + j);
          }
          break;
 

@@ -69,8 +69,7 @@ fake_resource_reference(struct virgl_winsys *vws,
 {
    struct virgl_hw_res *old = *dres;
 
-   if (pipe_reference(old ? &old->reference : NULL,
-                      sres ? &sres->reference : NULL)) {
+   if (pipe_reference(&(*dres)->reference, &sres->reference)) {
       FREE(old->data);
       FREE(old);
    }

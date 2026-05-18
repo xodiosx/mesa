@@ -51,7 +51,7 @@ public:
    struct gl_shader *shader;
    void *mem_ctx;
    gl_context ctx;
-   ir_exec_list ir;
+   exec_list ir;
 };
 
 void
@@ -79,7 +79,6 @@ common_builtin::SetUp()
 void
 common_builtin::TearDown()
 {
-   free(this->ctx.screen);
    ralloc_free(this->mem_ctx);
    this->mem_ctx = NULL;
 
@@ -102,7 +101,7 @@ common_builtin::string_starts_with_prefix(const char *str, const char *prefix)
 void
 common_builtin::names_start_with_gl()
 {
-   ir_foreach_in_list(ir_instruction, node, &this->ir) {
+   foreach_in_list(ir_instruction, node, &this->ir) {
       ir_variable *const var = node->as_variable();
 
       string_starts_with_prefix(var->name, "gl_");
@@ -112,7 +111,7 @@ common_builtin::names_start_with_gl()
 void
 common_builtin::uniforms_and_system_values_dont_have_explicit_location()
 {
-   ir_foreach_in_list(ir_instruction, node, &this->ir) {
+   foreach_in_list(ir_instruction, node, &this->ir) {
       ir_variable *const var = node->as_variable();
 
       if (var->data.mode != ir_var_uniform && var->data.mode != ir_var_system_value)
@@ -126,7 +125,7 @@ common_builtin::uniforms_and_system_values_dont_have_explicit_location()
 void
 common_builtin::constants_are_constant()
 {
-   ir_foreach_in_list(ir_instruction, node, &this->ir) {
+   foreach_in_list(ir_instruction, node, &this->ir) {
       ir_variable *const var = node->as_variable();
 
       if (var->data.mode != ir_var_auto)
@@ -141,7 +140,7 @@ common_builtin::constants_are_constant()
 void
 common_builtin::no_invalid_variable_modes()
 {
-   ir_foreach_in_list(ir_instruction, node, &this->ir) {
+   foreach_in_list(ir_instruction, node, &this->ir) {
       ir_variable *const var = node->as_variable();
 
       switch (var->data.mode) {
@@ -178,7 +177,7 @@ TEST_F(vertex_builtin, names_start_with_gl)
 
 TEST_F(vertex_builtin, inputs_have_explicit_location)
 {
-   ir_foreach_in_list(ir_instruction, node, &this->ir) {
+   foreach_in_list(ir_instruction, node, &this->ir) {
       ir_variable *const var = node->as_variable();
 
       if (var->data.mode != ir_var_shader_in)
@@ -193,7 +192,7 @@ TEST_F(vertex_builtin, inputs_have_explicit_location)
 
 TEST_F(vertex_builtin, outputs_have_explicit_location)
 {
-   ir_foreach_in_list(ir_instruction, node, &this->ir) {
+   foreach_in_list(ir_instruction, node, &this->ir) {
       ir_variable *const var = node->as_variable();
 
       if (var->data.mode != ir_var_shader_out)
@@ -246,7 +245,7 @@ TEST_F(fragment_builtin, names_start_with_gl)
 
 TEST_F(fragment_builtin, inputs_have_explicit_location)
 {
-   ir_foreach_in_list(ir_instruction, node, &this->ir) {
+   foreach_in_list(ir_instruction, node, &this->ir) {
       ir_variable *const var = node->as_variable();
 
       if (var->data.mode != ir_var_shader_in)
@@ -266,7 +265,7 @@ TEST_F(fragment_builtin, inputs_have_explicit_location)
 
 TEST_F(fragment_builtin, outputs_have_explicit_location)
 {
-   ir_foreach_in_list(ir_instruction, node, &this->ir) {
+   foreach_in_list(ir_instruction, node, &this->ir) {
       ir_variable *const var = node->as_variable();
 
       if (var->data.mode != ir_var_shader_out)
@@ -317,7 +316,7 @@ TEST_F(geometry_builtin, names_start_with_gl)
 
 TEST_F(geometry_builtin, inputs_have_explicit_location)
 {
-   ir_foreach_in_list(ir_instruction, node, &this->ir) {
+   foreach_in_list(ir_instruction, node, &this->ir) {
       ir_variable *const var = node->as_variable();
 
       if (var->data.mode != ir_var_shader_in)
@@ -363,7 +362,7 @@ TEST_F(geometry_builtin, inputs_have_explicit_location)
 
 TEST_F(geometry_builtin, outputs_have_explicit_location)
 {
-   ir_foreach_in_list(ir_instruction, node, &this->ir) {
+   foreach_in_list(ir_instruction, node, &this->ir) {
       ir_variable *const var = node->as_variable();
 
       if (var->data.mode != ir_var_shader_out)

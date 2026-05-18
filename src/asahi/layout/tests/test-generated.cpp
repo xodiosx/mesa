@@ -66,8 +66,7 @@ TEST(Generated, CompTwiddled)
          .depth_px = test.depth,
          .sample_count_sa = 1,
          .levels = test.levels,
-         .tiling = AIL_TILING_GPU,
-         .compressed = true,
+         .tiling = AIL_TILING_TWIDDLED_COMPRESSED,
          .format = test.format,
       };
 
@@ -92,7 +91,7 @@ TEST(Generated, UncompTwiddled)
          .depth_px = test.depth,
          .sample_count_sa = 1,
          .levels = test.levels,
-         .tiling = AIL_TILING_GPU,
+         .tiling = AIL_TILING_TWIDDLED,
          .format = test.format,
       };
 
@@ -117,7 +116,7 @@ TEST(Generated, Miptree2D)
          .depth_px = 1,
          .sample_count_sa = 1,
          .levels = test.levels,
-         .tiling = AIL_TILING_GPU,
+         .tiling = AIL_TILING_TWIDDLED,
          .format = test.format,
       };
 
@@ -144,8 +143,8 @@ TEST(Generated, MSAA)
          .depth_px = test.depth,
          .sample_count_sa = test.samples,
          .levels = test.levels,
-         .tiling = AIL_TILING_GPU,
-         .compressed = test.is_compressed,
+         .tiling = test.is_compressed ? AIL_TILING_TWIDDLED_COMPRESSED
+                                      : AIL_TILING_TWIDDLED,
          .format = test.format,
       };
 

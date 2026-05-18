@@ -426,15 +426,11 @@ calculate_deps(struct schedule_state *state, struct schedule_node *n)
         case V3D_QPU_M_MULTOP:
         case V3D_QPU_M_UMUL24:
                 /* MULTOP sets rtop, and UMUL24 implicitly reads rtop and
-                 * resets it to 0.
+                 * resets it to 0.  We could possibly reorder umul24s relative
+                 * to each other, but for now just keep all the MUL parts in
+                 * order.
                  */
                 add_write_dep(state, &state->last_rtop, n);
-                break;
-        case V3D_QPU_M_UMUL24_RTOP0:
-                /* Read dependency is only needed to avoid inserting an
-                 * UMUL24_RTOP0 in the middle of a MULTOP+UMUL24 sequence.
-                 */
-                add_read_dep(state, state->last_rtop, n);
                 break;
         default:
                 break;
@@ -1110,7 +1106,7 @@ add_op_as_mul_op(enum v3d_qpu_add_op op)
         case V3D_QPU_A_SUB:
                 return V3D_QPU_M_SUB;
         default:
-                UNREACHABLE("unexpected add opcode");
+                unreachable("unexpected add opcode");
         }
 }
 
@@ -1175,7 +1171,7 @@ mul_op_as_add_op(enum v3d_qpu_mul_op op)
         case V3D_QPU_M_FMOV:
                 return V3D_QPU_A_FMOV;
         default:
-                UNREACHABLE("unexpected mov opcode");
+                unreachable("unexpected mov opcode");
         }
 }
 

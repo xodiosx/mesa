@@ -6,7 +6,7 @@
 #include <ctype.h>
 
 #include "util/ralloc.h"
-#include "intel/compiler/brw/brw_asm.h"
+#include "intel/compiler/brw_asm.h"
 
 #include "executor.h"
 
@@ -24,13 +24,6 @@ skip_prefix(char *prefix, char *start)
    return c;
 }
 
-static bool
-is_comment(const char *c)
-{
-   assert(c);
-   return c[0] && c[0] == '/' && c[1] == '/';
-}
-
 typedef struct {
    char **args;
    int    count;
@@ -45,12 +38,12 @@ parse_args(void *mem_ctx, char *c)
       /* Skip spaces. */
       while (*c && isspace(*c))
          c++;
-
-      if (!*c || is_comment(c))
+      if (!*c)
          break;
 
+      /* Copy non-spaces. */
       char *start = c;
-      while (*c && !isspace(*c) && !is_comment(c))
+      while (*c && !isspace(*c))
          c++;
       r.args = reralloc_array_size(mem_ctx, r.args, sizeof(char *), r.count + 1);
       r.args[r.count++] = ralloc_strndup(mem_ctx, start, c - start);
@@ -93,7 +86,7 @@ executor_macro_mov(executor_context *ec, char **src, char *line)
          break;
       }
       default:
-         UNREACHABLE("invalid gfx version");
+         unreachable("invalid gfx version");
       }
 
    } else {
@@ -115,7 +108,7 @@ executor_macro_mov(executor_context *ec, char **src, char *line)
       }
 
       default:
-         UNREACHABLE("invalid gfx version");
+         unreachable("invalid gfx version");
       }
    }
 }
@@ -143,7 +136,7 @@ executor_macro_syncnop(executor_context *ec, char **src, char *line)
    }
 
    default:
-      UNREACHABLE("invalid gfx version");
+      unreachable("invalid gfx version");
    }
 }
 
@@ -156,14 +149,14 @@ executor_macro_eot(executor_context *ec, char **src, char *line)
       ralloc_strcat(src,
          "mov(8)          g127<1>UD  g0<8;8,1>UD    { align1 WE_all 1Q };\n"
          "send(8)         null<1>UW  g127<0,1,0>UD  0x82000010\n"
-         "    ts/btd MsgDesc: mlen 1 rlen 0 { align1 WE_all 1Q EOT };\n");
+         "    thread_spawner MsgDesc: mlen 1 rlen 0 { align1 WE_all 1Q EOT };\n");
       break;
    }
    case 120: {
       ralloc_strcat(src,
          "mov(8)          g127<1>UD  g0<8;8,1>UD  { align1 WE_all 1Q };\n"
          "send(8)         nullUD     g127UD       nullUD  0x02000000  0x00000000\n"
-         "    ts/btd MsgDesc:  mlen 1 ex_mlen 0 rlen 0 { align1 WE_all 1Q @1 EOT };\n");
+         "    thread_spawner MsgDesc:  mlen 1 ex_mlen 0 rlen 0 { align1 WE_all 1Q @1 EOT };\n");
       break;
    }
 
@@ -184,7 +177,7 @@ executor_macro_eot(executor_context *ec, char **src, char *line)
          break;
    }
    default:
-      UNREACHABLE("invalid gfx version");
+      unreachable("invalid gfx version");
    }
 }
 
@@ -220,7 +213,7 @@ executor_macro_id(executor_context *ec, char **src, char *line)
    }
 
    default:
-      UNREACHABLE("invalid gfx version");
+      unreachable("invalid gfx version");
    }
 }
 
@@ -248,7 +241,7 @@ executor_macro_write(executor_context *ec, char **src, char *line)
          "mul(8)          g127<1>UD  %s<8;8,1>UD    0x4UW     { align1 @1 1Q };\n"
          "add(8)          g127<1>UD  g127<8;8,1>UD  0x%08xUD  { align1 @1 1Q };\n"
          "send%s(8)       nullUD     g127UD         %sUD      0x2026efd   0x00000040\n"
-         "    hdc1 MsgDesc: (DC untyped surface write, Surface = 253, "
+         "    dp data 1 MsgDesc: (DC untyped surface write, Surface = 253, "
          "                        SIMD8, Mask = 0xe) mlen 1 ex_mlen 1 rlen 0 "
          "    { align1 1Q @1 $1 };\n",
          offset_reg, base_addr, send_suffix, data_reg);
@@ -284,7 +277,7 @@ executor_macro_write(executor_context *ec, char **src, char *line)
    }
 
    default:
-      UNREACHABLE("invalid gfx version");
+      unreachable("invalid gfx version");
    }
 }
 
@@ -313,7 +306,7 @@ executor_macro_read(executor_context *ec, char **src, char *line)
          "mul(8)          g127<1>UD  %s<8;8,1>UD    0x4UW     { align1 @1 1Q };\n"
          "add(8)          g127<1>UD  g127<8;8,1>UD  0x%08xUD  { align1 @1 1Q };\n"
          "send%s(8)       %sUD       g127UD         nullUD    0x2106efd   0x00000000\n"
-         "    hdc1 MsgDesc: (DC untyped surface read, Surface = 253, "
+         "    dp data 1 MsgDesc: (DC untyped surface read, Surface = 253, "
          "                        SIMD8, Mask = 0xe) mlen 1 ex_mlen 0 rlen 1 "
          "    { align1 1Q @1 $1 };\n",
          offset_reg, base_addr, send_suffix, data_reg);
@@ -349,7 +342,7 @@ executor_macro_read(executor_context *ec, char **src, char *line)
    }
 
    default:
-      UNREACHABLE("invalid gfx version");
+      unreachable("invalid gfx version");
    }
 }
 
@@ -367,7 +360,7 @@ match_macro_name(const char *name, const char *line)
    if (!startswith(name, line))
       return false;
    line += strlen(name);
-   return !*line || isspace(*line) || is_comment(line);
+   return !*line || isspace(*line);
 }
 
 const char *

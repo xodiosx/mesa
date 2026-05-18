@@ -52,7 +52,7 @@ hk_memory_type_flags(const VkMemoryType *type,
 static void
 hk_add_ext_bo_locked(struct hk_device *dev, struct agx_bo *bo)
 {
-   uint32_t id = bo->uapi_handle;
+   uint32_t id = bo->vbo_res_id;
 
    unsigned count = util_dynarray_num_elements(&dev->external_bos.list,
                                                struct asahi_ccmd_submit_res);
@@ -71,8 +71,9 @@ hk_add_ext_bo_locked(struct hk_device *dev, struct agx_bo *bo)
       .res_id = id,
       .flags = ASAHI_EXTRES_READ | ASAHI_EXTRES_WRITE,
    };
-   util_dynarray_append(&dev->external_bos.list, res);
-   util_dynarray_append_typed(&dev->external_bos.counts, unsigned, 1);
+   util_dynarray_append(&dev->external_bos.list, struct asahi_ccmd_submit_res,
+                        res);
+   util_dynarray_append(&dev->external_bos.counts, unsigned, 1);
 }
 
 static void
@@ -88,7 +89,7 @@ hk_add_ext_bo(struct hk_device *dev, struct agx_bo *bo)
 static void
 hk_remove_ext_bo_locked(struct hk_device *dev, struct agx_bo *bo)
 {
-   uint32_t id = bo->uapi_handle;
+   uint32_t id = bo->vbo_res_id;
    unsigned count = util_dynarray_num_elements(&dev->external_bos.list,
                                                struct asahi_ccmd_submit_res);
 
@@ -108,7 +109,7 @@ hk_remove_ext_bo_locked(struct hk_device *dev, struct agx_bo *bo)
       }
    }
 
-   UNREACHABLE("BO not found");
+   unreachable("BO not found");
 }
 
 static void
@@ -210,8 +211,6 @@ hk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
       enum agx_bo_flags flags = 0;
       if (handle_types)
          flags |= AGX_BO_SHAREABLE;
-      if (type->propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
-         flags |= AGX_BO_WRITEBACK;
 
       mem->bo = agx_bo_create(&dev->dev, aligned_size, 0, flags, "App memory");
       if (!mem->bo) {
@@ -219,13 +218,6 @@ hk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
          goto fail_alloc;
       }
    }
-
-   /* Shadow map in case this is used for a sparse resident buffer */
-   int ret = agx_bo_bind(&dev->dev, mem->bo,
-                         agx_rw_addr_to_ro(&dev->dev, mem->bo->va->addr),
-                         mem->bo->size, 0, DRM_ASAHI_BIND_READ);
-   if (ret)
-      return VK_ERROR_UNKNOWN;
 
    if (mem->bo->flags & (AGX_BO_SHAREABLE | AGX_BO_SHARED))
       hk_add_ext_bo(dev, mem->bo);
@@ -298,7 +290,7 @@ hk_MapMemory2KHR(VkDevice device, const VkMemoryMapInfoKHR *pMemoryMapInfo,
    const VkDeviceSize size = vk_device_memory_range(
       &mem->vk, pMemoryMapInfo->offset, pMemoryMapInfo->size);
 
-   void *fixed_addr = NULL;
+   UNUSED void *fixed_addr = NULL;
    if (pMemoryMapInfo->flags & VK_MEMORY_MAP_PLACED_BIT_EXT) {
       const VkMemoryMapPlacedInfoEXT *placed_info = vk_find_struct_const(
          pMemoryMapInfo->pNext, MEMORY_MAP_PLACED_INFO_EXT);
@@ -330,8 +322,7 @@ hk_MapMemory2KHR(VkDevice device, const VkMemoryMapInfoKHR *pMemoryMapInfo,
                        "Memory object already mapped.");
    }
 
-   mem->map = agx_bo_map_placed(mem->bo, fixed_addr);
-   assert(!fixed_addr || mem->map == fixed_addr);
+   mem->map = agx_bo_map(mem->bo);
    *ppData = mem->map + offset;
 
    return VK_SUCCESS;
@@ -347,20 +338,19 @@ hk_UnmapMemory2KHR(VkDevice device,
       return VK_SUCCESS;
 
    if (pMemoryUnmapInfo->flags & VK_MEMORY_UNMAP_RESERVE_BIT_EXT) {
+      unreachable("todo");
+#if 0
       VK_FROM_HANDLE(hk_device, dev, device);
 
-      void *err = mmap(mem->bo->_map, mem->bo->size, PROT_NONE,
-                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-      if (err == MAP_FAILED) {
+      int err = agx_bo_overmap(mem->bo, mem->map);
+      if (err) {
          return vk_errorf(dev, VK_ERROR_MEMORY_MAP_FAILED,
                           "Failed to map over original mapping");
       }
-      mem->bo->_map = NULL;
+#endif
    } else {
-      if (mem->bo->_map) {
-         munmap(mem->bo->_map, mem->bo->size);
-         mem->bo->_map = NULL;
-      }
+      /* TODO */
+      //// agx_bo_unmap(mem->bo, mem->map);
    }
 
    mem->map = NULL;
@@ -411,9 +401,9 @@ hk_GetMemoryFdKHR(VkDevice device, const VkMemoryGetFdInfoKHR *pGetFdInfo,
 
 VKAPI_ATTR uint64_t VKAPI_CALL
 hk_GetDeviceMemoryOpaqueCaptureAddress(
-   UNUSED VkDevice device,
-   UNUSED const VkDeviceMemoryOpaqueCaptureAddressInfo *pInfo)
+   UNUSED VkDevice device, const VkDeviceMemoryOpaqueCaptureAddressInfo *pInfo)
 {
-   /* Addresses are replayed at buffer and image creation, not memory. */
-   return 0;
+   VK_FROM_HANDLE(hk_device_memory, mem, pInfo->memory);
+
+   return mem->bo->va->addr;
 }

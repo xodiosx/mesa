@@ -2,8 +2,12 @@
 # Copyright © 2019 Collabora
 # SPDX-License-Identifier: MIT
 
+inc_panfrost_hw = include_directories([
+   'include'
+])
+
 inc_panfrost = include_directories([
-   '.', 'shared', 'compiler', 'lib', 'libpan', 'model',
+   '.', 'include', 'shared', 'midgard', 'compiler', 'lib'
 ])
 
 compile_args_panfrost = [
@@ -11,22 +15,17 @@ compile_args_panfrost = [
 ]
 
 subdir('shared')
-subdir('model')
+subdir('util')
+subdir('midgard')
 subdir('compiler')
 
-if with_gallium_panfrost or with_panfrost_vk or with_tools.contains('panfrost')
-   subdir('genxml')
-   subdir('lib')
-   subdir('clc')
-endif
-
 if with_gallium_panfrost or with_panfrost_vk
-   subdir('libpan')
+   subdir('lib')
    subdir('perf')
 endif
 
 files_bifrost = files(
-  'compiler/bifrost/cmdline.c',
+  'compiler/cmdline.c',
 )
 
 bifrost_compiler = executable(
@@ -36,6 +35,7 @@ bifrost_compiler = executable(
     inc_include,
     inc_src,
     inc_panfrost,
+    inc_panfrost_hw,
  ],
   dependencies : [
     idep_nir,
@@ -44,7 +44,7 @@ bifrost_compiler = executable(
     dep_libdrm,
   ],
   link_with : [
-    libpanfrost_compiler,
+    libpanfrost_bifrost,
   ],
   build_by_default : with_tools.contains('panfrost')
 )

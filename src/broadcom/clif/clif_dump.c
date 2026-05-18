@@ -115,7 +115,7 @@ clif_dump_packet(struct clif_dump *clif, uint32_t offset, const uint8_t *cl,
         default:
                 break;
         };
-        UNREACHABLE("Unknown HW version");
+        unreachable("Unknown HW version");
 }
 
 static uint32_t

@@ -23,7 +23,7 @@ pub struct MemStream(Pin<Box<MemStreamImpl>>);
 impl MemStream {
     pub fn new() -> io::Result<Self> {
         let mut stream_impl = Box::pin(MemStreamImpl {
-            stream: Default::default(),
+            stream: unsafe { std::mem::zeroed() },
             buffer: std::ptr::null_mut(),
             buffer_size: 0,
             _pin: PhantomPinned,

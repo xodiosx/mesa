@@ -373,7 +373,7 @@ begin_transform_feedback(struct gl_context *ctx, GLenum mode, bool no_error)
          return;
       } else {
          /* Stop compiler warnings */
-         UNREACHABLE("Error in API use when using KHR_no_error");
+         unreachable("Error in API use when using KHR_no_error");
       }
    }
 
@@ -399,7 +399,6 @@ begin_transform_feedback(struct gl_context *ctx, GLenum mode, bool no_error)
    FLUSH_VERTICES(ctx, 0, 0);
 
    obj->Active = GL_TRUE;
-   obj->Mode = mode;
    ctx->TransformFeedback.Mode = mode;
 
    compute_transform_feedback_buffer_sizes(obj);
@@ -460,7 +459,7 @@ begin_transform_feedback(struct gl_context *ctx, GLenum mode, bool no_error)
 
    /* Start writing at the beginning of each target. */
    cso_set_stream_outputs(ctx->cso_context, obj->num_targets,
-                          obj->targets, offsets, mode);
+                          obj->targets, offsets);
    _mesa_update_valid_to_render_state(ctx);
 }
 
@@ -488,7 +487,7 @@ end_transform_feedback(struct gl_context *ctx,
    unsigned i;
    FLUSH_VERTICES(ctx, 0, 0);
 
-   cso_set_stream_outputs(ctx->cso_context, 0, NULL, NULL, 0);
+   cso_set_stream_outputs(ctx->cso_context, 0, NULL, NULL);
 
    /* The next call to glDrawTransformFeedbackStream should use the vertex
     * count from the last call to glEndTransformFeedback.
@@ -884,7 +883,6 @@ transform_feedback_varyings(struct gl_context *ctx,
 
    if (!shProg->TransformFeedback.VaryingNames) {
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "glTransformFeedbackVaryings()");
-      shProg->TransformFeedback.NumVarying = 0;
       return;
    }
 
@@ -1250,7 +1248,7 @@ pause_transform_feedback(struct gl_context *ctx,
 {
    FLUSH_VERTICES(ctx, 0, 0);
 
-   cso_set_stream_outputs(ctx->cso_context, 0, NULL, NULL, 0);
+   cso_set_stream_outputs(ctx->cso_context, 0, NULL, NULL);
 
    obj->Paused = GL_TRUE;
    _mesa_update_valid_to_render_state(ctx);
@@ -1293,7 +1291,6 @@ resume_transform_feedback(struct gl_context *ctx,
 {
    FLUSH_VERTICES(ctx, 0, 0);
 
-   ctx->TransformFeedback.Mode = obj->Mode;
    obj->Paused = GL_FALSE;
 
    unsigned offsets[PIPE_MAX_SO_BUFFERS];
@@ -1303,7 +1300,7 @@ resume_transform_feedback(struct gl_context *ctx,
       offsets[i] = (unsigned)-1;
 
    cso_set_stream_outputs(ctx->cso_context, obj->num_targets,
-                          obj->targets, offsets, obj->Mode);
+                          obj->targets, offsets);
    _mesa_update_valid_to_render_state(ctx);
 }
 

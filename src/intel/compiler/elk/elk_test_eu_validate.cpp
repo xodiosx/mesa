@@ -94,7 +94,7 @@ INSTANTIATE_TEST_SUITE_P(
 static bool
 validate(struct elk_codegen *p)
 {
-   const bool print = os_get_option("TEST_DEBUG");
+   const bool print = getenv("TEST_DEBUG");
    struct elk_disasm_info *disasm = elk_disasm_initialize(p->isa, NULL);
 
    if (print) {
@@ -269,9 +269,7 @@ TEST_P(validation_test, invalid_type_encoding)
        * instructions, so keep a record in a bitset the invalid patterns so
        * they can be verified to be invalid when used.
        */
-      const int max_bits = 4;
-      assert(max_bits >= num_bits);
-      BITSET_DECLARE(invalid_encodings, 1 << max_bits);
+      BITSET_DECLARE(invalid_encodings, num_encodings);
 
       const struct {
          enum elk_reg_type type;
@@ -379,9 +377,7 @@ TEST_P(validation_test, invalid_type_encoding_3src_a16)
     * instructions, so keep a record in a bitset the invalid patterns so
     * they can be verified to be invalid when used.
     */
-   const int max_bits = 3;
-   assert(max_bits >= num_bits);
-   BITSET_DECLARE(invalid_encodings, 1 << max_bits);
+   BITSET_DECLARE(invalid_encodings, num_encodings);
 
    const struct {
       enum elk_reg_type type;

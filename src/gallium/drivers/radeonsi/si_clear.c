@@ -13,8 +13,7 @@
 
 enum {
    SI_CLEAR = SI_SAVE_FRAGMENT_STATE | SI_SAVE_FRAGMENT_CONSTANT,
-   SI_CLEAR_SURFACE = SI_SAVE_FRAMEBUFFER | SI_SAVE_FRAGMENT_STATE | SI_SAVE_FRAGMENT_CONSTANT,
-   SI_DEPTH_STENCIL = SI_SAVE_FRAMEBUFFER | SI_SAVE_FRAGMENT_STATE,
+   SI_CLEAR_SURFACE = SI_SAVE_FRAMEBUFFER | SI_SAVE_FRAGMENT_STATE,
 };
 
 void si_init_buffer_clear(struct si_clear_info *info,
@@ -187,7 +186,7 @@ static bool gfx8_get_dcc_clear_parameters(struct si_screen *sscreen, enum pipe_f
 
       if (desc->channel[i].pure_integer && desc->channel[i].type == UTIL_FORMAT_TYPE_SIGNED) {
          /* Use the maximum value for clamping the clear color. */
-         int max = BITFIELD_MASK(desc->channel[i].size - 1);
+         int max = u_bit_consecutive(0, desc->channel[i].size - 1);
 
          values[i] = color->i[i] != 0;
          if (color->i[i] != 0 && MIN2(color->i[i], max) != max)
@@ -195,7 +194,7 @@ static bool gfx8_get_dcc_clear_parameters(struct si_screen *sscreen, enum pipe_f
       } else if (desc->channel[i].pure_integer &&
                  desc->channel[i].type == UTIL_FORMAT_TYPE_UNSIGNED) {
          /* Use the maximum value for clamping the clear color. */
-         unsigned max = BITFIELD_MASK(desc->channel[i].size);
+         unsigned max = u_bit_consecutive(0, desc->channel[i].size);
 
          values[i] = color->ui[i] != 0U;
          if (color->ui[i] != 0U && MIN2(color->ui[i], max) != max)
@@ -660,13 +659,13 @@ static void si_fast_clear(struct si_context *sctx, unsigned *buffers,
    while (color_buffer_mask) {
       unsigned i = u_bit_scan(&color_buffer_mask);
 
-      struct si_texture *tex = (struct si_texture *)fb->cbufs[i].texture;
-      unsigned level = fb->cbufs[i].level;
+      struct si_texture *tex = (struct si_texture *)fb->cbufs[i]->texture;
+      unsigned level = fb->cbufs[i]->u.tex.level;
       unsigned num_layers = util_num_layers(&tex->buffer.b.b, level);
 
       /* the clear is allowed if all layers are bound */
-      if (fb->cbufs[i].first_layer != 0 ||
-          fb->cbufs[i].last_layer != num_layers - 1) {
+      if (fb->cbufs[i]->u.tex.first_layer != 0 ||
+          fb->cbufs[i]->u.tex.last_layer != num_layers - 1) {
          continue;
       }
 
@@ -709,12 +708,12 @@ static void si_fast_clear(struct si_context *sctx, unsigned *buffers,
             continue;
 
          if (sctx->gfx_level >= GFX11) {
-            if (!gfx11_get_dcc_clear_parameters(sctx->screen, tex, level, fb->cbufs[i].format,
+            if (!gfx11_get_dcc_clear_parameters(sctx->screen, tex, level, fb->cbufs[i]->format,
                                                 color, &reset_value, true))
                continue;
          } else {
             if (!gfx8_get_dcc_clear_parameters(sctx->screen, tex->buffer.b.b.format,
-                                               fb->cbufs[i].format, color, &reset_value,
+                                               fb->cbufs[i]->format, color, &reset_value,
                                                &eliminate_needed))
                continue;
          }
@@ -761,7 +760,7 @@ static void si_fast_clear(struct si_context *sctx, unsigned *buffers,
             if (num_clears)
                memmove(&info[1], &info[0], sizeof(info[0]) * num_clears);
 
-            si_init_clear_image_dcc_single(&info[0], tex, level, fb->cbufs[i].format,
+            si_init_clear_image_dcc_single(&info[0], tex, level, fb->cbufs[i]->format,
                                            color);
             num_clears++;
          }
@@ -885,59 +884,91 @@ static void si_fast_clear(struct si_context *sctx, unsigned *buffers,
       /* There are no clear color registers on GFX11. */
       assert(sctx->gfx_level < GFX11);
 
-      if (si_set_clear_color(tex, fb->cbufs[i].format, color) || need_dirtying_fb) {
+      if (si_set_clear_color(tex, fb->cbufs[i]->format, color) || need_dirtying_fb) {
          sctx->framebuffer.dirty_cbufs |= 1 << i;
          si_mark_atom_dirty(sctx, &sctx->atoms.s.framebuffer);
       }
    }
 
    /* Depth/stencil clears. */
-   struct si_texture *zstex = (struct si_texture *)fb->zsbuf.texture;
-   unsigned zs_num_layers = zstex ? util_num_layers(&zstex->buffer.b.b, fb->zsbuf.level) : 0;
+   struct pipe_surface *zsbuf = fb->zsbuf;
+   struct si_texture *zstex = zsbuf ? (struct si_texture *)zsbuf->texture : NULL;
+   unsigned zs_num_layers = zstex ? util_num_layers(&zstex->buffer.b.b, zsbuf->u.tex.level) : 0;
 
-   if (zstex && fb->zsbuf.first_layer == 0 &&
-       fb->zsbuf.last_layer == zs_num_layers - 1 &&
-       si_htile_enabled(zstex, fb->zsbuf.level, PIPE_MASK_ZS)) {
-      unsigned level = fb->zsbuf.level;
+   if (zstex && zsbuf->u.tex.first_layer == 0 &&
+       zsbuf->u.tex.last_layer == zs_num_layers - 1 &&
+       si_htile_enabled(zstex, zsbuf->u.tex.level, PIPE_MASK_ZS)) {
+      unsigned level = zsbuf->u.tex.level;
       bool update_db_depth_clear = false;
       bool update_db_stencil_clear = false;
-      bool fb_too_small = (uint64_t)num_pixels * zs_num_layers <= 512 * 512;
+      bool fb_too_small = num_pixels * zs_num_layers <= 512 * 512;
 
-      /* Transition from TC-incompatible to TC-compatible HTILE if requested.
-       * (the transition applies to the whole buffer, so make sure we're clearing
-       * everything).
-       */
-      bool whole_clear =
-         ((*buffers & PIPE_CLEAR_DEPTHSTENCIL) == PIPE_CLEAR_DEPTHSTENCIL) ||
-         (*buffers & PIPE_CLEAR_DEPTH && (!zstex->surface.has_stencil ||
-                                          zstex->htile_stencil_disabled));
-      if (zstex->enable_tc_compatible_htile_next_clear && whole_clear) {
-         assert(zstex->buffer.b.b.last_level == 0);
-         assert(!zstex->tc_compatible_htile);
+      /* Transition from TC-incompatible to TC-compatible HTILE if requested. */
+      if (zstex->enable_tc_compatible_htile_next_clear) {
+          /* If both depth and stencil are present, they must be cleared together. */
+         if ((*buffers & PIPE_CLEAR_DEPTHSTENCIL) == PIPE_CLEAR_DEPTHSTENCIL ||
+             (*buffers & PIPE_CLEAR_DEPTH && (!zstex->surface.has_stencil ||
+                                              zstex->htile_stencil_disabled))) {
+            /* The conversion from TC-incompatible to TC-compatible can only be done in one clear. */
+            assert(zstex->buffer.b.b.last_level == 0);
+            assert(!zstex->tc_compatible_htile);
 
-         /* Decompress both depth and stencil. TC-compatible HTILE uses slightly different
-          * compression, so we must decompress before we change it.
-          *
-          * The clear isn't just memset. It still reads HTILE and decides what to do based on that.
-          * We need to decompress fully, so that HTILE doesn't contain any compression flags.
-          */
-         si_decompress_subresource(&sctx->b, fb->zsbuf.texture, PIPE_MASK_ZS, 0, 0,
-                                   util_max_layer(fb->zsbuf.texture, 0), false);
+            /* Enable TC-compatible HTILE. */
+            zstex->enable_tc_compatible_htile_next_clear = false;
+            zstex->tc_compatible_htile = true;
 
-         /* Enable TC-compatible HTILE. */
-         zstex->enable_tc_compatible_htile_next_clear = false;
-         zstex->tc_compatible_htile = true;
+            /* Update the framebuffer state to reflect the change. */
+            sctx->framebuffer.DB_has_shader_readable_metadata = true;
+            sctx->framebuffer.dirty_zsbuf = true;
+            si_mark_atom_dirty(sctx, &sctx->atoms.s.framebuffer);
 
-         /* Update the framebuffer state to reflect the change. */
-         sctx->framebuffer.DB_has_shader_readable_metadata = true;
-         sctx->framebuffer.dirty_zsbuf = true;
-         si_mark_atom_dirty(sctx, &sctx->atoms.s.framebuffer);
+            /* Update all sampler views and shader images in all contexts. */
+            p_atomic_inc(&sctx->screen->dirty_tex_counter);
 
-         /* Update all sampler views and shader images in all contexts. */
-         p_atomic_inc(&sctx->screen->dirty_tex_counter);
-      }
+            /* Perform the clear here if possible, else clear to uncompressed. */
+            uint32_t clear_value;
 
-      if (num_clears || !fb_too_small) {
+            if (zstex->htile_stencil_disabled || !zstex->surface.has_stencil) {
+               if (si_can_fast_clear_depth(zstex, level, depth, *buffers)) {
+                  /* Z-only clear. */
+                  clear_value = si_get_htile_clear_value(zstex, depth);
+                  *buffers &= ~PIPE_CLEAR_DEPTH;
+                  zstex->depth_cleared_level_mask_once |= BITFIELD_BIT(level);
+                  zstex->depth_cleared_level_mask |= BITFIELD_BIT(level);
+                  update_db_depth_clear = true;
+               }
+            } else if ((*buffers & PIPE_CLEAR_DEPTHSTENCIL) == PIPE_CLEAR_DEPTHSTENCIL) {
+               if (si_can_fast_clear_depth(zstex, level, depth, *buffers) &&
+                   si_can_fast_clear_stencil(zstex, level, stencil, *buffers)) {
+                  /* Combined Z+S clear. */
+                  clear_value = si_get_htile_clear_value(zstex, depth);
+                  *buffers &= ~PIPE_CLEAR_DEPTHSTENCIL;
+                  zstex->depth_cleared_level_mask_once |= BITFIELD_BIT(level);
+                  zstex->depth_cleared_level_mask |= BITFIELD_BIT(level);
+                  zstex->stencil_cleared_level_mask_once |= BITFIELD_BIT(level);
+                  update_db_depth_clear = true;
+                  update_db_stencil_clear = true;
+               }
+            }
+
+            if (!update_db_depth_clear) {
+               /* Clear to uncompressed, so that it doesn't contain values incompatible
+                * with the new TC-compatible HTILE setting.
+                *
+                * 0xfffff30f = uncompressed Z + S
+                * 0xfffc000f = uncompressed Z only
+                */
+               clear_value = !zstex->htile_stencil_disabled ? 0xfffff30f : 0xfffc000f;
+            }
+
+            zstex->need_flush_after_depth_decompression = sctx->gfx_level == GFX10_3;
+
+            assert(num_clears < ARRAY_SIZE(info));
+            si_init_buffer_clear(&info[num_clears++], &zstex->buffer.b.b,
+                                 zstex->surface.meta_offset, zstex->surface.meta_size, clear_value);
+            clear_types |= SI_CLEAR_TYPE_HTILE;
+         }
+      } else if (num_clears || !fb_too_small) {
          /* This is where the HTILE buffer clear is done.
           *
           * If there is no clear scheduled and the framebuffer size is too small, we should use
@@ -1073,26 +1104,24 @@ static void si_fb_clear_via_compute(struct si_context *sctx, unsigned *buffers,
    while (color_buffer_mask) {
       unsigned i = u_bit_scan(&color_buffer_mask);
 
-      struct pipe_surface *surf = &fb->cbufs[i];
-      unsigned depth = surf->last_layer - surf->first_layer + 1;
+      struct pipe_surface *surf = fb->cbufs[i];
+      unsigned depth = surf->u.tex.last_layer - surf->u.tex.first_layer + 1;
       struct si_texture *tex = (struct si_texture *)surf->texture;
 
       /* If DCC is enable (which can happen with thick tiling on gfx8, don't use compute to get
        * compressed clears.
        */
-      if (vi_dcc_enabled(tex, surf->level))
+      if (vi_dcc_enabled(tex, surf->u.tex.level))
          continue;
 
-      unsigned width, height;
-      pipe_surface_size(surf, &width, &height);
       /* Clears of thick and linear layouts are fastest with compute. */
       if (tex->surface.thick_tiling ||
-          (tex->surface.is_linear && (height > 1 || depth > 1 || width >= 8192))) {
+          (tex->surface.is_linear && (surf->height > 1 || depth > 1 || surf->width >= 8192))) {
          struct pipe_box box;
 
-         u_box_3d(0, 0, surf->first_layer, width, height, depth, &box);
+         u_box_3d(0, 0, surf->u.tex.first_layer, surf->width, surf->height, depth, &box);
 
-         if (si_compute_clear_image(sctx, &tex->buffer.b.b, surf->format, surf->level, &box,
+         if (si_compute_clear_image(sctx, &tex->buffer.b.b, surf->format, surf->u.tex.level, &box,
                                     color, sctx->render_cond_enabled, true))
             *buffers &= ~(PIPE_CLEAR_COLOR0 << i); /* success */
       }
@@ -1105,16 +1134,17 @@ static void gfx6_clear(struct pipe_context *ctx, unsigned buffers,
 {
    struct si_context *sctx = (struct si_context *)ctx;
    struct pipe_framebuffer_state *fb = &sctx->framebuffer.state;
-   struct si_texture *zstex = (struct si_texture *)fb->zsbuf.texture;
+   struct pipe_surface *zsbuf = fb->zsbuf;
+   struct si_texture *zstex = zsbuf ? (struct si_texture *)zsbuf->texture : NULL;
 
    /* Unset clear flags for non-existent buffers. */
    for (unsigned i = 0; i < 8; i++) {
-      if (i >= fb->nr_cbufs || !fb->cbufs[i].texture)
+      if (i >= fb->nr_cbufs || !fb->cbufs[i])
          buffers &= ~(PIPE_CLEAR_COLOR0 << i);
    }
-   if (!zstex)
+   if (!zsbuf)
       buffers &= ~PIPE_CLEAR_DEPTHSTENCIL;
-   else if (!util_format_has_stencil(util_format_description(fb->zsbuf.format)))
+   else if (!util_format_has_stencil(util_format_description(zsbuf->format)))
       buffers &= ~PIPE_CLEAR_STENCIL;
 
    si_fast_clear(sctx, &buffers, color, depth, stencil);
@@ -1130,15 +1160,15 @@ static void gfx6_clear(struct pipe_context *ctx, unsigned buffers,
       unsigned color_buffer_mask = (buffers & PIPE_CLEAR_COLOR) >> util_logbase2(PIPE_CLEAR_COLOR0);
       while (color_buffer_mask) {
          unsigned i = u_bit_scan(&color_buffer_mask);
-         struct si_texture *tex = (struct si_texture *)fb->cbufs[i].texture;
+         struct si_texture *tex = (struct si_texture *)fb->cbufs[i]->texture;
          if (tex->surface.fmask_size == 0)
-            tex->dirty_level_mask &= ~(1 << fb->cbufs[i].level);
+            tex->dirty_level_mask &= ~(1 << fb->cbufs[i]->u.tex.level);
       }
    }
 
-   if (zstex && fb->zsbuf.first_layer == 0 &&
-       fb->zsbuf.last_layer == util_max_layer(&zstex->buffer.b.b, 0)) {
-      unsigned level = fb->zsbuf.level;
+   if (zstex && zsbuf->u.tex.first_layer == 0 &&
+       zsbuf->u.tex.last_layer == util_max_layer(&zstex->buffer.b.b, 0)) {
+      unsigned level = zsbuf->u.tex.level;
 
       if (si_can_fast_clear_depth(zstex, level, depth, buffers)) {
          /* Need to disable EXPCLEAR temporarily if clearing
@@ -1208,15 +1238,15 @@ static void gfx6_clear(struct pipe_context *ctx, unsigned buffers,
    if (sctx->db_depth_clear) {
       sctx->db_depth_clear = false;
       sctx->db_depth_disable_expclear = false;
-      zstex->depth_cleared_level_mask_once |= BITFIELD_BIT(fb->zsbuf.level);
-      zstex->depth_cleared_level_mask |= BITFIELD_BIT(fb->zsbuf.level);
+      zstex->depth_cleared_level_mask_once |= BITFIELD_BIT(zsbuf->u.tex.level);
+      zstex->depth_cleared_level_mask |= BITFIELD_BIT(zsbuf->u.tex.level);
       si_mark_atom_dirty(sctx, &sctx->atoms.s.db_render_state);
    }
 
    if (sctx->db_stencil_clear) {
       sctx->db_stencil_clear = false;
       sctx->db_stencil_disable_expclear = false;
-      zstex->stencil_cleared_level_mask_once |= BITFIELD_BIT(fb->zsbuf.level);
+      zstex->stencil_cleared_level_mask_once |= BITFIELD_BIT(zsbuf->u.tex.level);
       si_mark_atom_dirty(sctx, &sctx->atoms.s.db_render_state);
    }
 }
@@ -1227,16 +1257,17 @@ static void gfx12_clear(struct pipe_context *ctx, unsigned buffers,
 {
    struct si_context *sctx = (struct si_context *)ctx;
    struct pipe_framebuffer_state *fb = &sctx->framebuffer.state;
-   struct si_texture *zstex = (struct si_texture *)fb->zsbuf.texture;
+   struct pipe_surface *zsbuf = fb->zsbuf;
+   struct si_texture *zstex = zsbuf ? (struct si_texture *)zsbuf->texture : NULL;
 
    /* Unset clear flags for non-existent buffers. */
    for (unsigned i = 0; i < 8; i++) {
-      if (i >= fb->nr_cbufs || !fb->cbufs[i].texture)
+      if (i >= fb->nr_cbufs || !fb->cbufs[i])
          buffers &= ~(PIPE_CLEAR_COLOR0 << i);
    }
-   if (!zstex)
+   if (!zsbuf)
       buffers &= ~PIPE_CLEAR_DEPTHSTENCIL;
-   else if (!util_format_has_stencil(util_format_description(fb->zsbuf.format)))
+   else if (!util_format_has_stencil(util_format_description(zsbuf->format)))
       buffers &= ~PIPE_CLEAR_STENCIL;
 
    if (unlikely(sctx->sqtt_enabled)) {
@@ -1253,8 +1284,8 @@ static void gfx12_clear(struct pipe_context *ctx, unsigned buffers,
 
    /* This is only used by the driver, not the hw. */
    if (buffers & PIPE_CLEAR_DEPTH) {
-      zstex->depth_cleared_level_mask |= BITFIELD_BIT(fb->zsbuf.level);
-      zstex->depth_clear_value[fb->zsbuf.level] = depth;
+      zstex->depth_cleared_level_mask |= BITFIELD_BIT(zsbuf->u.tex.level);
+      zstex->depth_clear_value[zsbuf->u.tex.level] = depth;
    }
 }
 
@@ -1264,31 +1295,29 @@ static bool si_try_normal_clear(struct si_context *sctx, struct pipe_surface *ds
                                 const union pipe_color_union *color,
                                 float depth, unsigned stencil)
 {
-   unsigned surf_width, surf_height;
-   pipe_surface_size(dst, &surf_width, &surf_height);
    /* This is worth it only if it's a whole image clear. */
    if (dstx == 0 && dsty == 0 &&
-       width == surf_width &&
-       height == surf_height &&
-       dst->first_layer == 0 &&
-       dst->last_layer == util_max_layer(dst->texture, dst->level) &&
+       width == dst->width &&
+       height == dst->height &&
+       dst->u.tex.first_layer == 0 &&
+       dst->u.tex.last_layer == util_max_layer(dst->texture, dst->u.tex.level) &&
        /* pipe->clear honors render_condition, so only use it if it's unset or if it's set and enabled. */
        (!sctx->render_cond || render_condition_enabled) &&
-       sctx->is_gfx_queue) {
+       sctx->has_graphics) {
       struct pipe_context *ctx = &sctx->b;
       struct pipe_framebuffer_state saved_fb = {}, fb = {};
 
       util_copy_framebuffer_state(&saved_fb, &sctx->framebuffer.state);
 
       if (buffers & PIPE_CLEAR_COLOR) {
-         fb.cbufs[0] = *dst;
+         fb.cbufs[0] = dst;
          fb.nr_cbufs = 1;
       } else {
-         fb.zsbuf = *dst;
+         fb.zsbuf = dst;
       }
 
-      fb.width = surf_width;
-      fb.height = surf_height;
+      fb.width = dst->width;
+      fb.height = dst->height;
 
       ctx->set_framebuffer_state(ctx, &fb);
       ctx->clear(ctx, buffers, NULL, color, depth, stencil);
@@ -1385,7 +1414,7 @@ static void si_clear_render_target(struct pipe_context *ctx, struct pipe_surface
     * or CMASK).
     */
    if (sctx->gfx_level <= GFX10_3 &&
-       (vi_dcc_enabled(sdst, dst->level) ||
+       (vi_dcc_enabled(sdst, dst->u.tex.level) ||
         /* GFX6-9 allow CMASK without MSAA and allocate it on demand, but only 8-64bpp. */
         (sctx->gfx_level <= GFX9 && sdst->surface.bpe <= 8)) &&
        si_try_normal_clear(sctx, dst, dstx, dsty, width, height, render_condition_enabled,
@@ -1393,14 +1422,14 @@ static void si_clear_render_target(struct pipe_context *ctx, struct pipe_surface
       return;
 
    struct pipe_box box;
-   u_box_3d(dstx, dsty, dst->first_layer, width, height,
-            dst->last_layer - dst->first_layer + 1, &box);
+   u_box_3d(dstx, dsty, dst->u.tex.first_layer, width, height,
+            dst->u.tex.last_layer - dst->u.tex.first_layer + 1, &box);
 
-   if (si_compute_fast_clear_image(sctx, dst->texture, dst->format, dst->level, &box, color,
+   if (si_compute_fast_clear_image(sctx, dst->texture, dst->format, dst->u.tex.level, &box, color,
                                    render_condition_enabled, true))
       return;
 
-   if (si_compute_clear_image(sctx, dst->texture, dst->format, dst->level, &box, color,
+   if (si_compute_clear_image(sctx, dst->texture, dst->format, dst->u.tex.level, &box, color,
                               render_condition_enabled, true))
       return;
 
@@ -1435,7 +1464,7 @@ static void si_clear_depth_stencil(struct pipe_context *ctx, struct pipe_surface
       return;
 
    si_blitter_begin(sctx,
-                    SI_DEPTH_STENCIL | (render_condition_enabled ? 0 : SI_DISABLE_RENDER_COND));
+                    SI_CLEAR_SURFACE | (render_condition_enabled ? 0 : SI_DISABLE_RENDER_COND));
    util_blitter_clear_depth_stencil(sctx->blitter, dst, clear_flags, depth, stencil, dstx, dsty,
                                     width, height);
    si_blitter_end(sctx);
@@ -1446,7 +1475,7 @@ void si_init_clear_functions(struct si_context *sctx)
    sctx->b.clear_render_target = si_clear_render_target;
    sctx->b.clear_texture = u_default_clear_texture;
 
-   if (sctx->is_gfx_queue) {
+   if (sctx->has_graphics) {
       if (sctx->gfx_level >= GFX12)
          sctx->b.clear = gfx12_clear;
       else

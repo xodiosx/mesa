@@ -55,7 +55,6 @@ glsl_type_add_to_function_params(const struct glsl_type *type,
       func->params[(*param_idx)++] = (nir_parameter) {
          .num_components = glsl_get_vector_elements(type),
          .bit_size = glsl_get_bit_size(type),
-         .type = type,
       };
    } else if (glsl_type_is_array_or_matrix(type)) {
       unsigned elems = glsl_get_length(type);
@@ -78,10 +77,7 @@ vtn_ssa_value_add_to_call_params(struct vtn_builder *b,
                                  nir_call_instr *call,
                                  unsigned *param_idx)
 {
-   if (glsl_type_is_cmat(value->type)) {
-      nir_deref_instr *src_deref = vtn_get_deref_for_ssa_value(b, value);
-      call->params[(*param_idx)++] = nir_src_for_ssa(&src_deref->def);
-   } else if (glsl_type_is_vector_or_scalar(value->type)) {
+   if (glsl_type_is_vector_or_scalar(value->type)) {
       call->params[(*param_idx)++] = nir_src_for_ssa(value->def);
    } else {
       unsigned elems = glsl_get_length(value->type);
@@ -113,8 +109,6 @@ function_parameter_decoration_cb(struct vtn_builder *b, struct vtn_value *val,
          case SpvFunctionParameterAttributeSext:
          case SpvFunctionParameterAttributeZext:
          case SpvFunctionParameterAttributeSret:
-         case SpvFunctionParameterAttributeNoCapture:
-         case SpvFunctionParameterAttributeNoWrite:
             break;
 
          case SpvFunctionParameterAttributeByVal:
@@ -136,10 +130,7 @@ function_parameter_decoration_cb(struct vtn_builder *b, struct vtn_value *val,
    case SpvDecorationRelaxedPrecision:
    case SpvDecorationRestrict:
    case SpvDecorationRestrictPointer:
-   case SpvDecorationUniform:
-   case SpvDecorationUniformId:
    case SpvDecorationVolatile:
-   case SpvDecorationFPFastMathMode:
       break;
 
    default:
@@ -156,17 +147,7 @@ vtn_ssa_value_load_function_param(struct vtn_builder *b,
                                   struct vtn_func_arg_info *info,
                                   unsigned *param_idx)
 {
-   if (glsl_type_is_cmat(value->type)) {
-      nir_variable *copy_var =
-         nir_local_variable_create(b->nb.impl, value->type, "cmat_param_by_value");
-
-      nir_def *param = nir_load_param(&b->nb, (*param_idx)++);
-      nir_deref_instr *copy = nir_build_deref_var(&b->nb, copy_var);
-      nir_cmat_copy(&b->nb, &copy->def, param);
-
-      value->is_variable = true;
-      value->var = copy_var;
-   } else if (glsl_type_is_vector_or_scalar(value->type)) {
+   if (glsl_type_is_vector_or_scalar(value->type)) {
       /* if the parameter is passed by value, we need to create a local copy if it's a pointer */
       if (info->by_value && type && type->base_type == vtn_base_type_pointer) {
          struct vtn_type *pointee_type = type->pointed;
@@ -350,8 +331,6 @@ vtn_cfg_handle_prepass_instruction(struct vtn_builder *b, SpvOp opcode,
          func->params[idx++] = (nir_parameter) {
             .num_components = nir_address_format_num_components(addr_format),
             .bit_size = nir_address_format_bit_size(addr_format),
-            .is_return = true,
-            .type = func_type->return_type->type,
          };
       }
 
@@ -366,7 +345,7 @@ vtn_cfg_handle_prepass_instruction(struct vtn_builder *b, SpvOp opcode,
        */
       nir_function_impl *impl = nir_function_impl_create(func);
       b->nb = nir_builder_at(nir_before_impl(impl));
-      b->nb.fp_math_ctrl = b->exact ? nir_fp_exact : nir_fp_fast_math;
+      b->nb.exact = b->exact;
 
       b->func_param_idx = 0;
 
@@ -404,7 +383,7 @@ vtn_cfg_handle_prepass_instruction(struct vtn_builder *b, SpvOp opcode,
       struct vtn_ssa_value *ssa = vtn_create_ssa_value(b, type->type);
       struct vtn_value *val = vtn_untyped_value(b, w[2]);
 
-      b->func->nir_func->params[b->func_param_idx].name = ralloc_strdup(b->shader, val->name);
+      b->func->nir_func->params[b->func_param_idx].name = val->name;
 
       vtn_foreach_decoration(b, val, function_parameter_decoration_cb, &arg_info);
       vtn_ssa_value_load_function_param(b, ssa, type, &arg_info, &b->func_param_idx);
@@ -522,7 +501,7 @@ vtn_parse_switch(struct vtn_builder *b,
       if (is_default) {
          cse->is_default = true;
       } else {
-         util_dynarray_append(&cse->values, literal);
+         util_dynarray_append(&cse->values, uint64_t, literal);
       }
 
       is_default = false;
@@ -570,7 +549,7 @@ vtn_handle_phis_first_pass(struct vtn_builder *b, SpvOp opcode,
       nir_local_variable_create(b->nb.impl, type->type, "phi");
 
    struct vtn_value *phi_val = vtn_untyped_value(b, w[2]);
-   if (vtn_has_decoration(b, phi_val, SpvDecorationRelaxedPrecision))
+   if (vtn_value_is_relaxed_precision(b, phi_val))
       phi_var->data.precision = GLSL_PRECISION_MEDIUM;
 
    _mesa_hash_table_insert(b->phi_table, w, phi_var);
@@ -774,7 +753,7 @@ vtn_function_emit(struct vtn_builder *b, struct vtn_function *func,
    nir_function_impl *impl = func->nir_func->impl;
    b->nb = nir_builder_at(nir_after_impl(impl));
    b->func = func;
-   b->nb.fp_math_ctrl = b->exact ? nir_fp_exact : nir_fp_fast_math;
+   b->nb.exact = b->exact;
    b->phi_table = _mesa_pointer_hash_table_create(b);
 
    if (b->shader->info.stage == MESA_SHADER_KERNEL || force_unstructured) {
@@ -788,7 +767,7 @@ vtn_function_emit(struct vtn_builder *b, struct vtn_function *func,
                            vtn_handle_phi_second_pass);
 
    if (func->nir_func->impl->structured)
-      nir_opt_copy_prop_impl(impl);
+      nir_copy_prop_impl(impl);
    nir_rematerialize_derefs_in_use_blocks_impl(impl);
 
    /*

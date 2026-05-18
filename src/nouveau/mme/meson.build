@@ -64,7 +64,7 @@ if with_tests and not with_platform_android
       idep_nouveau_mme,
       idep_nouveau_ws
     ],
-    install : false,
+    install : true,
   )
 
   executable(
@@ -80,7 +80,7 @@ if with_tests and not with_platform_android
       idep_nouveau_mme,
       idep_nouveau_ws
     ],
-    install : false,
+    install : true,
   )
 endif
 

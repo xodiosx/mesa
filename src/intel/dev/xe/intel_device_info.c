@@ -73,10 +73,6 @@ xe_query_config(int fd, struct intel_device_info *devinfo)
 
    if (config->info[DRM_XE_QUERY_CONFIG_FLAGS] & DRM_XE_QUERY_CONFIG_FLAG_HAS_VRAM)
       devinfo->has_local_mem = true;
-   if (config->info[DRM_XE_QUERY_CONFIG_FLAGS] & DRM_XE_QUERY_CONFIG_FLAG_HAS_LOW_LATENCY)
-      devinfo->supports_low_latency_hint = true;
-   if (config->info[DRM_XE_QUERY_CONFIG_FLAGS] & DRM_XE_QUERY_CONFIG_FLAG_HAS_NO_COMPRESSION_HINT)
-      devinfo->xe2_has_no_compression_hint = true;
 
    if (!has_gmd_ip_version(devinfo))
       devinfo->revision = (config->info[DRM_XE_QUERY_CONFIG_REV_AND_DEVICE_ID] >> 16) & 0xFFFF;
@@ -198,9 +194,7 @@ xe_compute_topology(struct intel_device_info * devinfo,
     * RKL/ADL-S: 1 slice x 2 dual sub slices
     * DG2: 8 slices x 4 dual sub slices
     */
-   if (devinfo->verx10 >= 300) {
-      /* was set by hwconfig */
-   } else if (devinfo->verx10 >= 125) {
+   if (devinfo->verx10 >= 125) {
       devinfo->max_slices = 8;
       devinfo->max_subslices_per_slice = 4;
    } else {
@@ -214,8 +208,6 @@ xe_compute_topology(struct intel_device_info * devinfo,
 
    assert((sizeof(uint32_t) * 8) >= devinfo->max_subslices_per_slice);
    assert((sizeof(uint32_t) * 8) >= devinfo->max_eus_per_subslice);
-   assert(INTEL_DEVICE_MAX_SLICES >= devinfo->max_slices);
-   assert(INTEL_DEVICE_MAX_SUBSLICES >= devinfo->max_subslices_per_slice);
 
    const uint32_t dss_mask_in_slice = (1u << devinfo->max_subslices_per_slice) - 1;
    struct slice {
@@ -351,16 +343,14 @@ intel_device_info_xe_get_info_from_fd(int fd, struct intel_device_info *devinfo)
    if (!xe_query_gts(fd, devinfo))
       return false;
 
-   if (!xe_query_process_hwconfig(fd, devinfo))
-      return false;
-
-   /* xe_compute_topology() depends on information provided by hwconfig */
    if (!xe_query_topology(fd, devinfo))
          return false;
 
+   if (xe_query_process_hwconfig(fd, devinfo))
+      intel_device_info_update_after_hwconfig(devinfo);
+
    devinfo->has_context_isolation = true;
    devinfo->has_mmap_offset = true;
-   devinfo->has_partial_mmap_offset = true;
    devinfo->has_caching_uapi = false;
    devinfo->has_set_pat_uapi = true;
 

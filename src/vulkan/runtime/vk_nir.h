@@ -24,8 +24,7 @@
 #ifndef VK_NIR_H
 #define VK_NIR_H
 
-#include "nir_defines.h"
-#include "compiler/shader_enums.h"
+#include "nir.h"
 #include "vulkan/vulkan_core.h"
 
 struct spirv_to_nir_options;
@@ -43,7 +42,8 @@ nir_vk_is_not_xfb_output(nir_variable *var, void *data);
 nir_shader *
 vk_spirv_to_nir(struct vk_device *device,
                 const uint32_t *spirv_data, size_t spirv_size_B,
-                mesa_shader_stage stage, const char *entrypoint_name,
+                gl_shader_stage stage, const char *entrypoint_name,
+                enum gl_subgroup_size subgroup_size,
                 const VkSpecializationInfo *spec_info,
                 const struct spirv_to_nir_options *spirv_options,
                 const struct nir_shader_compiler_options *nir_options,

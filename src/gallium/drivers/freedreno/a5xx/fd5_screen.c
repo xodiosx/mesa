@@ -64,11 +64,12 @@ fd5_screen_is_format_supported(struct pipe_screen *pscreen,
 
    if ((usage &
         (PIPE_BIND_RENDER_TARGET | PIPE_BIND_DISPLAY_TARGET |
-         PIPE_BIND_SCANOUT | PIPE_BIND_SHARED)) &&
+         PIPE_BIND_SCANOUT | PIPE_BIND_SHARED | PIPE_BIND_COMPUTE_RESOURCE)) &&
        (fd5_pipe2color(format) != RB5_NONE) &&
        (fd5_pipe2tex(format) != TFMT5_NONE)) {
       retval |= usage & (PIPE_BIND_RENDER_TARGET | PIPE_BIND_DISPLAY_TARGET |
-                         PIPE_BIND_SCANOUT | PIPE_BIND_SHARED);
+                         PIPE_BIND_SCANOUT | PIPE_BIND_SHARED |
+                         PIPE_BIND_COMPUTE_RESOURCE);
    }
 
    if (usage & PIPE_BIND_SHADER_IMAGE) {
@@ -110,7 +111,7 @@ static const enum pc_di_primtype primtypes[] = {
    [MESA_PRIM_TRIANGLES]      = DI_PT_TRILIST,
    [MESA_PRIM_TRIANGLE_STRIP] = DI_PT_TRISTRIP,
    [MESA_PRIM_TRIANGLE_FAN]   = DI_PT_TRIFAN,
-   [MESA_PRIM_COUNT]          = DI_PT_RECTLIST,  /* internal clear blits */
+   [MESA_PRIM_COUNT]            = DI_PT_RECTLIST,  /* internal clear blits */
 };
 /* clang-format on */
 
@@ -122,7 +123,7 @@ fd5_screen_init(struct pipe_screen *pscreen)
    pscreen->context_create = fd5_context_create;
    pscreen->is_format_supported = fd5_screen_is_format_supported;
 
-   screen->layout_resource = fd5_layout_resource;
+   screen->setup_slices = fd5_setup_slices;
    if (FD_DBG(TTILE))
       screen->tile_mode = fd5_tile_mode;
 

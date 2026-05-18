@@ -57,7 +57,7 @@ struct vn_render_pass {
 };
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(vn_render_pass,
-                               base.vk,
+                               base.base,
                                VkRenderPass,
                                VK_OBJECT_TYPE_RENDER_PASS)
 
@@ -68,7 +68,7 @@ struct vn_framebuffer {
    VkImageView image_views[];
 };
 VK_DEFINE_NONDISP_HANDLE_CASTS(vn_framebuffer,
-                               base.vk,
+                               base.base,
                                VkFramebuffer,
                                VK_OBJECT_TYPE_FRAMEBUFFER)
 

@@ -44,6 +44,16 @@ struct tr_list
    struct tr_list *prev;
 };
 
+struct trace_surface
+{
+   struct pipe_surface base;
+
+   struct pipe_surface *surface;
+
+   struct tr_list list;
+};
+
+
 struct trace_sampler_view
 {
    struct pipe_sampler_view base;
@@ -65,6 +75,16 @@ struct trace_transfer
    void *map;
 };
 
+
+static inline struct trace_surface *
+trace_surface(struct pipe_surface *surface)
+{
+   if (!surface)
+      return NULL;
+   return (struct trace_surface *)surface;
+}
+
+
 static inline struct trace_sampler_view *
 trace_sampler_view(struct pipe_sampler_view *sampler_view)
 {
@@ -82,6 +102,14 @@ trace_transfer(struct pipe_transfer *transfer)
    return (struct trace_transfer *)transfer;
 }
 
+
+struct pipe_surface *
+trace_surf_create(struct trace_context *tr_ctx,
+                  struct pipe_resource *tr_res,
+                  struct pipe_surface *surface);
+
+void
+trace_surf_destroy(struct trace_surface *tr_surf);
 
 struct pipe_transfer *
 trace_transfer_create(struct trace_context *tr_ctx,

@@ -221,14 +221,7 @@ def do_match(g, pattern, output, skip_lines, in_func=False):
         c = pattern.read(1)
         fail = False
         if c == '':
-            if not in_func:
-                while output.peek() in [' ', '\t']:
-                    output.read(1)
-                if output.read(1) not in ['', '\n']:
-                    res.fail('expected end of output')
-
-            if res.success:
-               break
+            break
         elif output.peek() == '':
             res.fail('unexpected end of output')
         elif c == '\\':
@@ -316,6 +309,14 @@ def do_match(g, pattern, output, skip_lines, in_func=False):
                 return res
 
         escape = False
+
+    if not in_func:
+        while output.peek() in [' ', '\t']:
+            output.read(1)
+
+        if output.read(1) not in ['', '\n']:
+            res.fail('expected end of output')
+            return res
 
     return res
 

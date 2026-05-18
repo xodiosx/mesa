@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <amdgpu.h>
 #include "drm-uapi/amdgpu_drm.h"
 #include "drm-uapi/drm_fourcc.h"
 
@@ -16,7 +17,7 @@
 #include "util/mesa-sha1.h"
 #include "addrlib/inc/addrinterface.h"
 
-#include "ac_surface_test.h"
+#include "ac_fake_hw_db.h"
 
 /*
  * The main goal of this test is making sure that we do
@@ -31,17 +32,17 @@ struct test_entry {
    enum pipe_format format;
 
    /* debug info */
+   const char *name;
    uint8_t pipes;
    uint8_t rb;
    uint8_t banks_or_pkrs;
    uint8_t se;
-   const char *name;
 
    /* value to determine uniqueness */
-   unsigned char hash[SHA1_DIGEST_LENGTH];
+   unsigned char hash[20];
 
    /* u_vector requires power of two sizing */
-   char padding[sizeof(void*) == 8 ? 0 : 4];
+   char padding[sizeof(void*) == 8 ? 8 : 16];
 };
 
 static uint64_t
@@ -220,6 +221,8 @@ static void gfx12_generate_hash(struct ac_addrlib *ac_addrlib,
    ADDR3_COMPUTE_SURFACE_ADDRFROMCOORD_INPUT input = {0};
    input.size = sizeof(input);
    input.swizzleMode = surf->u.gfx9.swizzle_mode;
+   input.flags.color = 1;
+   input.flags.texture = 1;
    input.resourceType = ADDR_RSRC_TEX_2D;
    input.bpp = util_format_get_blocksizebits(entry->format);
    input.unAlignedDims.width = entry->w;
@@ -276,10 +279,6 @@ static void test_modifier(const struct radeon_info *info,
             .num_channels = 3,
             .array_size = 1
          },
-         .blk_w = 1,
-         .blk_h = 1,
-         .bpe = util_format_get_blocksize(format),
-         .modifier = modifier,
       };
 
       struct test_entry entry = {
@@ -296,7 +295,12 @@ static void test_modifier(const struct radeon_info *info,
             G_0098F8_NUM_PKRS(info->gb_addr_config) : G_0098F8_NUM_BANKS(info->gb_addr_config)
       };
 
-      struct radeon_surf surf;
+      struct radeon_surf surf = (struct radeon_surf) {
+         .blk_w = 1,
+         .blk_h = 1,
+         .bpe = util_format_get_blocksize(format),
+         .modifier = modifier,
+      };
 
       int r = ac_compute_surface(addrlib, info, &config, RADEON_SURF_MODE_2D, &surf);
       assert(!r);
@@ -323,7 +327,7 @@ static void test_modifier(const struct radeon_info *info,
                block_size_bits = 18;
                break;
             default:
-               UNREACHABLE("invalid swizzle mode");
+               unreachable("invalid swizzle mode");
             }
          } else {
             switch (surf.u.gfx9.swizzle_mode) {
@@ -363,7 +367,7 @@ static void test_modifier(const struct radeon_info *info,
                block_size_bits = 18;
                break;
             default:
-               UNREACHABLE("invalid swizzle mode");
+               unreachable("invalid swizzle mode");
             }
          }
 

@@ -9,7 +9,6 @@
 
 #include "Sync.h"
 #include "util/log.h"
-#include "util/os_misc.h"
 
 namespace {
 
@@ -18,7 +17,7 @@ static VirtGpuDevice* sDevice = nullptr;
 }  // namespace
 
 VirtGpuDevice* createPlatformVirtGpuDevice(enum VirtGpuCapset capset, int32_t descriptor) {
-    if (os_get_option("VIRTGPU_KUMQUAT")) {
+    if (getenv("VIRTGPU_KUMQUAT")) {
         return kumquatCreateVirtGpuDevice(capset, descriptor);
     } else {
         return osCreateVirtGpuDevice(capset, descriptor);
@@ -30,9 +29,9 @@ VirtGpuDevice* VirtGpuDevice::getInstance(enum VirtGpuCapset capset, int32_t des
     // Otherwise, the created device's capset must match the requested capset.
     // We could support multiple capsets with a map of devices but that case isn't needed
     // currently, and with multiple devices it's unclear how to handle kCapsetNone.
-    if (capset != kCapsetNone && sDevice && sDevice->getCapset() != capset) {
+    if (capset != kCapsetNone && sDevice && sDevice->capset() != capset) {
         mesa_loge("Requested VirtGpuDevice capset %u, already created capset %u", capset,
-                  sDevice->getCapset());
+                  sDevice->capset());
         return nullptr;
     }
     if (!sDevice) {
@@ -51,7 +50,7 @@ void VirtGpuDevice::resetInstance() {
 namespace gfxstream {
 
 SyncHelper* createPlatformSyncHelper() {
-    if (os_get_option("VIRTGPU_KUMQUAT")) {
+    if (getenv("VIRTGPU_KUMQUAT")) {
         return kumquatCreateSyncHelper();
     } else {
         return osCreateSyncHelper();

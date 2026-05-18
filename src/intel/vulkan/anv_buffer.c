@@ -23,13 +23,10 @@ anv_bind_buffer_memory(struct anv_device *device,
       buffer->address = (struct anv_address) {
          .bo = mem->bo,
          .offset = pBindInfo->memoryOffset,
-         .protected = anv_buffer_is_protected(buffer),
       };
    } else {
       buffer->address = ANV_NULL_ADDRESS;
    }
-
-   buffer->vk.device_address = anv_address_physical(buffer->address);
 
    ANV_RMV(buffer_bind, device, buffer);
 
@@ -154,8 +151,8 @@ void anv_GetDeviceBufferMemoryRequirements(
        pInfo->pCreateInfo->flags & (VK_BUFFER_CREATE_SPARSE_BINDING_BIT |
                                     VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT |
                                     VK_BUFFER_CREATE_SPARSE_ALIASED_BIT))
-      mesa_logi("=== %s %s:%d flags:0x%08x\n", __func__, __FILE__,
-                __LINE__, pInfo->pCreateInfo->flags);
+      fprintf(stderr, "=== %s %s:%d flags:0x%08x\n", __func__, __FILE__,
+              __LINE__, pInfo->pCreateInfo->flags);
 
    anv_get_buffer_memory_requirements(device,
                                       pInfo->pCreateInfo->flags,
@@ -179,8 +176,8 @@ VkResult anv_CreateBuffer(
        pCreateInfo->flags & (VK_BUFFER_CREATE_SPARSE_BINDING_BIT |
                              VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT |
                              VK_BUFFER_CREATE_SPARSE_ALIASED_BIT))
-      mesa_logi("=== %s %s:%d flags:0x%08x\n", __func__, __FILE__,
-                __LINE__, pCreateInfo->flags);
+      fprintf(stderr, "=== %s %s:%d flags:0x%08x\n", __func__, __FILE__,
+              __LINE__, pCreateInfo->flags);
 
    if ((pCreateInfo->flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT) &&
        device->physical->sparse_type == ANV_SPARSE_TYPE_TRTT) {
@@ -245,8 +242,6 @@ VkResult anv_CreateBuffer(
          vk_buffer_destroy(&device->vk, pAllocator, &buffer->vk);
          return result;
       }
-
-      buffer->vk.device_address = anv_address_physical(buffer->address);
    }
 
    ANV_RMV(buffer_create, device, false, buffer);
@@ -338,6 +333,5 @@ anv_fill_buffer_surface_state(struct anv_device *device,
                          .size_B = range,
                          .format = format,
                          .swizzle = swizzle,
-                         .stride_B = stride,
-                         .usage = usage);
+                         .stride_B = stride);
 }

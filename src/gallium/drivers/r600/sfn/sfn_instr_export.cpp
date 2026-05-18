@@ -133,7 +133,7 @@ ExportInstr::from_string_impl(std::istream& is, ValueFactory& vf)
    else if (typestr == "PIXEL")
       type = ExportInstr::pixel;
    else
-      UNREACHABLE("Unknown export type");
+      unreachable("Unknown export type");
 
    RegisterVec4 value = vf.src_vec4_from_string(value_str);
 

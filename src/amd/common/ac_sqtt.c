@@ -27,8 +27,8 @@ ac_sqtt_get_data_offset(const struct radeon_info *rad_info, const struct ac_sqtt
    unsigned max_se = rad_info->max_se;
    uint64_t data_offset;
 
-   data_offset = align64(sizeof(struct ac_sqtt_data_info) * max_se, 1ull << SQTT_BUFFER_ALIGN_SHIFT);
-   data_offset += (size_t)data->buffer_size * se;
+   data_offset = align64(sizeof(struct ac_sqtt_data_info) * max_se, 1 << SQTT_BUFFER_ALIGN_SHIFT);
+   data_offset += data->buffer_size * se;
 
    return data_offset;
 }
@@ -111,6 +111,17 @@ ac_is_sqtt_complete(const struct radeon_info *rad_info, const struct ac_sqtt *da
     * of written bytes.
     */
    return info->cur_offset == info->gfx9_write_counter;
+}
+
+uint32_t
+ac_get_expected_buffer_size(struct radeon_info *rad_info, const struct ac_sqtt_data_info *info)
+{
+   if (rad_info->gfx_level >= GFX10) {
+      uint32_t dropped_cntr_per_se = info->gfx10_dropped_cntr / rad_info->max_se;
+      return ((info->cur_offset * 32) + dropped_cntr_per_se) / 1024;
+   }
+
+   return (info->gfx9_write_counter * 32) / 1024;
 }
 
 bool
@@ -231,9 +242,7 @@ ac_sqtt_get_active_cu(const struct radeon_info *info, unsigned se)
 {
    uint32_t cu_index;
 
-   if (info->gfx_level >= GFX12) {
-      cu_index = 0;
-   }else if (info->gfx_level >= GFX11) {
+   if (info->gfx_level >= GFX11) {
       /* GFX11 seems to operate on the last active CU. */
       cu_index = util_last_bit(info->cu_mask[se][0]) - 1;
    } else {
@@ -296,15 +305,10 @@ ac_sqtt_get_ctrl(const struct radeon_info *info, bool enable)
    uint32_t ctrl;
 
    if (info->gfx_level >= GFX11) {
-      if (info->gfx_level >= GFX12) {
-         ctrl = S_0367B0_UTIL_TIMER_GFX12(1) | S_0367B0_LOWATER_OFFSET(4);
-      } else {
-         ctrl = S_0367B0_UTIL_TIMER_GFX11(1) | S_0367B0_RT_FREQ(2); /* 4096 clk */
-      }
-
-      ctrl |= S_0367B0_MODE(enable) | S_0367B0_HIWATER(5) |
-              S_0367B0_DRAW_EVENT_EN(1) | S_0367B0_SPI_STALL_EN(1) |
-              S_0367B0_SQ_STALL_EN(1) | S_0367B0_REG_AT_HWM(2);
+      ctrl = S_0367B0_MODE(enable) | S_0367B0_HIWATER(5) |
+             S_0367B0_UTIL_TIMER_GFX11(1) | S_0367B0_RT_FREQ(2) | /* 4096 clk */
+             S_0367B0_DRAW_EVENT_EN(1) | S_0367B0_SPI_STALL_EN(1) |
+             S_0367B0_SQ_STALL_EN(1) | S_0367B0_REG_AT_HWM(2);
    } else {
       assert(info->gfx_level >= GFX10);
 
@@ -358,20 +362,10 @@ ac_sqtt_emit_start(const struct radeon_info *info, struct ac_pm4_state *pm4,
 
       if (info->gfx_level >= GFX11) {
          /* Order seems important for the following 2 registers. */
-         if (info->gfx_level >= GFX12) {
-            ac_pm4_set_reg(pm4, R_036798_SQ_THREAD_TRACE_BUF0_SIZE,
-                           S_036798_SIZE(shifted_size));
+         ac_pm4_set_reg(pm4, R_0367A4_SQ_THREAD_TRACE_BUF0_SIZE,
+                        S_0367A4_SIZE(shifted_size) | S_0367A4_BASE_HI(shifted_va >> 32));
 
-            ac_pm4_set_reg(pm4, R_03679C_SQ_THREAD_TRACE_BUF0_BASE_LO, shifted_va);
-            ac_pm4_set_reg(pm4, R_0367A0_SQ_THREAD_TRACE_BUF0_BASE_HI, S_0367A0_BASE_HI(shifted_va >> 32));
-
-            ac_pm4_set_reg(pm4, R_0367BC_SQ_THREAD_TRACE_WPTR, 0);
-         } else {
-            ac_pm4_set_reg(pm4, R_0367A4_SQ_THREAD_TRACE_BUF0_SIZE,
-                           S_0367A4_SIZE(shifted_size) | S_0367A4_BASE_HI(shifted_va >> 32));
-
-            ac_pm4_set_reg(pm4, R_0367A0_SQ_THREAD_TRACE_BUF0_BASE, shifted_va);
-         }
+         ac_pm4_set_reg(pm4, R_0367A0_SQ_THREAD_TRACE_BUF0_BASE, shifted_va);
 
          ac_pm4_set_reg(pm4, R_0367B4_SQ_THREAD_TRACE_MASK,
                         S_0367B4_WTYPE_INCLUDE(shader_mask) | S_0367B4_SA_SEL(0) |
@@ -382,7 +376,7 @@ ac_sqtt_emit_start(const struct radeon_info *info, struct ac_pm4_state *pm4,
                                                          V_0367B8_REG_INCLUDE_CONTEXT | V_0367B8_REG_INCLUDE_CONFIG);
 
          /* Performance counters with SQTT are considered deprecated. */
-         uint32_t token_exclude = 0;
+         uint32_t token_exclude = V_0367B8_TOKEN_EXCLUDE_PERF;
 
          if (!sqtt->instruction_timing_enabled) {
             /* Reduce SQTT traffic when instruction timing isn't enabled. */
@@ -390,18 +384,7 @@ ac_sqtt_emit_start(const struct radeon_info *info, struct ac_pm4_state *pm4,
                              V_0367B8_TOKEN_EXCLUDE_VALUINST | V_0367B8_TOKEN_EXCLUDE_IMMEDIATE |
                              V_0367B8_TOKEN_EXCLUDE_INST;
          }
-
-         if (info->gfx_level >= GFX12) {
-            sqtt_token_mask |= S_0367B8_TOKEN_EXCLUDE_GFX12(token_exclude) |
-                               S_0367B8_BOP_EVENTS_TOKEN_INCLUDE_GFX12(1) |
-                               S_0367B8_EXCLUDE_BARRIER_WAIT(1) |
-                               S_0367B8_REG_EXCLUDE(2); /* CP_ME_MC_RADDR */
-         } else {
-            /* Performance counters with SQTT are considered deprecated. */
-            token_exclude |= V_0367B8_TOKEN_EXCLUDE_PERF;
-
-            sqtt_token_mask |= S_0367B8_TOKEN_EXCLUDE_GFX11(token_exclude) | S_0367B8_BOP_EVENTS_TOKEN_INCLUDE_GFX11(1);
-         }
+         sqtt_token_mask |= S_0367B8_TOKEN_EXCLUDE_GFX11(token_exclude) | S_0367B8_BOP_EVENTS_TOKEN_INCLUDE_GFX11(1);
 
          ac_pm4_set_reg(pm4, R_0367B8_SQ_THREAD_TRACE_TOKEN_MASK, sqtt_token_mask);
 
@@ -572,7 +555,7 @@ ac_sqtt_copy_info_regs(const struct radeon_info *info, struct ac_pm4_state *pm4,
       uint32_t init_wptr_value = shifted_data_va & 0x1fffffff;
 
       ac_pm4_cmd_add(pm4, PKT3(PKT3_ATOMIC_MEM, 7, 0));
-      ac_pm4_cmd_add(pm4, ATOMIC_OP(TC_OP_ATOMIC_SUB_RTN_32));
+      ac_pm4_cmd_add(pm4, ATOMIC_OP(TC_OP_ATOMIC_SUB_32));
       ac_pm4_cmd_add(pm4, info_va);         /* addr lo */
       ac_pm4_cmd_add(pm4, info_va >> 32);   /* addr hi */
       ac_pm4_cmd_add(pm4, init_wptr_value); /* data lo */

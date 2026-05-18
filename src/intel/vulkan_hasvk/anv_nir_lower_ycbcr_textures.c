@@ -171,7 +171,7 @@ channel_to_component(enum isl_channel_select channel)
    case ISL_CHANNEL_SELECT_ALPHA:
       return 3;
    default:
-      UNREACHABLE("invalid channel");
+      unreachable("invalid channel");
       return 0;
    }
 }
@@ -189,7 +189,7 @@ swizzle_channel(struct isl_swizzle swizzle, unsigned channel)
    case 3:
       return swizzle.a;
    default:
-      UNREACHABLE("invalid channel");
+      unreachable("invalid channel");
       return 0;
    }
 }

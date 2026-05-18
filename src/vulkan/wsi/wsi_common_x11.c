@@ -53,7 +53,6 @@
 #include "util/u_thread.h"
 #include "util/xmlconfig.h"
 #include "util/timespec.h"
-#include "x11/x11_display.h"
 
 #include "vk_format.h"
 #include "vk_instance.h"
@@ -68,6 +67,11 @@
 #ifdef HAVE_SYS_SHM_H
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#endif
+
+#ifdef __TERMUX__
+#include <android/hardware_buffer.h>
+#include <sys/socket.h>
 #endif
 
 #ifndef XCB_PRESENT_OPTION_ASYNC_MAY_TEAR
@@ -87,7 +91,6 @@ struct wsi_x11_connection {
    bool is_proprietary_x11;
    bool is_xwayland;
    bool has_mit_shm;
-   bool has_xfixes;
 };
 
 struct wsi_x11 {
@@ -111,8 +114,8 @@ struct wsi_x11_vk_surface {
  */
 static int
 wsi_dri3_open(xcb_connection_t *conn,
-              xcb_window_t root,
-              uint32_t provider)
+	      xcb_window_t root,
+	      uint32_t provider)
 {
    xcb_dri3_open_cookie_t       cookie;
    xcb_dri3_open_reply_t        *reply;
@@ -149,7 +152,6 @@ static bool
 wsi_x11_check_dri3_compatible(const struct wsi_device *wsi_dev,
                               xcb_connection_t *conn)
 {
-   bool match;
    xcb_screen_iterator_t screen_iter =
       xcb_setup_roots_iterator(xcb_get_setup(conn));
    xcb_screen_t *screen = screen_iter.data;
@@ -160,7 +162,7 @@ wsi_x11_check_dri3_compatible(const struct wsi_device *wsi_dev,
    int dri3_fd = wsi_dri3_open(conn, screen->root, None);
    if (dri3_fd == -1)
       return true;
-      
+
    bool match = wsi_dev->can_present_on_device(wsi_dev->pdevice, dri3_fd);
 
    close(dri3_fd);
@@ -231,10 +233,10 @@ wsi_x11_connection_create(struct wsi_device *wsi_dev,
 {
    xcb_query_extension_cookie_t dri3_cookie, pres_cookie, randr_cookie,
                                 amd_cookie, nv_cookie, shm_cookie, sync_cookie,
-                                xfixes_cookie, xwl_cookie;
+                                xwl_cookie;
    xcb_query_extension_reply_t *dri3_reply, *pres_reply, *randr_reply,
                                *amd_reply, *nv_reply, *shm_reply = NULL,
-                               *xfixes_reply, *xwl_reply;
+                               *xwl_reply;
    bool wants_shm = wsi_dev->sw && !(WSI_DEBUG & WSI_DEBUG_NOSHM) &&
                     wsi_dev->has_import_memory_host;
    bool has_dri3_v1_2 = false;
@@ -256,7 +258,6 @@ wsi_x11_connection_create(struct wsi_device *wsi_dev,
    dri3_cookie = xcb_query_extension(conn, 4, "DRI3");
    pres_cookie = xcb_query_extension(conn, 7, "Present");
    randr_cookie = xcb_query_extension(conn, 5, "RANDR");
-   xfixes_cookie = xcb_query_extension(conn, 6, "XFIXES");
    xwl_cookie = xcb_query_extension(conn, 8, "XWAYLAND");
 
    if (wants_shm)
@@ -280,14 +281,12 @@ wsi_x11_connection_create(struct wsi_device *wsi_dev,
    randr_reply = xcb_query_extension_reply(conn, randr_cookie, NULL);
    amd_reply = xcb_query_extension_reply(conn, amd_cookie, NULL);
    nv_reply = xcb_query_extension_reply(conn, nv_cookie, NULL);
-   xfixes_reply = xcb_query_extension_reply(conn, xfixes_cookie, NULL);
    xwl_reply = xcb_query_extension_reply(conn, xwl_cookie, NULL);
    if (wants_shm)
       shm_reply = xcb_query_extension_reply(conn, shm_cookie, NULL);
-   if (!dri3_reply || !pres_reply || !xfixes_reply) {
+   if (!dri3_reply || !pres_reply) {
       free(dri3_reply);
       free(pres_reply);
-      free(xfixes_reply);
       free(xwl_reply);
       free(randr_reply);
       free(amd_reply);
@@ -329,17 +328,6 @@ wsi_x11_connection_create(struct wsi_device *wsi_dev,
       free(ver_reply);
    }
 #endif
-
-   wsi_conn->has_xfixes = xfixes_reply->present != 0;
-   if (wsi_conn->has_xfixes) {
-      xcb_xfixes_query_version_cookie_t ver_cookie;
-      xcb_xfixes_query_version_reply_t *ver_reply;
-
-      ver_cookie = xcb_xfixes_query_version(conn, 6, 0);
-      ver_reply = xcb_xfixes_query_version_reply(conn, ver_cookie, NULL);
-      wsi_conn->has_xfixes = (ver_reply->major_version >= 2);
-      free(ver_reply);
-   }
 
    wsi_conn->is_xwayland = wsi_x11_detect_xwayland(conn, randr_reply,
                                                    xwl_reply);
@@ -385,7 +373,6 @@ wsi_x11_connection_create(struct wsi_device *wsi_dev,
    free(xwl_reply);
    free(amd_reply);
    free(nv_reply);
-   free(xfixes_reply);
    if (wants_shm)
       free(shm_reply);
 
@@ -402,13 +389,13 @@ wsi_x11_connection_destroy(struct wsi_device *wsi_dev,
 static bool
 wsi_x11_check_for_dri3(struct wsi_x11_connection *wsi_conn)
 {
-   if (wsi_conn->has_dri3)
-      return true;
-   if (!wsi_conn->is_proprietary_x11) {
-      mesa_logi("vulkan: No DRI3 support detected - required for presentation\n"
-                "Note: you can probably enable DRI3 in your Xorg config\n");
-   }
-   return false;
+  if (wsi_conn->has_dri3)
+    return true;
+  if (!wsi_conn->is_proprietary_x11) {
+    fprintf(stderr, "vulkan: No DRI3 support detected - required for presentation\n"
+                    "Note: you can probably enable DRI3 in your Xorg config\n");
+  }
+  return false;
 }
 
 /**
@@ -617,25 +604,10 @@ wsi_GetPhysicalDeviceXlibPresentationSupportKHR(VkPhysicalDevice physicalDevice,
                                                 Display *dpy,
                                                 VisualID visualID)
 {
-   /* Our WSI implementation for X11 relies on threads.  Check Xlib is running
-    * in thread safe mode before advertising support.
-    */
-   if (!x11_xlib_display_is_thread_safe(dpy))
-      return false;
-
    return wsi_GetPhysicalDeviceXcbPresentationSupportKHR(physicalDevice,
                                                          queueFamilyIndex,
                                                          XGetXCBConnection(dpy),
                                                          visualID);
-}
-
-static bool
-x11_surface_is_thread_safe(VkIcdSurfaceBase *icd_surface)
-{
-   if (icd_surface->platform == VK_ICD_WSI_PLATFORM_XLIB)
-      return x11_xlib_display_is_thread_safe(((VkIcdSurfaceXlib *)icd_surface)->dpy);
-   else
-      return true;
 }
 
 static xcb_connection_t*
@@ -662,11 +634,6 @@ x11_surface_get_support(VkIcdSurfaceBase *icd_surface,
                         uint32_t queueFamilyIndex,
                         VkBool32* pSupported)
 {
-   if (!x11_surface_is_thread_safe(icd_surface)) {
-      *pSupported = false;
-      return VK_SUCCESS;
-   }
-
    xcb_connection_t *conn = x11_surface_get_connection(icd_surface);
    xcb_window_t window = x11_surface_get_window(icd_surface);
 
@@ -729,7 +696,7 @@ x11_get_min_image_count_for_present_mode(struct wsi_device *wsi_device,
 static VkResult
 x11_surface_get_capabilities(VkIcdSurfaceBase *icd_surface,
                              struct wsi_device *wsi_device,
-                             const VkSurfacePresentModeKHR *present_mode,
+                             const VkSurfacePresentModeEXT *present_mode,
                              VkSurfaceCapabilitiesKHR *caps)
 {
    xcb_connection_t *conn = x11_surface_get_connection(icd_surface);
@@ -740,6 +707,7 @@ x11_surface_get_capabilities(VkIcdSurfaceBase *icd_surface,
    xcb_get_geometry_cookie_t geom_cookie;
    xcb_generic_error_t *err;
    xcb_get_geometry_reply_t *geom;
+   static int wrapper_max_image_count = -1;
 
    geom_cookie = xcb_get_geometry(conn, window);
 
@@ -763,14 +731,22 @@ x11_surface_get_capabilities(VkIcdSurfaceBase *icd_surface,
                                       VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
    }
 
+   if (wrapper_max_image_count == -1)
+      wrapper_max_image_count = getenv("WRAPPER_MAX_IMAGE_COUNT") ? atoi(getenv("WRAPPER_MAX_IMAGE_COUNT")) : 0;
+
    if (present_mode) {
       caps->minImageCount = x11_get_min_image_count_for_present_mode(wsi_device, wsi_conn, present_mode->presentMode);
    } else {
       caps->minImageCount = x11_get_min_image_count(wsi_device, wsi_conn->is_xwayland);
    }
 
-   /* There is no real maximum */
-   caps->maxImageCount = 0;
+   if (wrapper_max_image_count > 0) {
+      caps->minImageCount = wrapper_max_image_count;
+      caps->maxImageCount = wrapper_max_image_count;
+   } else {
+      /* There is no real maximum */
+      caps->maxImageCount = 0;
+   }
 
    caps->supportedTransforms = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
    caps->currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
@@ -792,7 +768,7 @@ x11_surface_get_capabilities2(VkIcdSurfaceBase *icd_surface,
 {
    assert(caps->sType == VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR);
 
-   const VkSurfacePresentModeKHR *present_mode = vk_find_struct_const(info_next, SURFACE_PRESENT_MODE_KHR);
+   const VkSurfacePresentModeEXT *present_mode = vk_find_struct_const(info_next, SURFACE_PRESENT_MODE_EXT);
 
    VkResult result =
       x11_surface_get_capabilities(icd_surface, wsi_device, present_mode,
@@ -805,14 +781,13 @@ x11_surface_get_capabilities2(VkIcdSurfaceBase *icd_surface,
       switch (ext->sType) {
       case VK_STRUCTURE_TYPE_SURFACE_PROTECTED_CAPABILITIES_KHR: {
          VkSurfaceProtectedCapabilitiesKHR *protected = (void *)ext;
-         protected->supportsProtected =
-            wsi_device->supports_protected[VK_ICD_WSI_PLATFORM_XCB];
+         protected->supportsProtected = VK_FALSE;
          break;
       }
 
-      case VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_KHR: {
+      case VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_EXT: {
          /* Unsupported. */
-         VkSurfacePresentScalingCapabilitiesKHR *scaling = (void *)ext;
+         VkSurfacePresentScalingCapabilitiesEXT *scaling = (void *)ext;
          scaling->supportedPresentScaling = 0;
          scaling->supportedPresentGravityX = 0;
          scaling->supportedPresentGravityY = 0;
@@ -821,9 +796,9 @@ x11_surface_get_capabilities2(VkIcdSurfaceBase *icd_surface,
          break;
       }
 
-      case VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_COMPATIBILITY_KHR: {
+      case VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_COMPATIBILITY_EXT: {
          /* All present modes are compatible with each other. */
-         VkSurfacePresentModeCompatibilityKHR *compat = (void *)ext;
+         VkSurfacePresentModeCompatibilityEXT *compat = (void *)ext;
          if (compat->pPresentModes) {
             assert(present_mode);
             VK_OUTARRAY_MAKE_TYPED(VkPresentModeKHR, modes, compat->pPresentModes, &compat->presentModeCount);
@@ -841,26 +816,12 @@ x11_surface_get_capabilities2(VkIcdSurfaceBase *icd_surface,
             }
          } else {
             if (!present_mode)
-               wsi_common_vk_warn_once("Use of VkSurfacePresentModeCompatibilityKHR "
-                                       "without a VkSurfacePresentModeKHR set. This is an "
+               wsi_common_vk_warn_once("Use of VkSurfacePresentModeCompatibilityEXT "
+                                       "without a VkSurfacePresentModeEXT set. This is an "
                                        "application bug.\n");
 
             compat->presentModeCount = ARRAY_SIZE(present_modes);
          }
-         break;
-      }
-
-      case VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_ID_2_KHR: {
-         VkSurfaceCapabilitiesPresentId2KHR *pid2 = (void *)ext;
-
-         pid2->presentId2Supported = VK_TRUE;
-         break;
-      }
-
-      case VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_WAIT_2_KHR: {
-         VkSurfaceCapabilitiesPresentWait2KHR *pwait2 = (void *)ext;
-
-         pwait2->presentWait2Supported = VK_TRUE;
          break;
       }
 
@@ -1099,8 +1060,7 @@ struct x11_image {
    struct wsi_image                          base;
    xcb_pixmap_t                              pixmap;
    xcb_xfixes_region_t                       update_region; /* long lived XID */
-   xcb_xfixes_region_t                       update_area;   /* the above or None */
-   struct xshmfence *                        shm_fence;
+   xcb_xfixes_region_t                   update_area;   /* the above or None */
    uint32_t                                  sync_fence;
    xcb_shm_seg_t                             shmseg;
    int                                       shmid;
@@ -1240,8 +1200,8 @@ _x11_swapchain_result(struct x11_swapchain *chain, VkResult result,
    /* If we have a new error, mark it as permanent on the chain and return. */
    if (result < 0) {
 #ifndef NDEBUG
-      mesa_logd("%s:%d: Swapchain status changed to %s\n",
-                file, line, vk_Result_to_str(result));
+      fprintf(stderr, "%s:%d: Swapchain status changed to %s\n",
+              file, line, vk_Result_to_str(result));
 #endif
       chain->status = result;
       return result;
@@ -1257,8 +1217,8 @@ _x11_swapchain_result(struct x11_swapchain *chain, VkResult result,
    if (result == VK_SUBOPTIMAL_KHR) {
 #ifndef NDEBUG
       if (chain->status != VK_SUBOPTIMAL_KHR) {
-         mesa_logd("%s:%d: Swapchain status changed to %s\n",
-                   file, line, vk_Result_to_str(result));
+         fprintf(stderr, "%s:%d: Swapchain status changed to %s\n",
+                 file, line, vk_Result_to_str(result));
       }
 #endif
       chain->status = result;
@@ -1281,7 +1241,6 @@ x11_get_wsi_image(struct wsi_swapchain *wsi_chain, uint32_t image_index)
 static bool
 wsi_x11_swapchain_query_dri3_modifiers_changed(struct x11_swapchain *chain);
 #endif
-
 static VkResult
 x11_wait_for_explicit_sync_release_submission(struct x11_swapchain *chain,
                                               uint64_t rel_timeout_ns,
@@ -1290,13 +1249,14 @@ x11_wait_for_explicit_sync_release_submission(struct x11_swapchain *chain,
    STACK_ARRAY(struct wsi_image*, images, chain->base.image_count);
    for (uint32_t i = 0; i < chain->base.image_count; i++)
       images[i] = &chain->images[i].base;
+
    VkResult result;
 #ifdef HAVE_LIBDRM
    result = wsi_drm_wait_for_explicit_sync_release(&chain->base,
                                                    chain->base.image_count,
                                                    images,
                                                    rel_timeout_ns,
-                                                  image_index);
+                                                   image_index);
 #else
    result = VK_ERROR_FEATURE_NOT_PRESENT;
 #endif
@@ -1443,12 +1403,12 @@ x11_present_to_x11_dri3(struct x11_swapchain *chain, uint32_t image_index,
    if (chain->has_dri3_modifiers)
       options |= XCB_PRESENT_OPTION_SUBOPTIMAL;
 
-   xshmfence_reset(image->shm_fence);
-
    if (!chain->base.image_info.explicit_sync) {
       ++chain->sent_image_count;
       assert(chain->sent_image_count <= chain->base.image_count);
    }
+
+   xcb_sync_reset_fence(chain->conn, image->sync_fence);
 
    ++chain->send_sbc;
    uint32_t serial = (uint32_t)chain->send_sbc;
@@ -1711,7 +1671,7 @@ x11_requires_mailbox_image_count(const struct wsi_device *device,
     *
     * - IMMEDIATE expects tearing, and when tearing, 3 images are more than enough.
     *
-    * - With KHR_swapchain_maintenance1, toggling between FIFO / IMMEDIATE (used extensively by D3D layering)
+    * - With EXT_swapchain_maintenance1, toggling between FIFO / IMMEDIATE (used extensively by D3D layering)
     *   would require application to allocate >3 images which is unfortunate for memory usage,
     *   and potentially disastrous for latency unless KHR_present_wait is used.
     */
@@ -1735,7 +1695,7 @@ x11_present_to_x11(struct x11_swapchain *chain, uint32_t image_index,
 #ifdef HAVE_X11_DRM
       result = x11_present_to_x11_dri3(chain, image_index, target_msc, present_mode);
 #else
-      UNREACHABLE("X11 missing DRI3 support!");
+      unreachable("X11 missing DRI3 support!");
 #endif
 
    if (result < 0)
@@ -1781,11 +1741,11 @@ x11_set_present_mode(struct wsi_swapchain *wsi_chain,
  * image has been released by the X server to be used again by the consumer.
  */
 static VkResult
-x11_acquire_next_image(struct wsi_swapchain *wsi_chain,
+x11_acquire_next_image(struct wsi_swapchain *anv_chain,
                        const VkAcquireNextImageInfoKHR *info,
                        uint32_t *image_index)
 {
-   struct x11_swapchain *chain = (struct x11_swapchain *)wsi_chain;
+   struct x11_swapchain *chain = (struct x11_swapchain *)anv_chain;
    uint64_t timeout = info->timeout;
 
    /* If the swapchain is in an error state, don't go any further. */
@@ -1799,16 +1759,10 @@ x11_acquire_next_image(struct wsi_swapchain *wsi_chain,
    } else {
       result = wsi_queue_pull(&chain->acquire_queue,
                               image_index, timeout);
-
-      /* x11_wait_for_explicit_sync_release_submission() is smart enough to do
-       * this for us but wsi_queue_pull() isn't.
-       */
-      if (result == VK_TIMEOUT && info->timeout == 0)
-         result = VK_NOT_READY;
    }
 
-   if (result == VK_TIMEOUT || result == VK_NOT_READY)
-      return result;
+   if (result == VK_TIMEOUT)
+      return info->timeout ? VK_TIMEOUT : VK_NOT_READY;
 
    if (result < 0) {
       mtx_lock(&chain->thread_state_lock);
@@ -1822,11 +1776,11 @@ x11_acquire_next_image(struct wsi_swapchain *wsi_chain,
       return result;
 
    assert(*image_index < chain->base.image_count);
-#ifdef HAVE_X11_DRM
-   if (chain->images[*image_index].shm_fence &&
-       !chain->base.image_info.explicit_sync)
-      xshmfence_await(chain->images[*image_index].shm_fence);
-#endif
+
+   if (chain->base.wsi->sw && !chain->has_mit_shm)
+      return result;
+      
+   xcb_sync_await_fence(chain->conn, 1, &chain->images[*image_index].sync_fence);
 
    return result;
 }
@@ -1839,12 +1793,12 @@ x11_acquire_next_image(struct wsi_swapchain *wsi_chain,
  * presentation but directly asks the X server to show it.
  */
 static VkResult
-x11_queue_present(struct wsi_swapchain *wsi_chain,
+x11_queue_present(struct wsi_swapchain *anv_chain,
                   uint32_t image_index,
                   uint64_t present_id,
                   const VkPresentRegionKHR *damage)
 {
-   struct x11_swapchain *chain = (struct x11_swapchain *)wsi_chain;
+   struct x11_swapchain *chain = (struct x11_swapchain *)anv_chain;
    xcb_xfixes_region_t update_area = 0;
 
    /* If the swapchain is in an error state, don't go any further. */
@@ -1852,9 +1806,8 @@ x11_queue_present(struct wsi_swapchain *wsi_chain,
    if (status < 0)
       return status;
 
-   if (chain->images[image_index].update_region != None &&
-       damage && damage->pRectangles && damage->rectangleCount > 0 &&
-       damage->rectangleCount <= MAX_DAMAGE_RECTS) {
+   if (damage && damage->pRectangles && damage->rectangleCount > 0 &&
+      damage->rectangleCount <= MAX_DAMAGE_RECTS) {
       xcb_rectangle_t *rects = chain->images[image_index].rects;
 
       update_area = chain->images[image_index].update_region;
@@ -1866,14 +1819,13 @@ x11_queue_present(struct wsi_swapchain *wsi_chain,
          rects[i].width = rect->extent.width;
          rects[i].height = rect->extent.height;
       }
-      xcb_xfixes_set_region(chain->conn, update_area, damage->rectangleCount, rects);
       chain->images[image_index].rectangle_count = damage->rectangleCount;
    } else {
       chain->images[image_index].rectangle_count = 0;
    }
    chain->images[image_index].update_area = update_area;
    chain->images[image_index].present_id = present_id;
-   /* With KHR_swapchain_maintenance1, the present mode can change per present. */
+   /* With EXT_swapchain_maintenance1, the present mode can change per present. */
    chain->images[image_index].present_mode = chain->base.present_mode;
 
    wsi_queue_push(&chain->present_queue, image_index);
@@ -2116,7 +2068,6 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
    if (result != VK_SUCCESS)
       return result;
 
-   image->update_region = None;
    if (chain->base.wsi->sw && !chain->has_mit_shm)
       return VK_SUCCESS;
 
@@ -2124,9 +2075,8 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
    xcb_void_cookie_t cookie;
    xcb_generic_error_t *error = NULL;
    uint32_t bpp = 32;
-   int fence_fd;
+   
    image->update_region = xcb_generate_id(chain->conn);
-   xcb_xfixes_create_region(chain->conn, image->update_region, 0, NULL);
 
    if (chain->base.wsi->sw) {
       image->shmseg = xcb_generate_id(chain->conn);
@@ -2150,8 +2100,18 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
 
    if (image->base.drm_modifier != DRM_FORMAT_MOD_INVALID) {
       /* If the image has a modifier, we must have DRI3 v1.2. */
-      assert(chain->has_dri3_modifiers);
 
+#ifdef __TERMUX__
+      int sock_fds[2] = { -1, -1 };
+      if (image->base.ahardware_buffer) {
+         if (socketpair(AF_UNIX, SOCK_STREAM, 0, sock_fds) < 0) {
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+         }
+         AHardwareBuffer_sendHandleToUnixSocket(
+            image->base.ahardware_buffer, sock_fds[0]);
+         image->base.dma_buf_fd = sock_fds[1];
+      }
+#endif
       /* XCB requires an array of file descriptors but we only have one */
       int fds[4] = { -1, -1, -1, -1 };
       for (int i = 0; i < image->base.num_planes; i++) {
@@ -2182,6 +2142,17 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
                                               chain->depth, bpp,
                                               image->base.drm_modifier,
                                               fds);
+#ifdef __TERMUX__
+      if (image->base.ahardware_buffer) {
+         xcb_flush(chain->conn);
+         uint8_t read_buf;
+         read(sock_fds[0], &read_buf, 1);
+         for (int i = 0; i < ARRAY_SIZE(sock_fds); i++) {
+            close(sock_fds[i]);
+         }
+         image->base.dma_buf_fd = -1;
+      }
+#endif
    } else {
       /* Without passing modifiers, we can't have multi-plane RGB images. */
       assert(image->base.num_planes == 1);
@@ -2212,7 +2183,7 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
    if (chain->base.image_info.explicit_sync) {
       for (uint32_t i = 0; i < WSI_ES_COUNT; i++) {
          image->dri3_syncobj[i] = xcb_generate_id(chain->conn);
-         int fd = os_dupfd_cloexec(image->base.explicit_sync[i].fd);
+         int fd = dup(image->base.explicit_sync[i].fd);
          if (fd < 0)
             goto fail_image;
 
@@ -2230,36 +2201,17 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
 #endif
 
 out_fence:
-   fence_fd = xshmfence_alloc_shm();
-   if (fence_fd < 0)
-      goto fail_pixmap;
-
-   image->shm_fence = xshmfence_map_shm(fence_fd);
-   if (image->shm_fence == NULL)
-      goto fail_shmfence_alloc;
-
    image->sync_fence = xcb_generate_id(chain->conn);
-   xcb_dri3_fence_from_fd(chain->conn,
-                          image->pixmap,
-                          image->sync_fence,
-                          false,
-                          fence_fd);
-
-   xshmfence_trigger(image->shm_fence);
+   xcb_sync_create_fence(chain->conn, image->pixmap, image->sync_fence, false);
+   xcb_sync_trigger_fence(chain->conn, image->sync_fence);
+   
    return VK_SUCCESS;
-
-fail_shmfence_alloc:
-   close(fence_fd);
-
-fail_pixmap:
-   cookie = xcb_free_pixmap(chain->conn, image->pixmap);
-   xcb_discard_reply(chain->conn, cookie.sequence);
 
 fail_image:
    wsi_destroy_image(&chain->base, &image->base);
 
 #else
-   UNREACHABLE("SHM support not compiled in");
+   unreachable("SHM support not compiled in");
 #endif
    return VK_ERROR_INITIALIZATION_FAILED;
 }
@@ -2274,13 +2226,11 @@ x11_image_finish(struct x11_swapchain *chain,
 #ifdef HAVE_X11_DRM
       cookie = xcb_sync_destroy_fence(chain->conn, image->sync_fence);
       xcb_discard_reply(chain->conn, cookie.sequence);
-      xshmfence_unmap_shm(image->shm_fence);
 #endif
 
       cookie = xcb_free_pixmap(chain->conn, image->pixmap);
       xcb_discard_reply(chain->conn, cookie.sequence);
 #ifdef HAVE_X11_DRM
-      cookie = xcb_xfixes_destroy_region(chain->conn, image->update_region);
       xcb_discard_reply(chain->conn, cookie.sequence);
 #endif
 #ifdef HAVE_DRI3_EXPLICIT_SYNC
@@ -2366,7 +2316,7 @@ wsi_x11_get_dri3_modifiers(struct wsi_x11_connection *wsi_conn,
                               counts[n] * sizeof(uint64_t),
                               8, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
       if (!modifiers[n]) {
-         if (n > 0)
+	 if (n > 0)
             vk_free(pAllocator, modifiers[0]);
          free(mod_reply);
          goto out;
@@ -2444,10 +2394,10 @@ wsi_x11_swapchain_query_dri3_modifiers_changed(struct x11_swapchain *chain)
 }
 #endif
 static VkResult
-x11_swapchain_destroy(struct wsi_swapchain *wsi_chain,
+x11_swapchain_destroy(struct wsi_swapchain *anv_chain,
                       const VkAllocationCallbacks *pAllocator)
 {
-   struct x11_swapchain *chain = (struct x11_swapchain *)wsi_chain;
+   struct x11_swapchain *chain = (struct x11_swapchain *)anv_chain;
 
    mtx_lock(&chain->thread_state_lock);
    chain->status = VK_ERROR_OUT_OF_DATE_KHR;
@@ -2483,32 +2433,6 @@ x11_swapchain_destroy(struct wsi_swapchain *wsi_chain,
    vk_free(pAllocator, chain);
 
    return VK_SUCCESS;
-}
-
-static void
-wsi_x11_set_adaptive_sync_property(xcb_connection_t *conn,
-                                   xcb_drawable_t drawable,
-                                   uint32_t state)
-{
-   static char const name[] = "_VARIABLE_REFRESH";
-   xcb_intern_atom_cookie_t cookie;
-   xcb_intern_atom_reply_t* reply;
-   xcb_void_cookie_t check;
-
-   cookie = xcb_intern_atom(conn, 0, strlen(name), name);
-   reply = xcb_intern_atom_reply(conn, cookie, NULL);
-   if (reply == NULL)
-      return;
-
-   if (state)
-      check = xcb_change_property_checked(conn, XCB_PROP_MODE_REPLACE,
-                                          drawable, reply->atom,
-                                          XCB_ATOM_CARDINAL, 32, 1, &state);
-   else
-      check = xcb_delete_property_checked(conn, drawable, reply->atom);
-
-   xcb_discard_reply(conn, check.sequence);
-   free(reply);
 }
 
 static VkResult x11_wait_for_present(struct wsi_swapchain *wsi_chain,
@@ -2562,6 +2486,31 @@ x11_get_min_image_count_for_present_mode(struct wsi_device *wsi_device,
       return min_image_count;
 }
 
+static void
+x11_set_string_property(xcb_connection_t *conn,
+						xcb_window_t window,
+						const char *name, 
+						const char *value)
+{
+   xcb_intern_atom_cookie_t atom_cookie;
+   xcb_intern_atom_reply_t *atom_reply;
+
+   atom_cookie = xcb_intern_atom(conn, 0, strlen(name), name);
+   atom_reply = xcb_intern_atom_reply(conn, atom_cookie, NULL);
+
+   if (atom_reply) {
+      xcb_change_property(conn,
+         XCB_PROP_MODE_REPLACE,
+         window,
+         atom_reply->atom,
+         XCB_ATOM_STRING,
+         8,
+         strlen(value),
+         value);
+      xcb_flush(conn);
+   }
+}
+
 /**
  * Create the swapchain.
  *
@@ -2582,12 +2531,6 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    VkPresentModeKHR present_mode = wsi_swapchain_get_present_mode(wsi_device, pCreateInfo);
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR);
-
-   /* We really shouldn't get here as we return no WSI support for XLib when
-    * it's not threadsafe.  However, one final check doesn't cost much.
-    */
-   if (!x11_surface_is_thread_safe(icd_surface))
-      return VK_ERROR_UNKNOWN;
 
    /* Get xcb connection from the icd_surface and from that our internal struct
     * representing it.
@@ -2690,6 +2633,13 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
          .alloc_shm = wsi_conn->has_mit_shm ? &alloc_shm : NULL,
       };
       image_params = &cpu_image_params.base;
+#ifdef __TERMUX__
+   } else {
+      image_params = &(struct wsi_base_image_params){
+         .image_type = WSI_IMAGE_TYPE_ANDROID,
+      };
+   }
+#else
    } else {
 #ifdef HAVE_X11_DRM
       drm_image_params = (struct wsi_drm_image_params) {
@@ -2716,10 +2666,10 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
       }
       image_params = &drm_image_params.base;
 #else
-      UNREACHABLE("X11 DRM support missing!");
+      unreachable("X11 DRM support missing!");
 #endif
    }
-
+#endif
    result = wsi_swapchain_init(wsi_device, &chain->base, device, pCreateInfo,
                                image_params, pAllocator);
 
@@ -2734,7 +2684,6 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    chain->base.acquire_next_image = x11_acquire_next_image;
    chain->base.queue_present = x11_queue_present;
    chain->base.wait_for_present = x11_wait_for_present;
-   chain->base.wait_for_present2 = x11_wait_for_present;
    chain->base.release_images = x11_release_images;
    chain->base.set_present_mode = x11_set_present_mode;
    chain->base.present_mode = present_mode;
@@ -2854,11 +2803,9 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    if (ret != thrd_success)
       goto fail_init_event_queue;
 
-   /* It is safe to set it here as only one swapchain can be associated with
-    * the window, and swapchain creation does the association. At this point
-    * we know the creation is going to succeed. */
-   wsi_x11_set_adaptive_sync_property(conn, window,
-                                      wsi_device->enable_adaptive_sync);
+   x11_set_string_property(conn, window, "_MESA_DRV", "0");
+   x11_set_string_property(conn, window, "_MESA_DRV_ENGINE_NAME", wsi_device->engine_name);
+   x11_set_string_property(conn, window, "_MESA_DRV_GPU_NAME", wsi_device->properties2.properties.deviceName);
 
    *swapchain_out = &chain->base;
 

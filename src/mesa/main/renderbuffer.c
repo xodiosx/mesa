@@ -69,6 +69,14 @@ choose_renderbuffer_format(struct gl_context *ctx,
 static void
 delete_renderbuffer(struct gl_context *ctx, struct gl_renderbuffer *rb)
 {
+   if (ctx) {
+      pipe_surface_release(ctx->pipe, &rb->surface_srgb);
+      pipe_surface_release(ctx->pipe, &rb->surface_linear);
+   } else {
+      pipe_surface_release_no_context(&rb->surface_srgb);
+      pipe_surface_release_no_context(&rb->surface_linear);
+   }
+   rb->surface = NULL;
    pipe_resource_reference(&rb->texture, NULL);
    free(rb->data);
    free(rb->Label);
@@ -141,8 +149,11 @@ renderbuffer_alloc_storage(struct gl_context * ctx,
                                            width, height);
    }
 
-   /* Free the old texture
+   /* Free the old surface and texture
     */
+   pipe_surface_reference(&rb->surface_srgb, NULL);
+   pipe_surface_reference(&rb->surface_linear, NULL);
+   rb->surface = NULL;
    pipe_resource_reference(&rb->texture, NULL);
 
    /* If an sRGB framebuffer is unsupported, sRGB formats behave like linear
@@ -185,7 +196,7 @@ renderbuffer_alloc_storage(struct gl_context * ctx,
              rb->_BaseFormat == GL_STENCIL_INDEX) {
             /* Find a supported depth-stencil format. */
             for (unsigned samples = start;
-                 samples <= MAX_SAMPLES;
+                 samples <= ctx->Const.MaxDepthStencilFramebufferSamples;
                  samples++) {
                format = choose_renderbuffer_format(ctx, internalFormat,
                                                    samples, samples);
@@ -199,7 +210,7 @@ renderbuffer_alloc_storage(struct gl_context * ctx,
          } else {
             /* Find a supported color format, samples >= storage_samples. */
             for (unsigned storage_samples = start_storage;
-                 storage_samples <= MAX_SAMPLES;
+                 storage_samples <= ctx->Const.MaxColorFramebufferStorageSamples;
                  storage_samples++) {
                for (unsigned samples = MAX2(start, storage_samples);
                     samples <= ctx->Const.MaxColorFramebufferSamples;
@@ -218,7 +229,7 @@ renderbuffer_alloc_storage(struct gl_context * ctx,
             found:;
          }
       } else {
-         for (unsigned samples = start; samples <= MAX_SAMPLES;
+         for (unsigned samples = start; samples <= ctx->Const.MaxSamples;
               samples++) {
             format = choose_renderbuffer_format(ctx, internalFormat,
                                                 samples, samples);
@@ -279,7 +290,7 @@ renderbuffer_alloc_storage(struct gl_context * ctx,
       return false;
 
    _mesa_update_renderbuffer_surface(ctx, rb);
-   return GL_TRUE;
+   return rb->surface != NULL;
 }
 
 /**
@@ -480,12 +491,11 @@ _mesa_map_renderbuffer(struct gl_context *ctx,
    else
       y2 = y;
 
-   _mesa_update_renderbuffer_surface(ctx, rb);
-   map = pipe_texture_map(pipe,
-                           rb->texture,
-                           rb->surface.level,
-                           rb->surface.first_layer,
-                           transfer_flags, x, y2, w, h, &rb->transfer);
+    map = pipe_texture_map(pipe,
+                            rb->texture,
+                            rb->surface->u.tex.level,
+                            rb->surface->u.tex.first_layer,
+                            transfer_flags, x, y2, w, h, &rb->transfer);
    if (map) {
       if (invert) {
          *rowStrideOut = -(int) rb->transfer->stride;
@@ -517,34 +527,31 @@ _mesa_unmap_renderbuffer(struct gl_context *ctx,
    rb->transfer = NULL;
 }
 
-enum pipe_format
-_mesa_renderbuffer_get_format(struct gl_context *ctx, struct gl_renderbuffer *rb)
+void
+_mesa_regen_renderbuffer_surface(struct gl_context *ctx,
+                                 struct gl_renderbuffer *rb)
 {
-   /*
-    * For winsys fbo, it is possible that the renderbuffer is sRGB-capable but
-    * the format of rb->texture is linear (because we have no control over
-    * the format).  Check rb->Format instead of rb->texture->format
-    * to determine if the rb is sRGB-capable.
-    */
-   bool enable_srgb = ctx->Color.sRGBEnabled && _mesa_is_format_srgb(rb->Format);
-   assert(rb->texture);
-   enum pipe_format format = rb->texture->format;
+   struct pipe_context *pipe = ctx->pipe;
+   struct pipe_resource *resource = rb->texture;
 
-   if (rb->is_rtt) {
-      const struct gl_texture_object *stTexObj = rb->TexImage->TexObject;
-      if (stTexObj->surface_based)
-         format = stTexObj->surface_format;
-   }
+   struct pipe_surface **psurf =
+      rb->surface_srgb ? &rb->surface_srgb : &rb->surface_linear;
+   struct pipe_surface *surf = *psurf;
+   /* create a new pipe_surface */
+   struct pipe_surface surf_tmpl;
+   memset(&surf_tmpl, 0, sizeof(surf_tmpl));
+   surf_tmpl.format = surf->format;
+   surf_tmpl.nr_samples = rb->rtt_nr_samples;
+   surf_tmpl.u.tex.level = surf->u.tex.level;
+   surf_tmpl.u.tex.first_layer = surf->u.tex.first_layer;
+   surf_tmpl.u.tex.last_layer = surf->u.tex.last_layer;
 
-   if (util_format_is_depth_or_stencil(format)) {
-      rb->format_srgb = format;
-      rb->format_linear = format;
-   } else {
-      rb->format_srgb = util_format_srgb(format);
-      rb->format_linear = util_format_linear(format);
-   }
+   /* create -> destroy to avoid blowing up cached surfaces */
+   surf = pipe->create_surface(pipe, resource, &surf_tmpl);
+   pipe_surface_release(pipe, psurf);
+   *psurf = surf;
 
-   return enable_srgb ? rb->format_srgb : rb->format_linear;
+   rb->surface = *psurf;
 }
 
 /**
@@ -555,44 +562,53 @@ void
 _mesa_update_renderbuffer_surface(struct gl_context *ctx,
                                   struct gl_renderbuffer *rb)
 {
+   struct pipe_context *pipe = ctx->pipe;
    struct pipe_resource *resource = rb->texture;
    const struct gl_texture_object *stTexObj = NULL;
    unsigned rtt_width = rb->Width;
    unsigned rtt_height = rb->Height;
    unsigned rtt_depth = rb->Depth;
 
-
-   enum pipe_format format = _mesa_renderbuffer_get_format(ctx, rb);
+   /*
+    * For winsys fbo, it is possible that the renderbuffer is sRGB-capable but
+    * the format of rb->texture is linear (because we have no control over
+    * the format).  Check rb->Format instead of rb->texture->format
+    * to determine if the rb is sRGB-capable.
+    */
+   bool enable_srgb = ctx->Color.sRGBEnabled &&
+      _mesa_is_format_srgb(rb->Format);
+   enum pipe_format format = resource->format;
 
    if (rb->is_rtt) {
       stTexObj = rb->TexImage->TexObject;
+      if (stTexObj->surface_based)
+         format = stTexObj->surface_format;
    }
+
+   format = enable_srgb ? util_format_srgb(format) : util_format_linear(format);
 
    if (resource->target == PIPE_TEXTURE_1D_ARRAY) {
       rtt_depth = rtt_height;
       rtt_height = 1;
    }
 
-   /* try to find matching mipmap level size, or just use level 0 and assume partial render */
-   unsigned level = 0;
-   for (int test_level = 0; test_level <= resource->last_level; test_level++) {
-      if (u_minify(resource->width0, test_level) == rtt_width &&
-          u_minify(resource->height0, test_level) == rtt_height &&
+   /* find matching mipmap level size */
+   unsigned level;
+   for (level = 0; level <= resource->last_level; level++) {
+      if (u_minify(resource->width0, level) == rtt_width &&
+          u_minify(resource->height0, level) == rtt_height &&
           (resource->target != PIPE_TEXTURE_3D ||
-           u_minify(resource->depth0, test_level) == rtt_depth)) {
-         level = test_level;
+           u_minify(resource->depth0, level) == rtt_depth)) {
          break;
       }
    }
+   assert(level <= resource->last_level);
 
    /* determine the layer bounds */
    unsigned first_layer, last_layer;
    if (rb->rtt_numviews) {
       first_layer = rb->rtt_slice;
       last_layer = first_layer + rb->rtt_numviews - 1;
-      /* this is an incomplete framebuffer */
-      if (last_layer >= resource->array_size)
-         return;
    } else if (rb->rtt_layered) {
       first_layer = 0;
       last_layer = util_max_layer(rb->texture, level);
@@ -627,7 +643,7 @@ _mesa_update_renderbuffer_surface(struct gl_context *ctx,
          than or equal to samples and no more than the next larger sample count 
          supported by the implementation.
        */
-      for (unsigned i = rb->rtt_nr_samples; i <= ctx->Const.MaxFramebufferSamples; i++) {
+      for (unsigned i = rb->rtt_nr_samples + 1; i <= ctx->Const.MaxFramebufferSamples; i++) {
          if (!ctx->st->screen->is_format_supported(ctx->st->screen, format, resource->target, i, i, resource->bind))
             continue;
          nr_samples = i;
@@ -635,10 +651,34 @@ _mesa_update_renderbuffer_surface(struct gl_context *ctx,
       }
    }
 
-   rb->surface.format = format;
-   rb->surface.texture = rb->texture;
-   rb->surface.nr_samples = nr_samples;
-   rb->surface.level = level;
-   rb->surface.first_layer = first_layer;
-   rb->surface.last_layer = last_layer;
+   struct pipe_surface **psurf =
+      enable_srgb ? &rb->surface_srgb : &rb->surface_linear;
+   struct pipe_surface *surf = *psurf;
+
+   if (!surf ||
+       surf->texture->nr_samples != rb->NumSamples ||
+       surf->texture->nr_storage_samples != rb->NumStorageSamples ||
+       surf->format != format ||
+       surf->texture != resource ||
+       surf->width != rtt_width ||
+       surf->height != rtt_height ||
+       surf->nr_samples != nr_samples ||
+       surf->u.tex.level != level ||
+       surf->u.tex.first_layer != first_layer ||
+       surf->u.tex.last_layer != last_layer) {
+      /* create a new pipe_surface */
+      struct pipe_surface surf_tmpl;
+      memset(&surf_tmpl, 0, sizeof(surf_tmpl));
+      surf_tmpl.format = format;
+      surf_tmpl.nr_samples = nr_samples;
+      surf_tmpl.u.tex.level = level;
+      surf_tmpl.u.tex.first_layer = first_layer;
+      surf_tmpl.u.tex.last_layer = last_layer;
+
+      /* create -> destroy to avoid blowing up cached surfaces */
+      struct pipe_surface *surf = pipe->create_surface(pipe, resource, &surf_tmpl);
+      pipe_surface_release(pipe, psurf);
+      *psurf = surf;
+   }
+   rb->surface = *psurf;
 }

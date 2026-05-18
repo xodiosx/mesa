@@ -50,7 +50,7 @@ set_type(unsigned idx, nir_alu_type type, BITSET_WORD *float_types,
       break;
 
    default:
-      UNREACHABLE("Invalid base nir_alu_type");
+      unreachable("Invalid base nir_alu_type");
    }
 }
 

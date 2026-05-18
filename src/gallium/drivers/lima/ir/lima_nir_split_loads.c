@@ -54,7 +54,7 @@ replace_intrinsic(nir_builder *b, nir_intrinsic_instr *intrin)
        intrin->intrinsic != nir_intrinsic_load_uniform)
       return false;
 
-   if (nir_src_is_const(intrin->src[0]))
+   if (intrin->src[0].ssa->parent_instr->type == nir_instr_type_load_const)
       return false;
 
    struct hash_table *visited_instrs = _mesa_pointer_hash_table_create(NULL);
@@ -115,19 +115,16 @@ lima_nir_split_loads(nir_shader *shader)
    nir_foreach_function_impl(impl, shader) {
       nir_builder b = nir_builder_create(impl);
 
-      bool impl_progress = false;
       nir_foreach_block_reverse(block, impl) {
          nir_foreach_instr_reverse_safe(instr, block) {
             if (instr->type == nir_instr_type_load_const) {
                replace_load_const(&b, nir_instr_as_load_const(instr));
-               impl_progress = true;
+               progress = true;
             } else if (instr->type == nir_instr_type_intrinsic) {
-               impl_progress |= replace_intrinsic(&b, nir_instr_as_intrinsic(instr));
+               progress |= replace_intrinsic(&b, nir_instr_as_intrinsic(instr));
             }
          }
       }
-
-      progress |= nir_progress(impl_progress, impl, nir_metadata_control_flow);
    }
 
    return progress;

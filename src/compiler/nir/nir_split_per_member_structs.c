@@ -21,7 +21,7 @@
  * IN THE SOFTWARE.
  */
 
-#include "nir_builder.h"
+#include "nir.h"
 #include "nir_deref.h"
 
 static nir_variable *

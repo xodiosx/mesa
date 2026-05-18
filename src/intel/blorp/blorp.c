@@ -164,7 +164,7 @@ blorp_surface_info_init(struct blorp_batch *batch,
    info->addr = surf->addr;
 
    info->aux_usage = surf->aux_usage;
-   if (!blorp_address_is_null(surf->aux_addr)) {
+   if (info->aux_usage != ISL_AUX_USAGE_NONE) {
       info->aux_surf = *surf->aux_surf;
       info->aux_addr = surf->aux_addr;
    }
@@ -275,7 +275,7 @@ blorp_hiz_op(struct blorp_batch *batch, struct blorp_surf *surf,
       break;
    case ISL_AUX_OP_PARTIAL_RESOLVE:
    case ISL_AUX_OP_NONE:
-      UNREACHABLE("Invalid HiZ op");
+      unreachable("Invalid HiZ op");
    }
 
    for (uint32_t a = 0; a < num_layers; a++) {
@@ -314,8 +314,8 @@ blorp_hiz_op(struct blorp_batch *batch, struct blorp_surf *surf,
                            params.depth.view.base_level);
       params.y1 = u_minify(params.depth.surf.logical_level0_px.height,
                            params.depth.view.base_level);
-      params.x1 = align(params.x1, 8);
-      params.y1 = align(params.y1, 4);
+      params.x1 = ALIGN(params.x1, 8);
+      params.y1 = ALIGN(params.y1, 4);
 
       if (params.depth.view.base_level == 0) {
          /* TODO: What about MSAA? */

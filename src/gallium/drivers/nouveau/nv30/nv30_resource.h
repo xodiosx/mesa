@@ -51,11 +51,12 @@ struct pipe_resource *
 nv30_miptree_from_handle(struct pipe_screen *, const struct pipe_resource *,
                          struct winsys_handle *);
 
+struct pipe_surface *
+nv30_miptree_surface_new(struct pipe_context *, struct pipe_resource *,
+                         const struct pipe_surface *);
+
 void
-nv30_framebuffer_init(struct pipe_context *pctx,
-                      const struct pipe_framebuffer_state *fb,
-                      struct pipe_surface **cbufs,
-                      struct pipe_surface **zsbuf);
+nv30_miptree_surface_del(struct pipe_context *, struct pipe_surface *);
 
 bool
 nv30_miptree_get_handle(struct pipe_screen *pscreen,

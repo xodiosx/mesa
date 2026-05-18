@@ -7,7 +7,7 @@
 
 #pragma once
 
-struct pan_perf;
+struct panfrost_perf;
 
 namespace pps {
 class PanfrostDevice {
@@ -39,7 +39,7 @@ class PanfrostPerf {
    void disable() const;
    int dump() const;
 
-   struct pan_perf *perf = nullptr;
+   struct panfrost_perf *perf = nullptr;
 };
 
 } // namespace pps

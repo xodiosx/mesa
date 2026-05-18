@@ -52,7 +52,7 @@ libvtn = static_library(
    vtn_gather_types_c,
    vtn_generator_ids_h,
   ],
-  include_directories : [inc_include, inc_src],
+  include_directories : [inc_include, inc_src, inc_mapi, inc_mesa],
   c_args : [c_msvc_compat_args, no_override_init_args],
   gnu_symbol_visibility : 'hidden',
   dependencies : [dep_spirv_tools, idep_nir, dep_valgrind],
@@ -62,7 +62,6 @@ libvtn = static_library(
 idep_vtn = declare_dependency(
   dependencies : [dep_spirv_tools, idep_nir, idep_mesautil],
   link_with : libvtn,
-  sources : [spirv_info_h],
 )
 
 spirv2nir = executable(
@@ -78,19 +77,22 @@ spirv2nir = executable(
   install : with_tools.contains('nir'),
 )
 
-if get_option('mesa-clc') != 'system' and (with_driver_using_cl or \
-                                           get_option('install-mesa-clc'))
-   prog_vtn_bindgen2 = executable(
-     'vtn_bindgen2',
-     ['vtn_bindgen2.c'],
+# Due to the cross build issues in current meson, we only build vtn_bindgen when
+# building drivers that need it.
+#
+# XXX: Build by default once https://github.com/mesonbuild/meson/pull/12022
+# ships.
+if with_gallium_asahi or with_asahi_vk
+   prog_vtn_bindgen = executable(
+     'vtn_bindgen',
+     ['vtn_bindgen.c'],
      include_directories : [inc_include, inc_src],
      c_args : [c_msvc_compat_args, no_override_init_args],
-     dependencies : [idep_vtn, idep_mesautil, idep_nir],
+     dependencies : [idep_vtn, idep_mesautil],
      # If we can run host binaries directly, just build vtn_bindgen for the host.
      # Most commonly this happens when doing a cross compile from an x86_64 build
      # machine to an x86 host
      native : not meson.can_run_host_binaries(),
-     install : get_option('install-mesa-clc'),
    )
 endif
 
@@ -103,10 +105,7 @@ if with_tests
         'tests/helpers.h',
         'tests/avail_vis.cpp',
         'tests/volatile.cpp',
-        'tests/cmat.cpp',
         'tests/control_flow_tests.cpp',
-        'tests/non_semantic.cpp',
-        'tests/workarounds.cpp',
       ),
       c_args : [c_msvc_compat_args, no_override_init_args],
       gnu_symbol_visibility : 'hidden',

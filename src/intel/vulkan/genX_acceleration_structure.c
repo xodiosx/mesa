@@ -32,11 +32,16 @@ static uint32_t tlas_id = 0;
 
 static void
 begin_debug_marker(VkCommandBuffer commandBuffer,
-                   struct vk_acceleration_structure_build_marker *marker)
+                   enum vk_acceleration_structure_build_step step,
+                   const char *format, ...)
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
 
-   switch (marker->step) {
+   assert(cmd_buffer->state.rt.debug_marker_count <
+          ARRAY_SIZE(cmd_buffer->state.rt.debug_markers));
+   cmd_buffer->state.rt.debug_markers[cmd_buffer->state.rt.debug_marker_count++] =
+      step;
+   switch (step) {
    case VK_ACCELERATION_STRUCTURE_BUILD_STEP_TOP:
       trace_intel_begin_as_build(&cmd_buffer->trace);
       break;
@@ -59,21 +64,19 @@ begin_debug_marker(VkCommandBuffer commandBuffer,
       trace_intel_begin_as_encode(&cmd_buffer->trace);
       break;
    default:
-      UNREACHABLE("Invalid build step");
+      unreachable("Invalid build step");
    }
 }
 
 static void
-end_debug_marker(VkCommandBuffer commandBuffer,
-                 struct vk_acceleration_structure_build_marker *marker)
+end_debug_marker(VkCommandBuffer commandBuffer)
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
 
-   switch (marker->step) {
+   cmd_buffer->state.rt.debug_marker_count--;
+   switch (cmd_buffer->state.rt.debug_markers[cmd_buffer->state.rt.debug_marker_count]) {
    case VK_ACCELERATION_STRUCTURE_BUILD_STEP_TOP:
-      trace_intel_end_as_build(&cmd_buffer->trace,
-                               marker->top.tlas_count,
-                               marker->top.blas_count);
+      trace_intel_end_as_build(&cmd_buffer->trace);
       break;
    case VK_ACCELERATION_STRUCTURE_BUILD_STEP_BUILD_LEAVES:
       trace_intel_end_as_build_leaves(&cmd_buffer->trace);
@@ -91,14 +94,10 @@ end_debug_marker(VkCommandBuffer commandBuffer,
       trace_intel_end_as_ploc_build_internal(&cmd_buffer->trace);
       break;
    case VK_ACCELERATION_STRUCTURE_BUILD_STEP_ENCODE:
-      trace_intel_end_as_encode(&cmd_buffer->trace,
-                                marker->encode.pass,
-                                marker->encode.key,
-                                marker->encode.leaf_node_count,
-                                marker->encode.internal_node_count);
+      trace_intel_end_as_encode(&cmd_buffer->trace);
       break;
    default:
-      UNREACHABLE("Invalid build step");
+      unreachable("Invalid build step");
    }
 }
 
@@ -135,13 +134,7 @@ add_bvh_dump(struct anv_cmd_buffer *cmd_buffer,
 
    struct anv_address dst_addr = { .bo = bvh_dump->bo, .offset = 0 };
    struct anv_address src_addr = anv_address_from_u64(src);
-
-   vk_barrier_compute_w_to_compute_r(vk_command_buffer_to_handle(&cmd_buffer->vk));
    anv_cmd_copy_addr(cmd_buffer, src_addr, dst_addr, bvh_dump->dump_size);
-
-   /* Add host barrier to read BVH data. */
-   vk_barrier_compute_w_to_host_r(vk_command_buffer_to_handle(&cmd_buffer->vk));
-   genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
 
    pthread_mutex_lock(&device->mutex);
    list_addtail(&bvh_dump->link, &device->bvh_dumps);
@@ -197,7 +190,7 @@ debug_record_as_to_bvh_dump(struct anv_cmd_buffer *cmd_buffer,
          leaf_total_size = sizeof(struct vk_ir_aabb_node) * leaf_count;
          break;
       default:
-         UNREACHABLE("invalid geometry type");
+         unreachable("invalid geometry type");
       }
 
       add_bvh_dump(cmd_buffer, intermediate_as_addr, internal_node_total_size +
@@ -220,24 +213,75 @@ debug_record_as_to_bvh_dump(struct anv_cmd_buffer *cmd_buffer,
    }
 }
 
-#define STRINGIFY_HELPER(x) #x
-#define STRINGIFY(x) STRINGIFY_HELPER(x)
-
-#define ENCODE_SPV_PATH STRINGIFY(bvh/genX(encode).spv.h)
-#define HEADER_SPV_PATH STRINGIFY(bvh/genX(header).spv.h)
-#define COPY_SPV_PATH STRINGIFY(bvh/genX(copy).spv.h)
-
 static const uint32_t encode_spv[] = {
-#include ENCODE_SPV_PATH
+#include "bvh/encode.spv.h"
 };
 
 static const uint32_t header_spv[] = {
-#include HEADER_SPV_PATH
+#include "bvh/header.spv.h"
 };
 
 static const uint32_t copy_spv[] = {
-#include COPY_SPV_PATH
+#include "bvh/copy.spv.h"
 };
+
+static VkResult
+get_pipeline_spv(struct anv_device *device,
+                 const char *name, const uint32_t *spv, uint32_t spv_size,
+                 unsigned push_constant_size, VkPipeline *pipeline,
+                 VkPipelineLayout *layout)
+{
+
+   size_t key_size = strlen(name);
+
+   const VkPushConstantRange pc_range = {
+      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+      .offset = 0,
+      .size = push_constant_size,
+   };
+
+   VkResult result = vk_meta_get_pipeline_layout(&device->vk,
+                                                 &device->meta_device, NULL,
+                                                 &pc_range, name, key_size,
+                                                 layout);
+
+   if (result != VK_SUCCESS)
+      return result;
+
+   VkPipeline pipeline_from_cache =
+      vk_meta_lookup_pipeline(&device->meta_device, name, key_size);
+   if (pipeline_from_cache != VK_NULL_HANDLE) {
+      *pipeline = pipeline_from_cache;
+      return VK_SUCCESS;
+   }
+
+   VkShaderModuleCreateInfo module_info = {
+      .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      .pNext = NULL,
+      .flags = 0,
+      .codeSize = spv_size,
+      .pCode = spv,
+   };
+
+   VkPipelineShaderStageCreateInfo shader_stage = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+      .pNext = &module_info,
+      .flags = 0,
+      .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+      .pName = "main",
+      .pSpecializationInfo = NULL,
+   };
+
+   VkComputePipelineCreateInfo pipeline_info = {
+      .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+      .flags = 0,
+      .stage = shader_stage,
+      .layout = *layout,
+   };
+
+   return vk_meta_create_compute_pipeline(&device->vk, &device->meta_device,
+                                          &pipeline_info, name, key_size, pipeline);
+}
 
 static void
 get_bvh_layout(VkGeometryTypeKHR geometry_type, uint32_t leaf_count,
@@ -254,7 +298,7 @@ get_bvh_layout(VkGeometryTypeKHR geometry_type, uint32_t leaf_count,
       offset += leaf_count * sizeof(uint64_t);
    }
    /* The BVH and hence bvh_offset needs 64 byte alignment for RT nodes. */
-   offset = align64(offset, 64);
+   offset = ALIGN(offset, 64);
 
    /* This is where internal_nodes/leaves start to be encoded */
    layout->bvh_offset = offset;
@@ -273,109 +317,71 @@ get_bvh_layout(VkGeometryTypeKHR geometry_type, uint32_t leaf_count,
       offset += leaf_count * ANV_RT_INSTANCE_LEAF_SIZE;
       break;
    default:
-      UNREACHABLE("Unknown VkGeometryTypeKHR");
+      unreachable("Unknown VkGeometryTypeKHR");
    }
 
    layout->size = offset;
 }
 
 static VkDeviceSize
-anv_get_as_size(VkDevice device, const struct vk_acceleration_structure_build_state *state)
+anv_get_as_size(VkDevice device,
+                const VkAccelerationStructureBuildGeometryInfoKHR *pBuildInfo,
+                uint32_t leaf_count)
 {
    struct bvh_layout layout;
-   get_bvh_layout(vk_get_as_geometry_type(state->build_info), state->leaf_node_count, &layout);
+   get_bvh_layout(vk_get_as_geometry_type(pBuildInfo), leaf_count, &layout);
    return layout.size;
 }
 
-static void
-anv_get_build_config(VkDevice device, struct vk_acceleration_structure_build_state *state)
+static uint32_t
+anv_get_encode_key(VkAccelerationStructureTypeKHR type,
+                   VkBuildAccelerationStructureFlagBitsKHR flags)
 {
-   VkBuildAccelerationStructureFlagsKHR flags = state->build_info->flags;
-
-   /* TODO: ANV does not yet have support for AS updates without doing a full
-    * rebuild, this means that AS updates can cause their size to increase.
-    *
-    * The Vulkan spec says that the maximum size required for updating a
-    * compacted AS will be the "compacted size" that can be queried from it
-    * after the initial build, so in order for apps to behave we must report
-    * the compacted size of an updatable AS as the maximum possible size for
-    * any AS that could also be built from the same number of leaf nodes.
-    */
-   state->config.encode_key[1] =
-      ((flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR) &&
-      !(flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR)) ? 1 : 0;
+   return 0;
 }
 
-static void
-anv_bvh_build_bind_pipeline(VkCommandBuffer commandBuffer,
-                            enum anv_object_key_bvh_type type,
-                            const uint32_t *spirv, uint32_t spirv_size,
-                            uint32_t push_constant_size, uint32_t flags)
+static VkResult
+anv_encode_bind_pipeline(VkCommandBuffer commandBuffer, uint32_t key)
 {
    VK_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    struct anv_device *device = cmd_buffer->device;
 
    VkPipeline pipeline;
-   VkResult result = vk_get_bvh_build_pipeline_spv(&device->vk,
-                                                   &device->meta_device,
-                                                   (enum anv_object_key_bvh_type)type,
-                                                   spirv, spirv_size, push_constant_size,
-                                                   &device->accel_struct_build.build_args,
-                                                   flags, &pipeline, false);
-   if (result != VK_SUCCESS) {
-      vk_command_buffer_set_error(&cmd_buffer->vk, result);
-      return;
-   }
-
-   device->vk.dispatch_table.CmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                             pipeline);
-}
-
-static void
-anv_bvh_build_set_args(VkCommandBuffer commandBuffer, const void *args,
-                       uint32_t size)
-{
-   VK_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   struct anv_device *device = cmd_buffer->device;
    VkPipelineLayout layout;
-   vk_get_bvh_build_pipeline_layout(&device->vk, &device->meta_device, size,
-                                    &layout);
+   VkResult result = get_pipeline_spv(device, "encode", encode_spv,
+                                      sizeof(encode_spv),
+                                      sizeof(struct encode_args), &pipeline,
+                                      &layout);
+   if (result != VK_SUCCESS)
+      return result;
 
-   VkPushConstantsInfoKHR push_info = {
-      .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
-      .layout = layout,
-      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-      .offset = 0,
-      .size = size,
-      .pValues = args,
-   };
+   anv_CmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                       pipeline);
 
-   anv_CmdPushConstants2KHR(commandBuffer, &push_info);
-}
-
-static VkResult
-anv_encode_bind_pipeline(VkCommandBuffer commandBuffer, const struct vk_acceleration_structure_build_state *state)
-{
-   anv_bvh_build_bind_pipeline(commandBuffer,
-                               ANV_OBJECT_KEY_BVH_ENCODE,
-                               encode_spv, sizeof(encode_spv),
-                               sizeof(struct encode_args), 0);
    return VK_SUCCESS;
 }
 
 static void
-anv_encode_as(VkCommandBuffer commandBuffer, const struct vk_acceleration_structure_build_state *state)
+anv_encode_as(VkCommandBuffer commandBuffer,
+              const VkAccelerationStructureBuildGeometryInfoKHR *build_info,
+              const VkAccelerationStructureBuildRangeInfoKHR *build_range_infos,
+              VkDeviceAddress intermediate_as_addr,
+              VkDeviceAddress intermediate_header_addr, uint32_t leaf_count,
+              uint32_t key,
+              struct vk_acceleration_structure *dst)
 {
    if (INTEL_DEBUG(DEBUG_BVH_NO_BUILD))
       return;
 
    VK_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   VK_FROM_HANDLE(vk_acceleration_structure, dst, state->build_info->dstAccelerationStructure);
+   struct anv_device *device = cmd_buffer->device;
 
-   uint64_t intermediate_header_addr = state->build_info->scratchData.deviceAddress + state->scratch.header_offset;
-   uint64_t intermediate_bvh_addr = state->build_info->scratchData.deviceAddress + state->scratch.ir_offset;
+   VkGeometryTypeKHR geometry_type = vk_get_as_geometry_type(build_info);
 
-   VkGeometryTypeKHR geometry_type = vk_get_as_geometry_type(state->build_info);
+   VkPipeline pipeline;
+   VkPipelineLayout layout;
+   get_pipeline_spv(device, "encode", encode_spv, sizeof(encode_spv),
+                    sizeof(struct encode_args), &pipeline, &layout);
 
    STATIC_ASSERT(sizeof(struct anv_accel_struct_header) == ANV_RT_BVH_HEADER_SIZE);
    STATIC_ASSERT(sizeof(struct anv_instance_leaf) == ANV_RT_INSTANCE_LEAF_SIZE);
@@ -384,60 +390,108 @@ anv_encode_as(VkCommandBuffer commandBuffer, const struct vk_acceleration_struct
    STATIC_ASSERT(sizeof(struct anv_internal_node) == ANV_RT_INTERNAL_NODE_SIZE);
 
    struct bvh_layout bvh_layout;
-   get_bvh_layout(geometry_type, state->leaf_node_count, &bvh_layout);
+   get_bvh_layout(geometry_type, leaf_count, &bvh_layout);
 
    const struct encode_args args = {
-      .intermediate_bvh = intermediate_bvh_addr,
+      .intermediate_bvh = intermediate_as_addr,
       .output_bvh = vk_acceleration_structure_get_va(dst) +
                     bvh_layout.bvh_offset,
       .header = intermediate_header_addr,
       .output_bvh_offset = bvh_layout.bvh_offset,
-      .leaf_node_count = state->leaf_node_count,
+      .leaf_node_count = leaf_count,
       .geometry_type = geometry_type,
    };
-   anv_bvh_build_set_args(commandBuffer, &args, sizeof(args));
 
-   anv_genX(cmd_buffer->device->info, cmd_dispatch_unaligned)
-      (commandBuffer, MAX2(state->leaf_node_count, 1), 1, 1);
+   VkPushConstantsInfoKHR push_info = {
+      .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
+      .layout = layout,
+      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+      .offset = 0,
+      .size = sizeof(args),
+      .pValues = &args,
+   };
+
+   anv_CmdPushConstants2KHR(commandBuffer, &push_info);
+
+   struct anv_address indirect_addr =
+      anv_address_from_u64(intermediate_header_addr +
+                            offsetof(struct vk_ir_header, ir_internal_node_count));
+   anv_genX(cmd_buffer->device->info, cmd_buffer_dispatch_indirect)
+      (cmd_buffer, indirect_addr, true /* is_unaligned_size_x */);
+}
+
+static uint32_t
+anv_get_header_key(VkAccelerationStructureTypeKHR type,
+                   VkBuildAccelerationStructureFlagBitsKHR flags)
+{
+   return (flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR) ?
+           1 : 0;
 }
 
 static VkResult
-anv_init_header_bind_pipeline(VkCommandBuffer commandBuffer, const struct vk_acceleration_structure_build_state *state)
+anv_init_header_bind_pipeline(VkCommandBuffer commandBuffer, uint32_t key)
 {
-   if (state->config.encode_key[1] == 1) {
-      anv_bvh_build_bind_pipeline(commandBuffer,
-                                  ANV_OBJECT_KEY_BVH_HEADER,
-                                  header_spv, sizeof(header_spv),
-                                  sizeof(struct header_args), 0);
+   VK_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
+
+   if (key == 1) {
+      VkPipeline pipeline;
+      VkPipelineLayout layout;
+      VkResult result = get_pipeline_spv(cmd_buffer->device, "header",
+                                         header_spv, sizeof(header_spv),
+                                         sizeof(struct header_args), &pipeline,
+                                         &layout);
+      if (result != VK_SUCCESS)
+         return result;
+
+      anv_CmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          pipeline);
    }
 
    return VK_SUCCESS;
 }
 
 static void
-anv_init_header(VkCommandBuffer commandBuffer, const struct vk_acceleration_structure_build_state *state)
+anv_init_header(VkCommandBuffer commandBuffer,
+                const VkAccelerationStructureBuildGeometryInfoKHR *build_info,
+                const VkAccelerationStructureBuildRangeInfoKHR *build_range_infos,
+                VkDeviceAddress intermediate_as_addr,
+                VkDeviceAddress intermediate_header_addr, uint32_t leaf_count,
+                uint32_t key,
+                struct vk_acceleration_structure *dst)
 {
    VK_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   VK_FROM_HANDLE(vk_acceleration_structure, dst, state->build_info->dstAccelerationStructure);
+   struct anv_device *device = cmd_buffer->device;
 
-   uint64_t intermediate_header_addr = state->build_info->scratchData.deviceAddress + state->scratch.header_offset;
-   uint64_t intermediate_bvh_addr = state->build_info->scratchData.deviceAddress + state->scratch.ir_offset;
-
-   VkGeometryTypeKHR geometry_type = vk_get_as_geometry_type(state->build_info);
+   VkGeometryTypeKHR geometry_type = vk_get_as_geometry_type(build_info);
 
    struct bvh_layout bvh_layout;
-   get_bvh_layout(geometry_type, state->leaf_node_count, &bvh_layout);
+   get_bvh_layout(geometry_type, leaf_count, &bvh_layout);
 
    VkDeviceAddress header_addr = vk_acceleration_structure_get_va(dst);
 
-   uint32_t instance_count = geometry_type == VK_GEOMETRY_TYPE_INSTANCES_KHR ?
-                             state->leaf_node_count : 0;
+   UNUSED size_t base = offsetof(struct anv_accel_struct_header,
+                                 copy_dispatch_size);
 
-   if (state->config.encode_key[1] == 1) {
+   uint32_t instance_count = geometry_type == VK_GEOMETRY_TYPE_INSTANCES_KHR ?
+                             leaf_count : 0;
+
+   if (key == 1) {
       /* Add a barrier to ensure the writes from encode.comp is ready to be
        * read by header.comp
        */
       vk_barrier_compute_w_to_compute_r(commandBuffer);
+
+      /* VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR is set, so we
+       * want to populate header.compacted_size with the compacted size, which
+       * needs to be calculated by using ir_header.dst_node_offset, which we'll
+       * access in the header.comp.
+       */
+      base = offsetof(struct anv_accel_struct_header, instance_count);
+
+      VkPipeline pipeline;
+      VkPipelineLayout layout;
+      get_pipeline_spv(device, "header", header_spv, sizeof(header_spv),
+                       sizeof(struct header_args), &pipeline, &layout);
 
       struct header_args args = {
          .src = intermediate_header_addr,
@@ -446,26 +500,19 @@ anv_init_header(VkCommandBuffer commandBuffer, const struct vk_acceleration_stru
          .instance_count = instance_count,
       };
 
-      anv_bvh_build_set_args(commandBuffer, &args, sizeof(args));
+      VkPushConstantsInfoKHR push_info = {
+         .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
+         .layout = layout,
+         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+         .offset = 0,
+         .size = sizeof(args),
+         .pValues = &args,
+      };
+
+      anv_CmdPushConstants2KHR(commandBuffer, &push_info);
       vk_common_CmdDispatch(commandBuffer, 1, 1, 1);
    } else {
       vk_barrier_compute_w_to_host_r(commandBuffer);
-
-      /* L1/L2 caches flushes should have been dealt with by pipeline barriers.
-       * Unfortunately some platforms require L3 flush because CS (reading the
-       * dispatch size paramters) is not L3 coherent.
-       */
-      if (!ANV_DEVINFO_HAS_COHERENT_L3_CS(cmd_buffer->device->info)) {
-         anv_add_pending_pipe_bits(cmd_buffer,
-                                   VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                   VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT_KHR,
-                                   ANV_PIPE_DATA_CACHE_FLUSH_BIT,
-                                   "copy dispatch size for dispatch");
-         genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
-      }
-
-      size_t base = offsetof(struct anv_accel_struct_header,
-                             copy_dispatch_size);
 
       struct anv_accel_struct_header header = {};
 
@@ -488,25 +535,26 @@ anv_init_header(VkCommandBuffer commandBuffer, const struct vk_acceleration_stru
 
       header.size = header.compacted_size;
 
-#if GFX_VERx10 >= 300
-      header.enable_64b_rt = 1;
-#else
-      header.enable_64b_rt = 0;
-#endif
-
       size_t header_size = sizeof(struct anv_accel_struct_header) - base;
       assert(base % sizeof(uint32_t) == 0);
       assert(header_size % sizeof(uint32_t) == 0);
       uint32_t *header_ptr = (uint32_t *)((char *)&header + base);
 
       struct anv_address addr = anv_address_from_u64(header_addr + base);
-      anv_cmd_buffer_update_addr(cmd_buffer, addr, header_size, header_ptr);
+      anv_cmd_buffer_update_addr(cmd_buffer, addr, 0, header_size,
+                                 header_ptr, false);
    }
 
-   if (INTEL_DEBUG_BVH_ANY) {
+   if (INTEL_DEBUG(DEBUG_BVH_ANY)) {
+      genx_batch_emit_pipe_control(&cmd_buffer->batch, cmd_buffer->device->info,
+                                   cmd_buffer->state.current_pipeline,
+                                   ANV_PIPE_END_OF_PIPE_SYNC_BIT |
+                                   ANV_PIPE_DATA_CACHE_FLUSH_BIT |
+                                   ANV_PIPE_HDC_PIPELINE_FLUSH_BIT |
+                                   ANV_PIPE_UNTYPED_DATAPORT_CACHE_FLUSH_BIT);
       debug_record_as_to_bvh_dump(cmd_buffer, header_addr, bvh_layout.size,
-                                  intermediate_header_addr, intermediate_bvh_addr,
-                                  state->leaf_node_count, geometry_type);
+                                  intermediate_header_addr, intermediate_as_addr,
+                                  leaf_count, geometry_type);
    }
 }
 
@@ -514,7 +562,7 @@ static const struct vk_acceleration_structure_build_ops anv_build_ops = {
    .begin_debug_marker = begin_debug_marker,
    .end_debug_marker = end_debug_marker,
    .get_as_size = anv_get_as_size,
-   .get_build_config = anv_get_build_config,
+   .get_encode_key = { anv_get_encode_key, anv_get_header_key },
    .encode_bind_pipeline = { anv_encode_bind_pipeline,
                              anv_init_header_bind_pipeline },
    .encode_as = { anv_encode_as, anv_init_header },
@@ -636,22 +684,24 @@ genX(CmdBuildAccelerationStructuresKHR)(
                              ANV_CMD_SAVED_STATE_DESCRIPTOR_SET_ALL |
                              ANV_CMD_SAVED_STATE_PUSH_CONSTANTS, &saved);
 
-   /* Apply any outstanding accumulated PC bits before we proceed on building
-    * Acceleration Structure.
-    *
-    * 2 reasons for this :
-    *    - some of the data accessed by the build might need to be flushed as a
-    *    result of a previous barrier
-    *    - the scratch buffer might get reused between builds
-    */
-   genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
-
    vk_cmd_build_acceleration_structures(commandBuffer, &device->vk,
                                         &device->meta_device, infoCount,
                                         pInfos, ppBuildRangeInfos,
                                         &device->accel_struct_build.build_args);
 
    anv_cmd_buffer_restore_state(cmd_buffer, &saved);
+}
+
+void
+genX(CmdBuildAccelerationStructuresIndirectKHR)(
+    VkCommandBuffer                             commandBuffer,
+    uint32_t                                    infoCount,
+    const VkAccelerationStructureBuildGeometryInfoKHR* pInfos,
+    const VkDeviceAddress*                      pIndirectDeviceAddresses,
+    const uint32_t*                             pIndirectStrides,
+    const uint32_t* const*                      ppMaxPrimitiveCounts)
+{
+   unreachable("Unimplemented");
 }
 
 void
@@ -665,36 +715,53 @@ genX(CmdCopyAccelerationStructureKHR)(
 
    trace_intel_begin_as_copy(&cmd_buffer->trace);
 
+   VkPipeline pipeline;
+   VkPipelineLayout layout;
+   VkResult result = get_pipeline_spv(cmd_buffer->device, "copy", copy_spv,
+                                      sizeof(copy_spv), sizeof(struct copy_args),
+                                      &pipeline, &layout);
+   if (result != VK_SUCCESS) {
+      vk_command_buffer_set_error(&cmd_buffer->vk, result);
+      return;
+   }
+
    struct anv_cmd_saved_state saved;
    anv_cmd_buffer_save_state(cmd_buffer,
                              ANV_CMD_SAVED_STATE_COMPUTE_PIPELINE |
                              ANV_CMD_SAVED_STATE_DESCRIPTOR_SET_ALL |
                              ANV_CMD_SAVED_STATE_PUSH_CONSTANTS, &saved);
 
-   anv_bvh_build_bind_pipeline(commandBuffer, ANV_OBJECT_KEY_BVH_COPY,
-                               copy_spv, sizeof(copy_spv),
-                               sizeof(struct copy_args), 0);
+   anv_CmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                       pipeline);
+
    struct copy_args consts = {
       .src_addr = vk_acceleration_structure_get_va(src),
       .dst_addr = vk_acceleration_structure_get_va(dst),
       .mode = ANV_COPY_MODE_COPY,
    };
-   anv_bvh_build_set_args(commandBuffer, &consts, sizeof(consts));
+
+   VkPushConstantsInfoKHR push_info = {
+      .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
+      .layout = layout,
+      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+      .offset = 0,
+      .size = sizeof(consts),
+      .pValues = &consts,
+   };
+
+   anv_CmdPushConstants2KHR(commandBuffer, &push_info);
 
    /* L1/L2 caches flushes should have been dealt with by pipeline barriers.
     * Unfortunately some platforms require L3 flush because CS (reading the
     * dispatch paramters) is not L3 coherent.
     */
    if (!ANV_DEVINFO_HAS_COHERENT_L3_CS(cmd_buffer->device->info)) {
-      anv_add_pending_pipe_bits(cmd_buffer,
-                                VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                                ANV_PIPE_DATA_CACHE_FLUSH_BIT,
+      anv_add_pending_pipe_bits(cmd_buffer, ANV_PIPE_DATA_CACHE_FLUSH_BIT,
                                 "bvh size read for dispatch");
    }
 
    anv_genX(cmd_buffer->device->info, CmdDispatchIndirect)(
-      commandBuffer, vk_buffer_to_handle(src->buffer),
+      commandBuffer, src->buffer,
       src->offset + offsetof(struct anv_accel_struct_header,
                              copy_dispatch_size));
 
@@ -714,15 +781,26 @@ genX(CmdCopyAccelerationStructureToMemoryKHR)(
 
    trace_intel_begin_as_copy(&cmd_buffer->trace);
 
+   VkPipeline pipeline;
+   VkPipelineLayout layout;
+   VkResult result = get_pipeline_spv(device, "copy", copy_spv,
+                                      sizeof(copy_spv),
+                                      sizeof(struct copy_args), &pipeline,
+                                      &layout);
+   if (result != VK_SUCCESS) {
+      vk_command_buffer_set_error(&cmd_buffer->vk, result);
+      return;
+   }
+
    struct anv_cmd_saved_state saved;
    anv_cmd_buffer_save_state(cmd_buffer,
                              ANV_CMD_SAVED_STATE_COMPUTE_PIPELINE |
                              ANV_CMD_SAVED_STATE_DESCRIPTOR_SET_ALL |
                              ANV_CMD_SAVED_STATE_PUSH_CONSTANTS, &saved);
 
-   anv_bvh_build_bind_pipeline(commandBuffer, ANV_OBJECT_KEY_BVH_COPY,
-                               copy_spv, sizeof(copy_spv),
-                               sizeof(struct copy_args), 0);
+   anv_CmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                       pipeline);
+
    struct copy_args consts = {
       .src_addr = vk_acceleration_structure_get_va(src),
       .dst_addr = pInfo->dst.deviceAddress,
@@ -731,7 +809,17 @@ genX(CmdCopyAccelerationStructureToMemoryKHR)(
 
    memcpy(consts.driver_uuid, device->physical->driver_uuid, VK_UUID_SIZE);
    memcpy(consts.accel_struct_compat, device->physical->rt_uuid, VK_UUID_SIZE);
-   anv_bvh_build_set_args(commandBuffer, &consts, sizeof(consts));
+
+   VkPushConstantsInfoKHR push_info = {
+      .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
+      .layout = layout,
+      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+      .offset = 0,
+      .size = sizeof(consts),
+      .pValues = &consts,
+   };
+
+   anv_CmdPushConstants2KHR(commandBuffer, &push_info);
 
    /* L1/L2 caches flushes should have been dealt with by pipeline barriers.
     * Unfortunately some platforms require L3 flush because CS (reading the
@@ -739,14 +827,12 @@ genX(CmdCopyAccelerationStructureToMemoryKHR)(
     */
    if (!ANV_DEVINFO_HAS_COHERENT_L3_CS(cmd_buffer->device->info)) {
       anv_add_pending_pipe_bits(cmd_buffer,
-                                VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
                                 ANV_PIPE_DATA_CACHE_FLUSH_BIT,
                                 "bvh size read for dispatch");
    }
 
    anv_genX(device->info, CmdDispatchIndirect)(
-      commandBuffer, vk_buffer_to_handle(src->buffer),
+      commandBuffer, src->buffer,
       src->offset + offsetof(struct anv_accel_struct_header,
                              copy_dispatch_size));
 
@@ -765,27 +851,110 @@ genX(CmdCopyMemoryToAccelerationStructureKHR)(
 
    trace_intel_begin_as_copy(&cmd_buffer->trace);
 
+   VkPipeline pipeline;
+   VkPipelineLayout layout;
+   VkResult result = get_pipeline_spv(cmd_buffer->device, "copy", copy_spv,
+                                      sizeof(copy_spv),
+                                      sizeof(struct copy_args), &pipeline,
+                                      &layout);
+   if (result != VK_SUCCESS) {
+      vk_command_buffer_set_error(&cmd_buffer->vk, result);
+      return;
+   }
+
    struct anv_cmd_saved_state saved;
    anv_cmd_buffer_save_state(cmd_buffer,
                              ANV_CMD_SAVED_STATE_COMPUTE_PIPELINE |
                              ANV_CMD_SAVED_STATE_DESCRIPTOR_SET_ALL |
                              ANV_CMD_SAVED_STATE_PUSH_CONSTANTS, &saved);
 
-   anv_bvh_build_bind_pipeline(commandBuffer, ANV_OBJECT_KEY_BVH_COPY,
-                               copy_spv, sizeof(copy_spv),
-                               sizeof(struct copy_args), 0);
+   anv_CmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                       pipeline);
 
    const struct copy_args consts = {
       .src_addr = pInfo->src.deviceAddress,
       .dst_addr = vk_acceleration_structure_get_va(dst),
       .mode = ANV_COPY_MODE_DESERIALIZE,
    };
-   anv_bvh_build_set_args(commandBuffer, &consts, sizeof(consts));
+
+   VkPushConstantsInfoKHR push_info = {
+      .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
+      .layout = layout,
+      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+      .offset = 0,
+      .size = sizeof(consts),
+      .pValues = &consts,
+   };
+
+   anv_CmdPushConstants2KHR(commandBuffer, &push_info);
 
    vk_common_CmdDispatch(commandBuffer, 512, 1, 1);
    anv_cmd_buffer_restore_state(cmd_buffer, &saved);
 
    trace_intel_end_as_copy(&cmd_buffer->trace);
+}
+
+/* TODO: Host commands */
+
+VkResult
+genX(BuildAccelerationStructuresKHR)(
+    VkDevice                                    _device,
+    VkDeferredOperationKHR                      deferredOperation,
+    uint32_t                                    infoCount,
+    const VkAccelerationStructureBuildGeometryInfoKHR* pInfos,
+    const VkAccelerationStructureBuildRangeInfoKHR* const* ppBuildRangeInfos)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   unreachable("Unimplemented");
+   return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
+}
+
+VkResult
+genX(CopyAccelerationStructureKHR)(
+    VkDevice                                    _device,
+    VkDeferredOperationKHR                      deferredOperation,
+    const VkCopyAccelerationStructureInfoKHR*   pInfo)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   unreachable("Unimplemented");
+   return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
+}
+
+VkResult
+genX(CopyAccelerationStructureToMemoryKHR)(
+    VkDevice                                    _device,
+    VkDeferredOperationKHR                      deferredOperation,
+    const VkCopyAccelerationStructureToMemoryInfoKHR* pInfo)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   unreachable("Unimplemented");
+   return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
+}
+
+VkResult
+genX(CopyMemoryToAccelerationStructureKHR)(
+    VkDevice                                    _device,
+    VkDeferredOperationKHR                      deferredOperation,
+    const VkCopyMemoryToAccelerationStructureInfoKHR* pInfo)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   unreachable("Unimplemented");
+   return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
+}
+
+VkResult
+genX(WriteAccelerationStructuresPropertiesKHR)(
+    VkDevice                                    _device,
+    uint32_t                                    accelerationStructureCount,
+    const VkAccelerationStructureKHR*           pAccelerationStructures,
+    VkQueryType                                 queryType,
+    size_t                                      dataSize,
+    void*                                       pData,
+    size_t                                      stride)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   unreachable("Unimplemented");
+   return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
 }
 
 void

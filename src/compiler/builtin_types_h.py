@@ -21,8 +21,7 @@ template = """\
 extern const struct glsl_type glsl_type_builtin_${t["name"]};
 %endfor
 
-#endif /* _BUILTIN_TYPES_ */
-"""
+#endif /* _BUILTIN_TYPES_ */"""
 
 if len(sys.argv) < 2:
     print('Missing output argument', file=sys.stderr)

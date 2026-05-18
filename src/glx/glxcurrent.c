@@ -42,7 +42,7 @@ struct glx_context dummyContext = {
  * Current context management and locking
  */
 
-pthread_mutex_t __glXmutex = PTHREAD_MUTEX_INITIALIZER;
+_X_HIDDEN pthread_mutex_t __glXmutex = PTHREAD_MUTEX_INITIALIZER;
 
 /**
  * Per-thread GLX context pointer.
@@ -53,19 +53,19 @@ pthread_mutex_t __glXmutex = PTHREAD_MUTEX_INITIALIZER;
  */
 __THREAD_INITIAL_EXEC void *__glX_tls_Context = &dummyContext;
 
-void
+_X_HIDDEN void
 __glXSetCurrentContext(struct glx_context * c)
 {
    __glX_tls_Context = (c != NULL) ? c : &dummyContext;
 }
 
-void
+_X_HIDDEN void
 __glXSetCurrentContextNull(void)
 {
    __glXSetCurrentContext(&dummyContext);
 #if defined(GLX_DIRECT_RENDERING)
-   _mesa_glapi_set_dispatch(NULL);   /* no-op functions */
-   _mesa_glapi_set_context(NULL);
+   _glapi_set_dispatch(NULL);   /* no-op functions */
+   _glapi_set_context(NULL);
 #endif
 }
 

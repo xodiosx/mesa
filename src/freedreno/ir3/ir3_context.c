@@ -95,40 +95,31 @@ ir3_context_init(struct ir3_compiler *compiler, struct ir3_shader *shader,
 
    /* This must run after the last nir_opt_algebraic or it gets undone. */
    if (compiler->has_branch_and_or)
-      NIR_PASS(_, ctx->s, ir3_nir_opt_branch_and_or_not);
+      NIR_PASS_V(ctx->s, ir3_nir_opt_branch_and_or_not);
 
    if (compiler->has_bitwise_triops) {
       bool triops_progress = false;
       NIR_PASS(triops_progress, ctx->s, ir3_nir_opt_triops_bitwise);
 
       if (triops_progress) {
-         NIR_PASS(_, ctx->s, nir_opt_dce);
+         NIR_PASS_V(ctx->s, nir_opt_dce);
       }
    }
 
    /* Enable the texture pre-fetch feature only a4xx onwards.  But
     * only enable it on generations that have been tested:
     */
-   if ((so->type == MESA_SHADER_FRAGMENT) && compiler->has_fs_tex_prefetch) {
-      NIR_PASS(_, ctx->s, ir3_nir_lower_tex_prefetch, &so->prefetch_bary_type);
-   }
+   if ((so->type == MESA_SHADER_FRAGMENT) && compiler->has_fs_tex_prefetch)
+      NIR_PASS_V(ctx->s, ir3_nir_lower_tex_prefetch);
 
    bool vectorized = false;
    NIR_PASS(vectorized, ctx->s, nir_opt_vectorize, ir3_nir_vectorize_filter,
             NULL);
 
    if (vectorized) {
-      NIR_PASS(_, ctx->s, nir_opt_undef);
-      NIR_PASS(_, ctx->s, nir_opt_copy_prop);
-      NIR_PASS(_, ctx->s, nir_opt_dce);
-
-      /* nir_opt_vectorize could replace swizzled movs with vectorized movs in a
-       * different block. If this happens with swizzled movs in a then block, it
-       * could leave this block empty. ir3 assumes only the else block can be
-       * empty (e.g., when lowering predicates) so make sure ifs are in that
-       * canonical form again.
-       */
-      NIR_PASS(_, ctx->s, nir_opt_if, 0);
+      NIR_PASS_V(ctx->s, nir_opt_undef);
+      NIR_PASS_V(ctx->s, nir_copy_prop);
+      NIR_PASS_V(ctx->s, nir_opt_dce);
    }
 
    NIR_PASS(progress, ctx->s, nir_convert_to_lcssa, true, true);
@@ -136,7 +127,7 @@ ir3_context_init(struct ir3_compiler *compiler, struct ir3_shader *shader,
    /* This has to go at the absolute end to make sure that all SSA defs are
     * correctly marked.
     */
-   nir_divergence_analysis(ctx->s);
+   NIR_PASS_V(ctx->s, nir_divergence_analysis);
 
    /* Super crude heuristic to limit # of tex prefetch in small
     * shaders.  This completely ignores loops.. but that's really
@@ -256,19 +247,6 @@ static struct ir3_instruction *
 get_shared(struct ir3_builder *build, struct ir3_instruction *src, bool shared)
 {
    if (!!(src->dsts[0]->flags & IR3_REG_SHARED) != shared) {
-      if (src->opc == OPC_META_COLLECT) {
-         /* We can't mov the result of a collect so mov its sources and create a
-          * new collect.
-          */
-         struct ir3_instruction *new_srcs[src->srcs_count];
-
-         for (unsigned i = 0; i < src->srcs_count; i++) {
-            new_srcs[i] = get_shared(build, src->srcs[i]->def->instr, shared);
-         }
-
-         return ir3_create_collect(build, new_srcs, src->srcs_count);
-      }
-
       struct ir3_instruction *mov =
          ir3_MOV(build, src,
                  (src->dsts[0]->flags & IR3_REG_HALF) ? TYPE_U16 : TYPE_U32);
@@ -326,6 +304,107 @@ ir3_put_def(struct ir3_context *ctx, nir_def *def)
    ctx->last_dst_n = 0;
 }
 
+static unsigned
+dest_flags(struct ir3_instruction *instr)
+{
+   return instr->dsts[0]->flags & (IR3_REG_HALF | IR3_REG_SHARED);
+}
+
+struct ir3_instruction *
+ir3_create_collect(struct ir3_builder *build,
+                   struct ir3_instruction *const *arr, unsigned arrsz)
+{
+   struct ir3_instruction *collect;
+
+   if (arrsz == 0)
+      return NULL;
+
+   if (arrsz == 1)
+      return arr[0];
+
+   unsigned flags = dest_flags(arr[0]);
+
+   collect = ir3_build_instr(build, OPC_META_COLLECT, 1, arrsz);
+   __ssa_dst(collect)->flags |= flags;
+   for (unsigned i = 0; i < arrsz; i++) {
+      struct ir3_instruction *elem = arr[i];
+
+      /* Since arrays are pre-colored in RA, we can't assume that
+       * things will end up in the right place.  (Ie. if a collect
+       * joins elements from two different arrays.)  So insert an
+       * extra mov.
+       *
+       * We could possibly skip this if all the collected elements
+       * are contiguous elements in a single array.. not sure how
+       * likely that is to happen.
+       *
+       * Fixes a problem with glamor shaders, that in effect do
+       * something like:
+       *
+       *   if (foo)
+       *     texcoord = ..
+       *   else
+       *     texcoord = ..
+       *   color = texture2D(tex, texcoord);
+       *
+       * In this case, texcoord will end up as nir registers (which
+       * translate to ir3 array's of length 1.  And we can't assume
+       * the two (or more) arrays will get allocated in consecutive
+       * scalar registers.
+       *
+       */
+      if (elem->dsts[0]->flags & IR3_REG_ARRAY) {
+         type_t type = (flags & IR3_REG_HALF) ? TYPE_U16 : TYPE_U32;
+         elem = ir3_MOV(build, elem, type);
+      }
+
+      assert(dest_flags(elem) == flags);
+      __ssa_src(collect, elem, flags);
+   }
+
+   collect->dsts[0]->wrmask = MASK(arrsz);
+
+   return collect;
+}
+
+/* helper for instructions that produce multiple consecutive scalar
+ * outputs which need to have a split meta instruction inserted
+ */
+void
+ir3_split_dest(struct ir3_builder *build, struct ir3_instruction **dst,
+               struct ir3_instruction *src, unsigned base, unsigned n)
+{
+   if ((n == 1) && (src->dsts[0]->wrmask == 0x1) &&
+       /* setup_input needs ir3_split_dest to generate a SPLIT instruction */
+       src->opc != OPC_META_INPUT) {
+      dst[0] = src;
+      return;
+   }
+
+   if (src->opc == OPC_META_COLLECT) {
+      assert((base + n) <= src->srcs_count);
+
+      for (int i = 0; i < n; i++) {
+         dst[i] = ssa(src->srcs[i + base]);
+      }
+
+      return;
+   }
+
+   unsigned flags = dest_flags(src);
+
+   for (int i = 0, j = 0; i < n; i++) {
+      struct ir3_instruction *split =
+         ir3_build_instr(build, OPC_META_SPLIT, 1, 1);
+      __ssa_dst(split)->flags |= flags;
+      __ssa_src(split, src, flags);
+      split->split.off = i + base;
+
+      if (src->dsts[0]->wrmask & (1 << (i + base)))
+         dst[j++] = split;
+   }
+}
+
 NORETURN void
 ir3_context_error(struct ir3_context *ctx, const char *format, ...)
 {
@@ -344,7 +423,7 @@ ir3_context_error(struct ir3_context *ctx, const char *format, ...)
    nir_log_shader_annotated(ctx->s, errors);
    ralloc_free(errors);
    ctx->error = true;
-   UNREACHABLE("");
+   unreachable("");
 }
 
 static struct ir3_instruction *
@@ -374,13 +453,8 @@ create_addr0(struct ir3_builder *build, struct ir3_instruction *src, int align)
       immed = create_immed_typed_shared(build, 2, TYPE_S16, shared);
       instr = ir3_SHL_B(build, instr, 0, immed, 0);
       break;
-   case 8:
-      /* src *= 8 => src <<= 3: */
-      immed = create_immed_typed_shared(build, 3, TYPE_S16, shared);
-      instr = ir3_SHL_B(build, instr, 0, immed, 0);
-      break;
    default:
-      UNREACHABLE("bad align");
+      unreachable("bad align");
       return NULL;
    }
 
@@ -390,6 +464,16 @@ create_addr0(struct ir3_builder *build, struct ir3_instruction *src, int align)
    instr->dsts[0]->num = regid(REG_A0, 0);
    instr->dsts[0]->flags &= ~IR3_REG_SHARED;
 
+   return instr;
+}
+
+static struct ir3_instruction *
+create_addr1(struct ir3_builder *build, unsigned const_val)
+{
+   struct ir3_instruction *immed =
+      create_immed_typed(build, const_val, TYPE_U16);
+   struct ir3_instruction *instr = ir3_MOV(build, immed, TYPE_U16);
+   instr->dsts[0]->num = regid(REG_A0, 1);
    return instr;
 }
 
@@ -420,6 +504,26 @@ ir3_get_addr0(struct ir3_context *ctx, struct ir3_instruction *src, int align)
    return addr;
 }
 
+/* Similar to ir3_get_addr0, but for a1.x. */
+struct ir3_instruction *
+ir3_get_addr1(struct ir3_context *ctx, unsigned const_val)
+{
+   struct ir3_instruction *addr;
+
+   if (!ctx->addr1_ht) {
+      ctx->addr1_ht = _mesa_hash_table_u64_create(ctx);
+   } else {
+      addr = _mesa_hash_table_u64_search(ctx->addr1_ht, const_val);
+      if (addr)
+         return addr;
+   }
+
+   addr = create_addr1(&ctx->build, const_val);
+   _mesa_hash_table_u64_insert(ctx->addr1_ht, const_val, addr);
+
+   return addr;
+}
+
 struct ir3_instruction *
 ir3_get_predicate(struct ir3_context *ctx, struct ir3_instruction *src)
 {
@@ -442,18 +546,7 @@ ir3_get_predicate(struct ir3_context *ctx, struct ir3_instruction *src)
 
    /* condition always goes in predicate register: */
    cond->dsts[0]->flags |= IR3_REG_PREDICATE;
-
-   /* The builders will mark the dst as shared when both srcs are shared.
-    * Predicates can't be shared but do support the scalar ALU when marked as
-    * uniform.
-    */
-   if (cond->dsts[0]->flags & IR3_REG_SHARED) {
-      cond->dsts[0]->flags &= ~IR3_REG_SHARED;
-
-      if (ctx->compiler->has_scalar_predicates) {
-         cond->dsts[0]->flags |= IR3_REG_UNIFORM;
-      }
-   }
+   cond->dsts[0]->flags &= ~IR3_REG_SHARED;
 
    _mesa_hash_table_insert(ctx->predicate_conversions, src, cond);
    return cond;
@@ -574,6 +667,12 @@ ir3_create_array_store(struct ir3_context *ctx, struct ir3_array *arr, int n,
       ir3_instr_set_address(mov, address);
 
    arr->last_write = dst;
+
+   /* the array store may only matter to something in an earlier
+    * block (ie. loops), but since arrays are not in SSA, depth
+    * pass won't know this.. so keep all array stores:
+    */
+   array_insert(block, block->keeps, mov);
 }
 
 void

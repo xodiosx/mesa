@@ -77,7 +77,6 @@ nir_lower_pstipple_block(nir_block *block,
    tex->dest_type = nir_type_float32;
    tex->texture_index = state->stip_tex->data.binding;
    tex->sampler_index = state->stip_tex->data.binding;
-   tex->can_speculate = true;
    tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord, texcoord);
    nir_def_init(&tex->instr, &tex->def, 4, 32);
 
@@ -94,7 +93,7 @@ nir_lower_pstipple_block(nir_block *block,
                              nir_imm_floatN_t(b, 0.0, tex->def.bit_size));
       break;
    default:
-      UNREACHABLE("Invalid Boolean type.");
+      unreachable("Invalid Boolean type.");
    }
 
    nir_discard_if(b, condition);
@@ -111,7 +110,7 @@ nir_lower_pstipple_impl(nir_function_impl *impl,
    nir_lower_pstipple_block(start, state);
 }
 
-bool
+void
 nir_lower_pstipple_fs(struct nir_shader *shader,
                       unsigned *samplerUnitOut,
                       unsigned fixedUnit,
@@ -127,10 +126,8 @@ nir_lower_pstipple_fs(struct nir_shader *shader,
    assert(bool_type == nir_type_bool1 ||
           bool_type == nir_type_bool32);
 
-   if (shader->info.stage != MESA_SHADER_FRAGMENT) {
-      nir_shader_preserve_all_metadata(shader);
-      return false;
-   }
+   if (shader->info.stage != MESA_SHADER_FRAGMENT)
+      return;
 
    int binding = 0;
    nir_foreach_uniform_variable(var, shader) {
@@ -151,13 +148,10 @@ nir_lower_pstipple_fs(struct nir_shader *shader,
    BITSET_SET(shader->info.samplers_used, binding);
    state.stip_tex = tex_var;
 
-   bool progress = false;
    nir_foreach_function_impl(impl, shader) {
       nir_lower_pstipple_impl(impl, &state);
-      progress |= nir_progress(true, impl, nir_metadata_none);
    }
    *samplerUnitOut = binding;
-   return progress;
 }
 
 typedef struct {
@@ -273,7 +267,7 @@ nir_lower_aaline_fs(struct nir_shader *shader, int *varying,
    state.line_width_input = line_width;
 
    nir_shader_instructions_pass(shader, lower_aaline_instr,
-                                nir_metadata_control_flow, &state);
+                                nir_metadata_dominance, &state);
 }
 
 typedef struct {
@@ -342,7 +336,7 @@ nir_lower_aapoint_impl(nir_function_impl *impl, lower_aapoint *state,
       comp = nir_slt(b, chan_val_one, dist);
       break;
    default:
-      UNREACHABLE("Invalid Boolean type.");
+      unreachable("Invalid Boolean type.");
    }
 
    nir_discard_if(b, comp);
@@ -398,7 +392,7 @@ nir_lower_aapoint_impl(nir_function_impl *impl, lower_aapoint *state,
       break;
    }
    default:
-      UNREACHABLE("Invalid Boolean type.");
+      unreachable("Invalid Boolean type.");
    }
 
    nir_foreach_block(block, impl) {

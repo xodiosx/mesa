@@ -8,7 +8,7 @@ set -e
 set -o xtrace
 
 export DEBIAN_FRONTEND=noninteractive
-: "${LLVM_VERSION:?llvm version not set!}"
+export LLVM_VERSION="${LLVM_VERSION:=15}"
 
 # Ephemeral packages (installed for this script and removed again at the end)
 EPHEMERAL=(
@@ -39,6 +39,7 @@ DEPS=(
     "libxrandr-dev:$arch"
     "libxshmfence-dev:$arch"
     "libxxf86vm-dev:$arch"
+    "libwayland-dev:$arch"
 )
 
 dpkg --add-architecture $arch

@@ -22,7 +22,6 @@
  */
 
 #include "nir.h"
-#include "nir_builder.h"
 #include "nir_clc_helpers.h"
 #include "nir_serialize.h"
 #include "nir_spirv.h"
@@ -88,7 +87,7 @@ get_libclc_file(unsigned ptr_bit_size)
 struct clc_data {
    const struct clc_file *file;
 
-   unsigned char cache_key[SHA1_DIGEST_LENGTH];
+   unsigned char cache_key[20];
 
    int fd;
    const void *data;
@@ -253,11 +252,9 @@ nir_can_find_libclc(unsigned ptr_bit_size)
  * every function that works on global memory and make it also work on generic
  * memory.
  */
-static bool
+static void
 libclc_add_generic_variants(nir_shader *shader)
 {
-   bool progress = false;
-
    nir_foreach_function(func, shader) {
       /* These don't need generic variants */
       if (strstr(func->name, "async_work_group_strided_copy"))
@@ -302,27 +299,8 @@ libclc_add_generic_variants(nir_shader *shader)
          }
       }
 
-      progress = true;
-      nir_progress(true, func->impl, nir_metadata_none);
+      nir_metadata_preserve(gfunc->impl, nir_metadata_none);
    }
-
-   if (progress) {
-      nir_foreach_function_impl(impl, shader) {
-         if (impl->valid_metadata & nir_metadata_not_properly_reset) {
-            /* Preserve all metadata for functions that we didn't modify. */
-            nir_no_progress(impl);
-         }
-      }
-   }
-
-   return progress;
-}
-
-static bool
-mark_exact(nir_builder *b, nir_alu_instr *alu, UNUSED void *_)
-{
-   alu->fp_math_ctrl |= nir_fp_exact;
-   return true;
 }
 
 nir_shader *
@@ -377,26 +355,16 @@ nir_load_libclc_shader(unsigned ptr_bit_size,
     * initializers and lower any early returns.
     */
    nir->info.internal = true;
-   NIR_PASS(_, nir, nir_lower_variable_initializers, nir_var_function_temp);
-   NIR_PASS(_, nir, nir_lower_returns);
+   NIR_PASS_V(nir, nir_lower_variable_initializers, nir_var_function_temp);
+   NIR_PASS_V(nir, nir_lower_returns);
 
-   NIR_PASS(_, nir, libclc_add_generic_variants);
-
-   /* libclc relies on precise floating point behaviour to meet CL precision
-    * requirements, but the SPIR-V does not disable contractions etc. Forcing
-    * the exact bit across libclc effectively compiles libclc without fast-math,
-    * which works around a large class of (current and future) libclc bugs.
-    *
-    * Kernels using CL are unaffected, this only affects the high-precision
-    * floating point routines inside libclc. Fast variants bypass libclc anyway.
-    */
-   NIR_PASS(_, nir, nir_shader_alu_pass, mark_exact, nir_metadata_all, NULL);
+   NIR_PASS_V(nir, libclc_add_generic_variants);
 
    /* Run some optimization passes. Those used here should be considered safe
     * for all use cases and drivers.
     */
    if (optimize) {
-      NIR_PASS(_, nir, nir_split_var_copies);
+      NIR_PASS_V(nir, nir_split_var_copies);
 
       bool progress;
       do {
@@ -404,7 +372,7 @@ nir_load_libclc_shader(unsigned ptr_bit_size,
          NIR_PASS(progress, nir, nir_opt_copy_prop_vars);
          NIR_PASS(progress, nir, nir_lower_var_copies);
          NIR_PASS(progress, nir, nir_lower_vars_to_ssa);
-         NIR_PASS(progress, nir, nir_opt_copy_prop);
+         NIR_PASS(progress, nir, nir_copy_prop);
          NIR_PASS(progress, nir, nir_opt_remove_phis);
          NIR_PASS(progress, nir, nir_opt_dce);
          NIR_PASS(progress, nir, nir_opt_if, false);
@@ -413,10 +381,7 @@ nir_load_libclc_shader(unsigned ptr_bit_size,
          /* drivers run this pass, so don't be too aggressive. More aggressive
           * values only increase effectiveness by <5%
           */
-         nir_opt_peephole_select_options peephole_select_options = {
-            .limit = 0,
-         };
-         NIR_PASS(progress, nir, nir_opt_peephole_select, &peephole_select_options);
+         NIR_PASS(progress, nir, nir_opt_peephole_select, 0, false, false);
          NIR_PASS(progress, nir, nir_opt_algebraic);
          NIR_PASS(progress, nir, nir_opt_constant_folding);
          NIR_PASS(progress, nir, nir_opt_undef);

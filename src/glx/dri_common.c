@@ -45,7 +45,6 @@
 #include <xcb/xproto.h>
 #include "dri_util.h"
 #include "pipe-loader/pipe_loader.h"
-#include "x11/x11_display.h"
 
 #define __ATTRIB(attrib, field) \
     { attrib, offsetof(struct glx_config, field) }
@@ -210,7 +209,7 @@ createDriMode(struct glx_config *config, const struct dri_config **driConfigs)
    return &driConfig->base;
 }
 
-struct glx_config *
+_X_HIDDEN struct glx_config *
 driConvertConfigs(struct glx_config *configs, const struct dri_config **driConfigs)
 {
    struct glx_config head, *tail, *m;
@@ -231,7 +230,7 @@ driConvertConfigs(struct glx_config *configs, const struct dri_config **driConfi
    return head.next;
 }
 
-void
+_X_HIDDEN void
 driDestroyConfigs(const struct dri_config **configs)
 {
    int i;
@@ -274,7 +273,7 @@ driInferDrawableConfig(struct glx_screen *psc, GLXDrawable draw)
    return NULL;
 }
 
-__GLXDRIdrawable *
+_X_HIDDEN __GLXDRIdrawable *
 driFetchDrawable(struct glx_context *gc, GLXDrawable glxDrawable)
 {
    Display *dpy = gc->psc->dpy;
@@ -425,7 +424,7 @@ releaseDrawable(const struct glx_display *priv, GLXDrawable drawable)
    }
 }
 
-void
+_X_HIDDEN void
 driReleaseDrawables(struct glx_context *gc)
 {
    const struct glx_display *priv = gc->psc->display;
@@ -438,7 +437,7 @@ driReleaseDrawables(struct glx_context *gc)
 
 }
 
-int
+_X_HIDDEN int
 dri_convert_glx_attribs(unsigned num_attribs, const uint32_t *attribs,
                         struct dri_ctx_attribs *dca)
 {
@@ -525,14 +524,14 @@ dri_convert_glx_attribs(unsigned num_attribs, const uint32_t *attribs,
       dca->api = __DRI_API_OPENGL;
       break;
    case GLX_CONTEXT_ES_PROFILE_BIT_EXT:
-      if (dca->major_ver == 3  && dca->minor_ver <= 2)
+      if (dca->major_ver >= 3)
          dca->api = __DRI_API_GLES3;
       else if (dca->major_ver == 2 && dca->minor_ver == 0)
          dca->api = __DRI_API_GLES2;
       else if (dca->major_ver == 1 && dca->minor_ver < 2)
          dca->api = __DRI_API_GLES;
       else {
-         return GLXBadProfileARB;
+         return BadValue;
       }
       break;
    default:
@@ -602,7 +601,7 @@ dri_context_error_to_glx_error(unsigned error)
    else if (error == __DRI_CTX_ERROR_UNKNOWN_FLAG)
       return BadValue;
    else
-      UNREACHABLE("Impossible DRI context error");
+      unreachable("Impossible DRI context error");
 }
 
 struct glx_context *
@@ -716,7 +715,7 @@ glXGetDriverConfig(const char *driverName)
    if (!e)
       goto out;
 
-   e->config = driGetDriInfoXML(driverName);
+   e->config = pipe_loader_get_driinfo_xml(driverName);
    e->driverName = strdup(driverName);
    if (!e->config || !e->driverName) {
       free(e->config);
@@ -737,6 +736,35 @@ out:
 
    return e ? e->config : NULL;
 }
+
+static void
+driSetBackgroundContext(void *loaderPrivate)
+{
+   __glXSetCurrentContext(loaderPrivate);
+}
+
+static GLboolean
+driIsThreadSafe(void *loaderPrivate)
+{
+   struct glx_context *pcp = (struct glx_context *) loaderPrivate;
+   /* Check Xlib is running in thread safe mode
+    *
+    * 'lock_fns' is the XLockDisplay function pointer of the X11 display 'dpy'.
+    * It will be NULL if XInitThreads wasn't called.
+    */
+   return pcp->psc->dpy->lock_fns != NULL;
+}
+
+const __DRIbackgroundCallableExtension driBackgroundCallable = {
+   .base = { __DRI_BACKGROUND_CALLABLE, 2 },
+
+   .setBackgroundContext    = driSetBackgroundContext,
+   .isThreadSafe            = driIsThreadSafe,
+};
+
+const __DRIuseInvalidateExtension dri2UseInvalidate = {
+   .base = { __DRI_USE_INVALIDATE, 1 }
+};
 
 Bool
 dri_bind_context(struct glx_context *context, GLXDrawable draw, GLXDrawable read)
@@ -888,8 +916,7 @@ dri_create_context_attribs(struct glx_screen *base,
                               num_ctx_attribs / 2,
                               ctx_attribs,
                               error,
-                              pcp,
-                              x11_xlib_display_is_thread_safe(base->dpy));
+                              pcp);
 
    *error = dri_context_error_to_glx_error(*error);
 
@@ -952,6 +979,7 @@ dri_screen_init(struct glx_screen *psc, struct glx_display *priv, int screen, in
    enum dri_screen_type type;
    switch (psc->display->driver) {
    case GLX_DRIVER_DRI3:
+   case GLX_DRIVER_DRI2:
       type = DRI_SCREEN_DRI3;
       break;
    case GLX_DRIVER_ZINK_YES:
@@ -961,7 +989,7 @@ dri_screen_init(struct glx_screen *psc, struct glx_display *priv, int screen, in
       type = DRI_SCREEN_SWRAST;
       break;
    default:
-      UNREACHABLE("unknown glx driver type");
+      unreachable("unknown glx driver type");
    }
 
    psc->frontend_screen = driCreateNewScreen3(screen, fd,

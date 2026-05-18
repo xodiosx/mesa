@@ -47,12 +47,18 @@ struct vn_image_create_deferred_info {
    VkImageFormatListCreateInfo list;
    VkImageStencilUsageCreateInfo stencil;
 
+   /* True if VkImageCreateInfo::format is translated from a non-zero
+    * VkExternalFormatANDROID::externalFormat for the AHB image.
+    */
+   bool from_external_format;
    /* track whether vn_image_init_deferred succeeds */
    bool initialized;
 };
 
 struct vn_image {
    struct vn_image_base base;
+
+   VkSharingMode sharing_mode;
 
    struct vn_image_memory_requirements requirements[4];
 
@@ -62,7 +68,16 @@ struct vn_image {
    struct vn_image_create_deferred_info *deferred_info;
 
    struct {
+      /* True if this is a swapchain image and VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+       * is a valid layout.  A swapchain image can be created internally
+       * (wsi_image_create_info) or externally (VkNativeBufferANDROID and
+       * VkImageSwapchainCreateInfoKHR).
+       */
+      bool is_wsi;
       bool is_prime_blit_src;
+      VkImageTiling tiling_override;
+      /* valid when tiling is VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT */
+      uint64_t drm_format_modifier;
 
       struct vn_device_memory *memory;
 
@@ -71,7 +86,7 @@ struct vn_image {
    } wsi;
 };
 VK_DEFINE_NONDISP_HANDLE_CASTS(vn_image,
-                               base.vk.base,
+                               base.base.base,
                                VkImage,
                                VK_OBJECT_TYPE_IMAGE)
 
@@ -81,7 +96,7 @@ struct vn_image_view {
    const struct vn_image *image;
 };
 VK_DEFINE_NONDISP_HANDLE_CASTS(vn_image_view,
-                               base.vk,
+                               base.base,
                                VkImageView,
                                VK_OBJECT_TYPE_IMAGE_VIEW)
 
@@ -89,7 +104,7 @@ struct vn_sampler {
    struct vn_object_base base;
 };
 VK_DEFINE_NONDISP_HANDLE_CASTS(vn_sampler,
-                               base.vk,
+                               base.base,
                                VkSampler,
                                VK_OBJECT_TYPE_SAMPLER)
 
@@ -97,7 +112,7 @@ struct vn_sampler_ycbcr_conversion {
    struct vn_object_base base;
 };
 VK_DEFINE_NONDISP_HANDLE_CASTS(vn_sampler_ycbcr_conversion,
-                               base.vk,
+                               base.base,
                                VkSamplerYcbcrConversion,
                                VK_OBJECT_TYPE_SAMPLER_YCBCR_CONVERSION)
 

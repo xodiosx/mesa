@@ -13,10 +13,56 @@
 #include "nv_push.h"
 #include "nv_push_cl90b5.h"
 
+#define NVK_UPLOAD_MEM_SIZE 64*1024
+
+struct nvk_upload_mem {
+   struct nvkmd_mem *mem;
+
+   /** Link in nvk_upload_queue::recycle */
+   struct list_head link;
+
+   /** Time point at which point this BO will be idle */
+   uint64_t idle_time_point;
+};
+
+static VkResult
+nvk_upload_mem_create(struct nvk_device *dev,
+                     struct nvk_upload_mem **mem_out)
+{
+   struct nvk_upload_mem *mem;
+   VkResult result;
+
+   mem = vk_zalloc(&dev->vk.alloc, sizeof(*mem), 8,
+                  VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+   if (mem == NULL)
+      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   result = nvkmd_dev_alloc_mapped_mem(dev->nvkmd, &dev->vk.base,
+                                       NVK_UPLOAD_MEM_SIZE, 0, NVKMD_MEM_GART,
+                                       NVKMD_MEM_MAP_WR, &mem->mem);
+   if (result != VK_SUCCESS) {
+      vk_free(&dev->vk.alloc, mem);
+      return result;
+   }
+
+   *mem_out = mem;
+
+   return VK_SUCCESS;
+}
+
+static void
+nvk_upload_mem_destroy(struct nvk_device *dev,
+                      struct nvk_upload_mem *mem)
+{
+   nvkmd_mem_unref(mem->mem);
+   vk_free(&dev->vk.alloc, mem);
+}
+
 VkResult
 nvk_upload_queue_init(struct nvk_device *dev,
                       struct nvk_upload_queue *queue)
 {
+   struct nvk_physical_device *pdev = nvk_device_physical(dev);
    VkResult result;
 
    memset(queue, 0, sizeof(*queue));
@@ -28,12 +74,15 @@ nvk_upload_queue_init(struct nvk_device *dev,
    if (result != VK_SUCCESS)
       goto fail_mutex;
 
-   result = nvk_mem_stream_init(dev, &queue->stream);
+   const struct vk_sync_type *sync_type = pdev->nvkmd->sync_types[0];
+   assert(sync_type->features & VK_SYNC_FEATURE_TIMELINE);
+
+   result = vk_sync_create(&dev->vk, sync_type, VK_SYNC_IS_TIMELINE,
+                           0, &queue->sync);
    if (result != VK_SUCCESS)
       goto fail_ctx;
 
-   nv_push_init(&queue->push, queue->push_data, ARRAY_SIZE(queue->push_data),
-                nvk_queue_subchannels_from_engines(NVKMD_ENGINE_COPY));
+   list_inithead(&queue->recycle);
 
    return VK_SUCCESS;
 
@@ -49,7 +98,13 @@ void
 nvk_upload_queue_finish(struct nvk_device *dev,
                         struct nvk_upload_queue *queue)
 {
-   nvk_mem_stream_finish(dev, &queue->stream);
+   list_for_each_entry_safe(struct nvk_upload_mem, mem, &queue->recycle, link)
+      nvk_upload_mem_destroy(dev, mem);
+
+   if (queue->mem != NULL)
+      nvk_upload_mem_destroy(dev, queue->mem);
+
+   vk_sync_destroy(&dev->vk, queue->sync);
    nvkmd_ctx_destroy(queue->ctx);
    simple_mtx_destroy(&queue->mutex);
 }
@@ -61,28 +116,44 @@ nvk_upload_queue_flush_locked(struct nvk_device *dev,
 {
    VkResult result;
 
-   if (time_point_out != NULL)
-      *time_point_out = queue->last_time_point;
-
-   if (nv_push_dw_count(&queue->push) == 0)
+   if (queue->mem == NULL || queue->mem_push_start == queue->mem_push_end) {
+      if (time_point_out != NULL)
+         *time_point_out = queue->last_time_point;
       return VK_SUCCESS;
+   }
 
-   /* nvk_mem_stream_flush() will not update last_time_point if it fails.  If
-    * we do fail and lose the device, nvk_upload_queue_sync won't wait forever
-    * on a time point that will never signal.
-    */
-   result = nvk_mem_stream_push(dev, &queue->stream, queue->ctx,
-                                queue->push_data,
-                                nv_push_dw_count(&queue->push),
-                                &queue->last_time_point);
+   uint64_t time_point = queue->last_time_point + 1;
+   if (time_point == UINT64_MAX)
+      abort();
+
+   const struct nvkmd_ctx_exec exec = {
+      .addr = queue->mem->mem->va->addr + queue->mem_push_start,
+      .size_B = queue->mem_push_end - queue->mem_push_start,
+   };
+   result = nvkmd_ctx_exec(queue->ctx, &dev->vk.base, 1, &exec);
    if (result != VK_SUCCESS)
       return result;
 
-   nv_push_init(&queue->push, queue->push_data, ARRAY_SIZE(queue->push_data),
-                nvk_queue_subchannels_from_engines(NVKMD_ENGINE_COPY));
+   const struct vk_sync_signal signal = {
+      .sync = queue->sync,
+      .stage_mask = ~0,
+      .signal_value = time_point,
+   };
+   result = nvkmd_ctx_signal(queue->ctx, &dev->vk.base, 1, &signal);
+   if (result != VK_SUCCESS)
+      return result;
+
+   /* Wait until now to update last_time_point so that, if we do fail and lose
+    * the device, nvk_upload_queue_sync won't wait forever on a time point
+    * that will never signal.
+    */
+   queue->last_time_point = time_point;
+
+   queue->mem->idle_time_point = time_point;
+   queue->mem_push_start = queue->mem_push_end;
 
    if (time_point_out != NULL)
-      *time_point_out = queue->last_time_point;
+      *time_point_out = time_point;
 
    return VK_SUCCESS;
 }
@@ -114,7 +185,7 @@ nvk_upload_queue_sync_locked(struct nvk_device *dev,
    if (queue->last_time_point == 0)
       return VK_SUCCESS;
 
-   return vk_sync_wait(&dev->vk, queue->stream.sync, queue->last_time_point,
+   return vk_sync_wait(&dev->vk, queue->sync, queue->last_time_point,
                        VK_SYNC_WAIT_COMPLETE, UINT64_MAX);
 }
 
@@ -132,6 +203,53 @@ nvk_upload_queue_sync(struct nvk_device *dev,
 }
 
 static VkResult
+nvk_upload_queue_reserve(struct nvk_device *dev,
+                         struct nvk_upload_queue *queue,
+                         uint32_t min_mem_size)
+{
+   VkResult result;
+
+   assert(min_mem_size <= NVK_UPLOAD_MEM_SIZE);
+   assert(queue->mem_push_end <= queue->mem_data_start);
+
+   if (queue->mem != NULL) {
+      if (queue->mem_data_start - queue->mem_push_end >= min_mem_size)
+         return VK_SUCCESS;
+
+      /* Not enough room in the BO.  Flush and add it to the recycle list */
+      result = nvk_upload_queue_flush_locked(dev, queue, NULL);
+      if (result != VK_SUCCESS)
+         return result;
+
+      assert(queue->mem_push_start == queue->mem_push_end);
+      list_addtail(&queue->mem->link, &queue->recycle);
+      queue->mem = NULL;
+   }
+
+   assert(queue->mem == NULL);
+   queue->mem_push_start = queue->mem_push_end = 0;
+   queue->mem_data_start = NVK_UPLOAD_MEM_SIZE;
+
+   /* Try to pop an idle BO off the recycle list */
+   if (!list_is_empty(&queue->recycle)) {
+      uint64_t time_point_passed = 0;
+      result = vk_sync_get_value(&dev->vk, queue->sync, &time_point_passed);
+      if (result != VK_SUCCESS)
+         return result;
+
+      struct nvk_upload_mem *mem =
+         list_first_entry(&queue->recycle, struct nvk_upload_mem, link);
+      if (time_point_passed >= mem->idle_time_point) {
+         list_del(&mem->link);
+         queue->mem = mem;
+         return VK_SUCCESS;
+      }
+   }
+
+   return nvk_upload_mem_create(dev, &queue->mem);
+}
+
+static VkResult
 nvk_upload_queue_upload_locked(struct nvk_device *dev,
                                struct nvk_upload_queue *queue,
                                uint64_t dst_addr,
@@ -144,43 +262,54 @@ nvk_upload_queue_upload_locked(struct nvk_device *dev,
 
    while (size > 0) {
       const uint32_t cmd_size_dw = 12;
-      if (queue->push.end + cmd_size_dw > queue->push.limit) {
-         result = nvk_upload_queue_flush_locked(dev, queue, NULL);
-         if (result != VK_SUCCESS)
-            return result;
-      }
-      struct nv_push *p = &queue->push;
+      const uint32_t cmd_size = cmd_size_dw * 4;
 
-      const uint32_t data_size = MIN2(size, NVK_MEM_STREAM_MAX_ALLOC_SIZE);
-
-      uint64_t data_addr;
-      void *data_map;
-      result = nvk_mem_stream_alloc(dev, &queue->stream, data_size, 4,
-                                    &data_addr, &data_map);
+      /* Don't split the upload for stmall stuff.  If it's under 1KB and we
+       * can't fit it in the current buffer, just get another.
+       */
+      const uint32_t min_size = cmd_size + MIN2(size, 1024);
+      result = nvk_upload_queue_reserve(dev, queue, min_size);
       if (result != VK_SUCCESS)
          return result;
 
-      memcpy(data_map, src, data_size);
+      assert(queue->mem != NULL);
+      assert(queue->mem_data_start > queue->mem_push_end);
+      const uint32_t avail = queue->mem_data_start - queue->mem_push_end;
+      assert(avail >= min_size);
+
+      const uint32_t data_size = MIN2(size, avail - cmd_size);
+
+      const uint32_t data_mem_offset = queue->mem_data_start - data_size;
+      assert(queue->mem_push_end + cmd_size <= data_mem_offset);
+      const uint64_t data_addr = queue->mem->mem->va->addr + data_mem_offset;
+      memcpy(queue->mem->mem->map + data_mem_offset, src, data_size);
+      queue->mem_data_start = data_mem_offset;
+
+      struct nv_push p;
+      nv_push_init(&p, queue->mem->mem->map + queue->mem_push_end, cmd_size_dw);
 
       assert(data_size <= (1 << 17));
 
-      P_MTHD(p, NV90B5, OFFSET_IN_UPPER);
-      P_NV90B5_OFFSET_IN_UPPER(p, data_addr >> 32);
-      P_NV90B5_OFFSET_IN_LOWER(p, data_addr & 0xffffffff);
-      P_NV90B5_OFFSET_OUT_UPPER(p, dst_addr >> 32);
-      P_NV90B5_OFFSET_OUT_LOWER(p, dst_addr & 0xffffffff);
-      P_NV90B5_PITCH_IN(p, data_size);
-      P_NV90B5_PITCH_OUT(p, data_size);
-      P_NV90B5_LINE_LENGTH_IN(p, data_size);
-      P_NV90B5_LINE_COUNT(p, 1);
+      P_MTHD(&p, NV90B5, OFFSET_IN_UPPER);
+      P_NV90B5_OFFSET_IN_UPPER(&p, data_addr >> 32);
+      P_NV90B5_OFFSET_IN_LOWER(&p, data_addr & 0xffffffff);
+      P_NV90B5_OFFSET_OUT_UPPER(&p, dst_addr >> 32);
+      P_NV90B5_OFFSET_OUT_LOWER(&p, dst_addr & 0xffffffff);
+      P_NV90B5_PITCH_IN(&p, data_size);
+      P_NV90B5_PITCH_OUT(&p, data_size);
+      P_NV90B5_LINE_LENGTH_IN(&p, data_size);
+      P_NV90B5_LINE_COUNT(&p, 1);
 
-      P_IMMD(p, NV90B5, LAUNCH_DMA, {
+      P_IMMD(&p, NV90B5, LAUNCH_DMA, {
          .data_transfer_type = DATA_TRANSFER_TYPE_NON_PIPELINED,
          .multi_line_enable = MULTI_LINE_ENABLE_FALSE,
          .flush_enable = FLUSH_ENABLE_TRUE,
          .src_memory_layout = SRC_MEMORY_LAYOUT_PITCH,
          .dst_memory_layout = DST_MEMORY_LAYOUT_PITCH,
       });
+
+      assert(nv_push_dw_count(&p) <= cmd_size_dw);
+      queue->mem_push_end += nv_push_dw_count(&p) * 4;
 
       dst_addr += data_size;
       src += data_size;
@@ -217,12 +346,11 @@ nvk_upload_queue_fill_locked(struct nvk_device *dev,
 
    while (size > 0) {
       const uint32_t cmd_size_dw = 14;
-      if (queue->push.end + cmd_size_dw > queue->push.limit) {
-         result = nvk_upload_queue_flush_locked(dev, queue, NULL);
-         if (result != VK_SUCCESS)
-            return result;
-      }
-      struct nv_push *p = &queue->push;
+      const uint32_t cmd_size = cmd_size_dw * 4;
+
+      result = nvk_upload_queue_reserve(dev, queue, cmd_size);
+      if (result != VK_SUCCESS)
+         return result;
 
       const uint32_t max_dim = 1 << 17;
       uint32_t width_B, height;
@@ -235,16 +363,19 @@ nvk_upload_queue_fill_locked(struct nvk_device *dev,
       }
       assert(width_B * height <= size);
 
-      P_MTHD(p, NV90B5, OFFSET_OUT_UPPER);
-      P_NV90B5_OFFSET_OUT_UPPER(p, dst_addr >> 32);
-      P_NV90B5_OFFSET_OUT_LOWER(p, dst_addr & 0xffffffff);
-      P_NV90B5_PITCH_IN(p, width_B);
-      P_NV90B5_PITCH_OUT(p, width_B);
-      P_NV90B5_LINE_LENGTH_IN(p, width_B / 4);
-      P_NV90B5_LINE_COUNT(p, height);
+      struct nv_push p;
+      nv_push_init(&p, queue->mem->mem->map + queue->mem_push_end, cmd_size_dw);
 
-      P_IMMD(p, NV90B5, SET_REMAP_CONST_A, data);
-      P_IMMD(p, NV90B5, SET_REMAP_COMPONENTS, {
+      P_MTHD(&p, NV90B5, OFFSET_OUT_UPPER);
+      P_NV90B5_OFFSET_OUT_UPPER(&p, dst_addr >> 32);
+      P_NV90B5_OFFSET_OUT_LOWER(&p, dst_addr & 0xffffffff);
+      P_NV90B5_PITCH_IN(&p, width_B);
+      P_NV90B5_PITCH_OUT(&p, width_B);
+      P_NV90B5_LINE_LENGTH_IN(&p, width_B / 4);
+      P_NV90B5_LINE_COUNT(&p, height);
+
+      P_IMMD(&p, NV90B5, SET_REMAP_CONST_A, data);
+      P_IMMD(&p, NV90B5, SET_REMAP_COMPONENTS, {
          .dst_x = DST_X_CONST_A,
          .dst_y = DST_Y_CONST_A,
          .dst_z = DST_Z_CONST_A,
@@ -254,7 +385,7 @@ nvk_upload_queue_fill_locked(struct nvk_device *dev,
          .num_dst_components = NUM_DST_COMPONENTS_ONE,
       });
 
-      P_IMMD(p, NV90B5, LAUNCH_DMA, {
+      P_IMMD(&p, NV90B5, LAUNCH_DMA, {
          .data_transfer_type = DATA_TRANSFER_TYPE_NON_PIPELINED,
          .multi_line_enable = height > 1,
          .flush_enable = FLUSH_ENABLE_TRUE,
@@ -262,6 +393,9 @@ nvk_upload_queue_fill_locked(struct nvk_device *dev,
          .dst_memory_layout = DST_MEMORY_LAYOUT_PITCH,
          .remap_enable = REMAP_ENABLE_TRUE,
       });
+
+      assert(nv_push_dw_count(&p) <= cmd_size_dw);
+      queue->mem_push_end += nv_push_dw_count(&p) * 4;
 
       dst_addr += width_B * height;
       size -= width_B * height;

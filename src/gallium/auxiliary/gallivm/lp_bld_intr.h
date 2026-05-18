@@ -38,13 +38,9 @@
 
 #include <llvm/Config/llvm-config.h>
 
-#include <llvm-c/Core.h>
+#include "gallivm/lp_bld.h"
+#include "gallivm/lp_bld_init.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-struct gallivm_state;
 struct lp_type;
 
 /**
@@ -59,8 +55,6 @@ enum lp_func_attr {
    LP_FUNC_ATTR_NOUNWIND     = (1 << 4),
    LP_FUNC_ATTR_CONVERGENT   = (1 << 5),
    LP_FUNC_ATTR_PRESPLITCORO = (1 << 6),
-   LP_FUNC_ATTR_NOINLINE     = (1 << 7),
-   LP_FUNC_ATTR_OPTNONE      = (1 << 8),
 };
 
 void
@@ -140,9 +134,5 @@ lp_build_intrinsic_map_binary(struct gallivm_state *gallivm,
                               LLVMValueRef a,
                               LLVMValueRef b);
 
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* !LP_BLD_INTR_H */

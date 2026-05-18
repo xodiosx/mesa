@@ -58,7 +58,7 @@ FetchInstr::FetchInstr(EVFetchInstr opcode,
       m_opname = "READ_SCRATCH";
       break;
    default:
-      UNREACHABLE("Unknown fetch instruction");
+      unreachable("Unknown fetch instruction");
    }
 
    if (m_src)
@@ -124,8 +124,6 @@ FetchInstr::replace_source(PRegister old_src, PVirtualValue new_src)
    bool success = false;
    auto new_reg = new_src->as_register();
    if (new_reg) {
-      if (!new_reg->has_flag(Register::ssa) && new_reg->addr())
-         return false;
       if (old_src->equal_to(*m_src)) {
          m_src->del_use(this);
          m_src = new_reg;
@@ -186,7 +184,7 @@ FetchInstr::do_print(std::ostream& os) const
          os << " NO_IDX_OFFSET";
          break;
       default:
-         UNREACHABLE("Unknown fetch instruction type");
+         unreachable("Unknown fetch instruction type");
       }
    }
 
@@ -196,7 +194,7 @@ FetchInstr::do_print(std::ostream& os) const
       if (fmt != s_data_format_map.end())
          os << fmt->second << ",";
       else
-         UNREACHABLE("unknown data format");
+         unreachable("unknown data format");
 
       if (m_tex_flags.test(format_comp_signed))
          os << "S";
@@ -214,7 +212,7 @@ FetchInstr::do_print(std::ostream& os) const
          os << "SCALED";
          break;
       default:
-         UNREACHABLE("Unknown number format");
+         unreachable("Unknown number format");
       }
 
       os << ")";
@@ -362,7 +360,7 @@ FetchInstr::from_string_impl(std::istream& is, EVFetchInstr opcode, ValueFactory
       num_fmt = vtx_nf_scaled;
    else {
       std::cerr << "Number format: '" << num_format_str << "' : ";
-      UNREACHABLE("Unknown number format");
+      unreachable("Unknown number format");
    }
 
    auto fetch = new FetchInstr(opcode,
@@ -409,7 +407,7 @@ FetchInstr::set_param_from_string(const std::string& token)
       set_element_size(int_from_string_with_prefix(token, "ES:"));
    else {
       std::cerr << "Token '" << token << "': ";
-      UNREACHABLE("Unknown token in fetch param list");
+      unreachable("Unknown token in fetch param list");
    }
 }
 
@@ -421,7 +419,7 @@ FetchInstr::set_flag_from_string(const std::string& token)
       set_fetch_flag(flag->second);
    else {
       std::cerr << "Token: " << token << " : ";
-      UNREACHABLE("Unknown token in fetch flag list");
+      unreachable("Unknown token in fetch flag list");
    }
 }
 
@@ -638,18 +636,18 @@ public:
    }
    void visit(LocalArray& value)
    {
-      UNREACHABLE("An array can't be a direct source for scratch reads");
+      unreachable("An array can't be a direct source for scratch reads");
       (void)value;
    }
    void visit(LocalArrayValue& value)
    {
-      UNREACHABLE("An array value can't be a direct source for scratch reads");
+      unreachable("An array value can't be a direct source for scratch reads");
       // TODO: an array element with constant offset could be used here
       (void)value;
    }
    void visit(UniformValue& value)
    {
-      UNREACHABLE("A uniform can't be a direct source for scratch reads");
+      unreachable("A uniform can't be a direct source for scratch reads");
       (void)value;
    }
    void visit(LiteralConstant& value)
@@ -662,7 +660,7 @@ public:
       if (value.sel() == ALU_SRC_1_INT)
          m_lfs->set_array_base(1);
       else if (value.sel() != ALU_SRC_0)
-         UNREACHABLE("Scratch array base is an impossible inline constant");
+         unreachable("Scratch array base is an impossible inline constant");
 
       m_lfs->set_src(new Register(0, 7, pin_none));
    }
@@ -687,6 +685,7 @@ LoadFromScratch::LoadFromScratch(const RegisterVec4& dst,
                nullptr)
 {
    set_fetch_flag(uncached);
+   set_fetch_flag(wait_ack);
 
    assert(scratch_size >= 1);
    set_array_size(scratch_size - 1);

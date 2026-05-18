@@ -331,7 +331,7 @@ iris_get_monitor_result(struct pipe_context *ctx,
          break;
       }
       default:
-         UNREACHABLE("unexpected counter data type");
+         unreachable("unexpected counter data type");
       }
    }
    return true;

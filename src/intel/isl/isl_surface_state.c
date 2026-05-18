@@ -123,7 +123,7 @@ get_surftype(enum isl_surf_dim dim, isl_surf_usage_flags_t usage)
 {
    switch (dim) {
    default:
-      UNREACHABLE("bad isl_surf_dim");
+      unreachable("bad isl_surf_dim");
    case ISL_SURF_DIM_1D:
       assert(!(usage & ISL_SURF_USAGE_CUBE_BIT));
       return SURFTYPE_1D;
@@ -445,7 +445,7 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
       s.RenderTargetViewExtent = info->view->array_len - 1;
       break;
    default:
-      UNREACHABLE("bad SurfaceType");
+      unreachable("bad SurfaceType");
    }
 
 #if GFX_VER >= 7
@@ -473,31 +473,23 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
        *    SurfaceMinLOD is ignored.
        */
       s.MIPCountLOD = info->view->base_level;
+      s.SurfaceMinLOD = 0;
    } else {
       /* For non render target surfaces, the hardware interprets field
        * MIPCount/LOD as MIPCount.  The range of levels accessible by the
        * sampler engine is [SurfaceMinLOD, SurfaceMinLOD + MIPCountLOD].
        */
+      s.SurfaceMinLOD = info->view->base_level;
       s.MIPCountLOD = MAX(info->view->levels, 1) - 1;
    }
-
-   /* As noted above, the render target cache of the HW ignores SurfaceMinLOD.
-    * But the render target surface may also get sampled when
-    * EXT_shader_framebuffer_fetch_non_coherent is in use, so we still set
-    * SurfaceMinLOD to make sure sampling the render target also hits the
-    * correct LOD.
-    */
-   s.SurfaceMinLOD = info->view->base_level;
 
 #if GFX_VER >= 9
    s.MipTailStartLOD = info->surf->miptail_start_level;
 #endif
 
 #if GFX_VERx10 >= 125
-   /* Setting L1 caching policy to Write-back or Write-through mode. */
-   s.L1CacheControl =
-      (dev->l1_storage_wt && (info->view->usage & ISL_SURF_USAGE_STORAGE_BIT)) ?
-      L1CC_WT : L1CC_WB;
+   /* Setting L1 caching policy to Write-back mode. */
+   s.L1CacheControl = L1CC_WB;
 #endif
 
 #if GFX_VER >= 6
@@ -560,24 +552,12 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
    s.EnableUnormPathInColorPipe = true;
 #endif
 
-   /*
-    * Bspec 57023, RENDER_SURFACE_STATE, bit fields CubeFaceEnable*
-    * states that:
-    *
-    *    This field must be programmed to 1h (enabled) whenever Surface Type is
-    *    programmed to SURFTYPE_CUBE
-    *
-    * This used to work fine for non-cube surfaces on older hardware but on
-    * Xe2+, looks like this restriction is pretty strict.
-    */
-   if (info->view->usage & ISL_SURF_USAGE_CUBE_BIT) {
-      s.CubeFaceEnablePositiveZ = 1;
-      s.CubeFaceEnableNegativeZ = 1;
-      s.CubeFaceEnablePositiveY = 1;
-      s.CubeFaceEnableNegativeY = 1;
-      s.CubeFaceEnablePositiveX = 1;
-      s.CubeFaceEnableNegativeX = 1;
-   }
+   s.CubeFaceEnablePositiveZ = 1;
+   s.CubeFaceEnableNegativeZ = 1;
+   s.CubeFaceEnablePositiveY = 1;
+   s.CubeFaceEnableNegativeY = 1;
+   s.CubeFaceEnablePositiveX = 1;
+   s.CubeFaceEnableNegativeX = 1;
 
 #if GFX_VER >= 6
    /* From the Broadwell PRM for "Number of Multisamples":
@@ -641,9 +621,7 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
    assert(isl_swizzle_is_identity(info->view->swizzle));
 #endif
 
-#if GFX_VER >= 9
    assert(info->address % info->surf->alignment_B == 0);
-#endif
    s.SurfaceBaseAddress = info->address;
 
 #if GFX_VER >= 6
@@ -769,20 +747,12 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
          case ISL_FORMAT_R16_UNORM:
             break;
          default:
-            UNREACHABLE("Incompatible HiZ Sampling format");
+            assert(!"Incompatible HiZ Sampling format");
+            break;
          }
       }
 
-#if GFX_VERx10 >= 200
-      /* According to Bspec 58797 (r58646), the compression format is only
-       * used to improve compression. It is not used for decompression.
-       */
-      if (info->view->usage & (ISL_SURF_USAGE_RENDER_TARGET_BIT |
-                               ISL_SURF_USAGE_STORAGE_BIT)) {
-         s.CompressionFormat =
-            isl_get_render_compression_format(info->surf->format);
-      }
-#elif GFX_VERx10 == 125
+#if GFX_VERx10 >= 125
       if (info->aux_usage == ISL_AUX_USAGE_MC) {
          s.CompressionFormat =
             get_media_compression_format(info->mc_format, info->surf->format);
@@ -877,9 +847,7 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
       uint32_t pitch_in_tiles =
          info->aux_surf->row_pitch_B / tile_info.phys_extent_B.width;
 
-#if GFX_VER >= 9
       assert(info->aux_address % info->aux_surf->alignment_B == 0);
-#endif
       s.AuxiliarySurfaceBaseAddress = info->aux_address;
       s.AuxiliarySurfacePitch = pitch_in_tiles - 1;
 
@@ -931,7 +899,7 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
          s.ClearValueAddressEnable = true;
          s.ClearValueAddress = info->clear_address;
 #else
-         UNREACHABLE("Only Gfx11 and Gfx12 support indirect clear colors");
+         unreachable("Only Gfx11 and Gfx12 support indirect clear colors");
 #endif
       }
 
@@ -1026,13 +994,11 @@ isl_genX(buffer_fill_state_s)(const struct isl_device *dev, void *state,
        *   VUID-VkDescriptorGetInfoEXT-type-09428
        *   VUID-VkBufferViewCreateInfo-range-00930
        *   VUID-VkBufferViewCreateInfo-range-04059
-       *
-       * Regardless, the bit fields we program in our registers on SKL and
-       * newer are enough to fit 32bit num_elements.
        */
       if (num_elements > (1 << 27)) {
          mesa_logw("%s: num_elements is too big: %u (buffer size: %"PRIu64")\n",
                    __func__, num_elements, buffer_size);
+         num_elements = 1 << 27;
       }
    }
 
@@ -1102,12 +1068,6 @@ isl_genX(buffer_fill_state_s)(const struct isl_device *dev, void *state,
 
 #if GFX_VERx10 >= 200
    s.EnableSamplerRoutetoLSC = isl_format_support_sampler_route_to_lsc(info->format);
-   /* Per-application override.
-    *
-    * Bspec 57023: "Enable Sampler Route to LSC" programming note states that,
-    * this bit can be set for surface type SURFTYPE_2D or SURFTYPE_BUFFER.
-    */
-   s.EnableSamplerRoutetoLSC &= dev->sampler_route_to_lsc;
 #endif /* if GFX_VERx10 >= 200 */
 
    s.SurfaceBaseAddress = info->address;
@@ -1136,10 +1096,8 @@ isl_genX(buffer_fill_state_s)(const struct isl_device *dev, void *state,
 #endif
 
 #if GFX_VERx10 >= 125
-   /* Setting L1 caching policy to Write-back or Write-through mode. */
-   s.L1CacheControl =
-      (dev->l1_storage_wt && (info->usage & ISL_SURF_USAGE_STORAGE_BIT)) ?
-      L1CC_WT : L1CC_WB;
+   /* Setting L1 caching policy to Write-back mode. */
+   s.L1CacheControl = L1CC_WB;
 #endif
 
 #if (GFX_VERx10 >= 75)

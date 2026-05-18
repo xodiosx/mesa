@@ -357,7 +357,7 @@ void
 vec4_visitor::emit_pack_half_2x16(dst_reg dst, src_reg src0)
 {
    if (devinfo->ver < 7) {
-      UNREACHABLE("ir_unop_pack_half_2x16 should be lowered");
+      unreachable("ir_unop_pack_half_2x16 should be lowered");
    }
 
    assert(dst.type == ELK_REGISTER_TYPE_UD);
@@ -434,7 +434,7 @@ void
 vec4_visitor::emit_unpack_half_2x16(dst_reg dst, src_reg src0)
 {
    if (devinfo->ver < 7) {
-      UNREACHABLE("ir_unop_unpack_half_2x16 should be lowered");
+      unreachable("ir_unop_unpack_half_2x16 should be lowered");
    }
 
    assert(dst.type == ELK_REGISTER_TYPE_F);
@@ -574,9 +574,6 @@ elk_type_size_xvec4(const struct glsl_type *type, bool as_vec4, bool bindless)
    case GLSL_TYPE_INT:
    case GLSL_TYPE_FLOAT:
    case GLSL_TYPE_FLOAT16:
-   case GLSL_TYPE_BFLOAT16:
-   case GLSL_TYPE_FLOAT_E4M3FN:
-   case GLSL_TYPE_FLOAT_E5M2:
    case GLSL_TYPE_BOOL:
    case GLSL_TYPE_DOUBLE:
    case GLSL_TYPE_UINT16:
@@ -626,7 +623,7 @@ elk_type_size_xvec4(const struct glsl_type *type, bool as_vec4, bool bindless)
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_COOPERATIVE_MATRIX:
-      UNREACHABLE("not reached");
+      unreachable("not reached");
    }
 
    return 0;
@@ -795,13 +792,13 @@ vec4_visitor::emit_uniformize(const src_reg &src)
 void
 vec4_visitor::gs_emit_vertex(int /* stream_id */)
 {
-   UNREACHABLE("not reached");
+   unreachable("not reached");
 }
 
 void
 vec4_visitor::gs_end_primitive()
 {
-   UNREACHABLE("not reached");
+   unreachable("not reached");
 }
 
 void
@@ -837,7 +834,7 @@ vec4_visitor::emit_psiz_and_flags(dst_reg reg)
    if (devinfo->ver < 6 &&
        ((prog_data->vue_map.slots_valid & VARYING_BIT_PSIZ) ||
         output_reg[VARYING_SLOT_CLIP_DIST0][0].file != BAD_FILE ||
-        compiler->has_negative_rhw_bug)) {
+        devinfo->has_negative_rhw_bug)) {
       dst_reg header1 = dst_reg(this, glsl_uvec4_type());
       dst_reg header1_w = header1;
       header1_w.writemask = WRITEMASK_W;
@@ -878,7 +875,7 @@ vec4_visitor::emit_psiz_and_flags(dst_reg reg)
        * Later, clipping will detect ucp[6] and ensure the primitive is
        * clipped against all fixed planes.
        */
-      if (compiler->has_negative_rhw_bug &&
+      if (devinfo->has_negative_rhw_bug &&
           output_reg[ELK_VARYING_SLOT_NDC][0].file != BAD_FILE) {
          src_reg ndc_w = src_reg(output_reg[ELK_VARYING_SLOT_NDC][0]);
          ndc_w.swizzle = ELK_SWIZZLE_WWWW;
@@ -1267,8 +1264,8 @@ vec4_visitor::emit_resolve_reladdr(int scratch_loc[], elk_bblock_t *block,
 void
 vec4_visitor::move_grf_array_access_to_scratch()
 {
-   int *scratch_loc = ralloc_array(NULL, int, this->alloc.count);
-   memset(scratch_loc, -1, sizeof(int) * this->alloc.count);
+   int scratch_loc[this->alloc.count];
+   memset(scratch_loc, -1, sizeof(scratch_loc));
 
    /* First, calculate the set of virtual GRFs that need to be punted
     * to scratch due to having any array access on them, and where in
@@ -1336,8 +1333,6 @@ vec4_visitor::move_grf_array_access_to_scratch()
                                              inst->src[i]);
       }
    }
-
-   ralloc_free(scratch_loc);
 }
 
 void

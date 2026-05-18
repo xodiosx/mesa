@@ -2,18 +2,15 @@
 # shellcheck disable=SC2086 # we want word splitting
 set -uex
 
-section_start piglit "Building piglit"
+uncollapsed_section_start piglit "Building piglit"
 
 # When changing this file, you need to bump the following
 # .gitlab-ci/image-tags.yml tags:
 # DEBIAN_TEST_GL_TAG
 # DEBIAN_TEST_VK_TAG
+# KERNEL_ROOTFS_TAG
 
-# Do a very early check to make sure the tag is correct without the need of
-# setting up the environment variables locally
-ci_tag_build_time_check "PIGLIT_TAG"
-
-REV="2842979ebe03b99c33c3e49af5960c69be6c6d46"
+REV="4c0fd15fd956ec70c5509bedee219d602b334464"
 
 git clone https://gitlab.freedesktop.org/mesa/piglit.git --single-branch --no-checkout /piglit
 pushd /piglit

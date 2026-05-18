@@ -47,7 +47,6 @@
 #include <GL/gl.h>
 #include "mesa_interface.h"
 #include "loader.h"
-#include "util/drm_is_nouveau.h"
 #include "util/libdrm.h"
 #include "util/os_file.h"
 #include "util/os_misc.h"
@@ -139,59 +138,27 @@ iris_predicate(int fd, const char *driver)
 bool
 nouveau_zink_predicate(int fd, const char *driver)
 {
-#ifndef HAVE_LIBDRM
+#if !defined(HAVE_NVK) || !defined(HAVE_ZINK)
+   if (!strcmp(driver, "zink"))
+      return false;
    return true;
 #else
-   /* Never load on nv proprietary driver */
-   if (!drm_fd_is_nouveau(fd))
-      return false;
 
    bool prefer_zink = false;
-   bool require_zink = false;
 
-   /* Enable Zink by default on Turing and later GPUs
-    *
-    * We only use Zink if if the kernel supports VMA_TILEMODE, which is needed
-    * for DRM format modifiers.  This also doubles as a check for a new enough
-    * kernel to run NVK in general.
+   /* enable this once zink is up to speed.
+    * struct drm_nouveau_getparam r = { .param = NOUVEAU_GETPARAM_CHIPSET_ID };
+    * int ret = drmCommandWriteRead(fd, DRM_NOUVEAU_GETPARAM, &r, sizeof(r));
+    * if (ret == 0 && (r.value & ~0xf) >= 0x160)
+    *    prefer_zink = true;
     */
-   struct drm_nouveau_getparam r = { .param = NOUVEAU_GETPARAM_HAS_VMA_TILEMODE };
-   int ret = drmCommandWriteRead(fd, DRM_NOUVEAU_GETPARAM, &r, sizeof(r));
-   if (ret == 0 && r.value == 1) {
-      r.param = NOUVEAU_GETPARAM_CHIPSET_ID;
-      r.value = 0;
-      ret = drmCommandWriteRead(fd, DRM_NOUVEAU_GETPARAM, &r, sizeof(r));
-      if (ret == 0 && r.value >= 0x160) {
-         prefer_zink = true;
-      }
-      /* Nouveau GL isn't enabled on anything after Ada */
-      if (ret == 0 && r.value >= 0x1a0) {
-         require_zink = true;
-      }
-   }
-   assert(!require_zink || prefer_zink);
 
    prefer_zink = debug_get_bool_option("NOUVEAU_USE_ZINK", prefer_zink);
 
-   bool use_zink = prefer_zink;
-   if (require_zink) {
-      /* nouveau_zink_predicate() typically gets called twice but we only want
-       * to warn once.
-       */
-      static bool warned = false;
-      if (!prefer_zink && !warned) {
-         log_(_LOADER_WARNING,
-              "NOUVEAU_USE_ZINK is ignored for Blackwell and later GPUs.\n");
-         warned = true;
-      }
-
-      use_zink = true;
-   }
-
-   if (use_zink && !strcmp(driver, "zink"))
+   if (prefer_zink && !strcmp(driver, "zink"))
       return true;
 
-   if (!use_zink && !strcmp(driver, "nouveau"))
+   if (!prefer_zink && !strcmp(driver, "nouveau"))
       return true;
    return false;
 #endif
@@ -207,45 +174,15 @@ int
 loader_open_render_node_platform_device(const char * const drivers[],
                                         unsigned int n_drivers)
 {
-   unsigned int n_devices;
-   int *fds = loader_open_render_node_platform_devices(drivers, n_drivers, &n_devices);
-   int fd = -1;
-
-   if (n_devices > 0) {
-      fd = fds[0];
-      free(fds);
-   }
-
-   return fd;
-}
-
-/**
- * Goes through all the platform devices whose driver is on the given list and
- * try to open their render node. It returns an array with the fds of all the
- * devices that it can open.
- *
- * Caller must close the returned fds and free the array.
- */
-int *
-loader_open_render_node_platform_devices(const char * const drivers[],
-                                         unsigned int n_drivers,
-                                         unsigned int *n_devices)
-{
    drmDevicePtr devices[MAX_DRM_DEVICES], device;
    int num_devices, fd = -1;
    int i, j;
    bool found = false;
-   int *result;
 
    num_devices = drmGetDevices2(0, devices, MAX_DRM_DEVICES);
-   if (num_devices <= 0) {
-      *n_devices = 0;
-      return NULL;
-   }
+   if (num_devices <= 0)
+      return -ENOENT;
 
-   result = calloc(n_drivers, num_devices);
-
-   *n_devices = 0;
    for (i = 0; i < num_devices; i++) {
       device = devices[i];
 
@@ -269,23 +206,22 @@ loader_open_render_node_platform_devices(const char * const drivers[],
                break;
             }
          }
+         if (!found) {
+            drmFreeVersion(version);
+            close(fd);
+            continue;
+         }
 
          drmFreeVersion(version);
-
-         if (found)
-            result[(*n_devices)++] = fd;
-         else
-            close(fd);
+         break;
       }
    }
    drmFreeDevices(devices, num_devices);
 
-   if (*n_devices == 0) {
-      free(result);
-      return NULL;
-   }
+   if (i == num_devices)
+      return -ENOENT;
 
-   return result;
+   return fd;
 }
 
 bool
@@ -450,7 +386,7 @@ static char *drm_get_id_path_tag_for_fd(int fd)
 
 bool loader_get_user_preferred_fd(int *fd_render_gpu, int *original_fd)
 {
-   const char *dri_prime = os_get_option("DRI_PRIME");
+   const char *dri_prime = getenv("DRI_PRIME");
    bool debug = debug_get_bool_option("DRI_PRIME_DEBUG", false);
    char *default_tag = NULL;
    drmDevicePtr devices[MAX_DRM_DEVICES];
@@ -606,17 +542,20 @@ bool loader_get_user_preferred_fd(int *fd_render_gpu, int *original_fd)
       log_(debug ? _LOADER_WARNING : _LOADER_INFO,
            "selected (%s)\n", devices[i]->nodes[DRM_NODE_RENDER]);
       fd = loader_open_device(devices[i]->nodes[DRM_NODE_RENDER]);
-      if (fd < 0) {
-         log_(debug ? _LOADER_WARNING : _LOADER_INFO,
-              "DRI_PRIME: failed to open '%s'\n",
-              devices[i]->nodes[DRM_NODE_RENDER]);
-      }
       break;
    }
    drmFreeDevices(devices, num_devices);
 
-   if (i == num_devices || fd < 0)
+   if (i == num_devices)
       goto err;
+
+   if (fd < 0) {
+      log_(debug ? _LOADER_WARNING : _LOADER_INFO,
+           "DRI_PRIME: failed to open '%s'\n",
+           devices[i]->nodes[DRM_NODE_RENDER]);
+
+      goto err;
+   }
 
    bool is_render_and_display_gpu_diff = !!strcmp(default_tag, prime.str);
    if (original_fd) {
@@ -770,7 +709,7 @@ loader_get_driver_for_fd(int fd)
     */
    if (__normal_user()) {
       const char *override = os_get_option("MESA_LOADER_DRIVER_OVERRIDE");
-      if (override && strlen(override))
+      if (override)
          return strdup(override);
    }
 
@@ -825,7 +764,7 @@ loader_bind_extensions(void *data,
       if (strcmp(match->name, __DRI_MESA) == 0) {
          const __DRImesaCoreExtension *mesa = (const __DRImesaCoreExtension *)*field;
          if (strcmp(mesa->version_string, MESA_INTERFACE_VERSION_STRING) != 0) {
-            log_(_LOADER_FATAL, "libgallium not from this Mesa build (libgallium: '%s', loader: '%s')\n",
+            log_(_LOADER_FATAL, "DRI driver not from this Mesa build ('%s' vs '%s')\n",
                  mesa->version_string, MESA_INTERFACE_VERSION_STRING);
             ret = false;
          }
@@ -876,13 +815,18 @@ loader_open_driver_lib(const char *driver_name,
          next = end;
 
       len = next - p;
-      snprintf(path, sizeof(path), "%.*s/%s%s.so", len,
+      snprintf(path, sizeof(path), "%.*s/tls/%s%s.so", len,
                p, driver_name, lib_suffix);
-      driver = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+      driver = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
       if (driver == NULL) {
-         dl_error = dlerror();
-         log_(_LOADER_DEBUG, "MESA-LOADER: failed to open %s: %s\n",
-              path, dl_error);
+         snprintf(path, sizeof(path), "%.*s/%s%s.so", len,
+                  p, driver_name, lib_suffix);
+         driver = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+         if (driver == NULL) {
+            dl_error = dlerror();
+            log_(_LOADER_DEBUG, "MESA-LOADER: failed to open %s: %s\n",
+                 path, dl_error);
+         }
       }
       /* not need continue to loop all paths once the driver is found */
       if (driver != NULL)

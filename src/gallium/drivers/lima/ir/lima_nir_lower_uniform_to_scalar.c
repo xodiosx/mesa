@@ -26,12 +26,9 @@
 #include "nir_builder.h"
 #include "lima_ir.h"
 
-static bool
-lower_load_uniform_to_scalar(nir_builder *b, nir_intrinsic_instr *intr, void *unused)
+static void
+lower_load_uniform_to_scalar(nir_builder *b, nir_intrinsic_instr *intr)
 {
-   if (intr->intrinsic != nir_intrinsic_load_uniform)
-      return false;
-
    b->cursor = nir_before_instr(&intr->instr);
 
    nir_def *loads[4];
@@ -55,15 +52,26 @@ lower_load_uniform_to_scalar(nir_builder *b, nir_intrinsic_instr *intr, void *un
    }
 
    nir_def_replace(&intr->def, nir_vec(b, loads, intr->num_components));
-
-   return true;
 }
 
-bool
+void
 lima_nir_lower_uniform_to_scalar(nir_shader *shader)
 {
-   return nir_shader_intrinsics_pass(shader,
-                                     lower_load_uniform_to_scalar,
-                                     nir_metadata_control_flow,
-                                     NULL);
+   nir_foreach_function_impl(impl, shader) {
+      nir_builder b = nir_builder_create(impl);
+
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr_safe(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+
+            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+
+            if (intr->intrinsic != nir_intrinsic_load_uniform)
+               continue;
+
+            lower_load_uniform_to_scalar(&b, intr);
+         }
+      }
+   }
 }

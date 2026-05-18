@@ -83,7 +83,7 @@ anv_physical_device_init_perf(struct anv_physical_device *device, int fd)
          device->n_perf_query_commands += field->size / 4;
          break;
       default:
-         UNREACHABLE("Unhandled register type");
+         unreachable("Unhandled register type");
       }
    }
    device->n_perf_query_commands *= 2; /* Begin & End */
@@ -325,7 +325,7 @@ VkResult anv_EnumeratePhysicalDeviceQueueFamilyPerformanceQueryCountersKHR(
          counter->scope = VK_PERFORMANCE_COUNTER_SCOPE_COMMAND_KHR;
          counter->storage = intel_perf_counter_data_type_to_vk_storage[intel_counter->data_type];
 
-         unsigned char sha1_result[SHA1_DIGEST_LENGTH];
+         unsigned char sha1_result[20];
          _mesa_sha1_compute(intel_counter->symbol_name,
                             strlen(intel_counter->symbol_name),
                             sha1_result);
@@ -434,12 +434,12 @@ anv_perf_write_pass_results(struct intel_perf_config *perf,
             break;
          default:
             /* So far we aren't using uint32, double or bool32... */
-            UNREACHABLE("unexpected counter data type");
+            unreachable("unexpected counter data type");
          }
          break;
 
       default:
-         UNREACHABLE("invalid query type");
+         unreachable("invalid query type");
       }
 
       /* The Vulkan extension only has nanoseconds as a unit */

@@ -30,7 +30,6 @@
 #include "util/slab.h"
 #include "util/u_debug.h"
 #include "util/macros.h"
-#include "util/u_framebuffer.h"
 #include "util/u_threaded_context.h"
 #include "intel/blorp/blorp.h"
 #include "intel/dev/intel_debug.h"
@@ -47,7 +46,6 @@ struct iris_bo;
 struct iris_context;
 struct blorp_batch;
 struct blorp_params;
-struct brw_ubo_range;
 
 #define IRIS_MAX_DRAW_BUFFERS 8
 #define IRIS_MAX_SOL_BINDINGS 64
@@ -233,8 +231,7 @@ struct iris_vue_prog_key {
    struct iris_base_prog_key base;
 
    unsigned nr_userclip_plane_consts:4;
-   enum intel_vue_layout layout:2;
-   unsigned padding:26;
+   unsigned padding:28;
 };
 
 struct iris_vs_prog_key {
@@ -279,13 +276,14 @@ struct iris_fs_prog_key {
    uint8_t color_outputs_valid;
 
    unsigned nr_color_regions:5;
+   bool flat_shade:1;
    bool alpha_test_replicate_alpha:1;
    bool alpha_to_coverage:1;
+   bool clamp_fragment_color:1;
    bool persample_interp:1;
    bool multisample_fbo:1;
    bool force_dual_color_blend:1;
    bool coherent_fb_fetch:1;
-   enum intel_vue_layout vue_layout:2;
    uint64_t padding:43;
 };
 
@@ -576,7 +574,7 @@ struct iris_uncompiled_shader {
    struct pipe_stream_output_info stream_output;
 
    /* A SHA1 of the serialized NIR for the disk cache. */
-   unsigned char nir_sha1[SHA1_DIGEST_LENGTH];
+   unsigned char nir_sha1[20];
 
    /* Hash value based on shader source program */
    unsigned source_hash;
@@ -591,6 +589,9 @@ struct iris_uncompiled_shader {
 
    /* Whether shader uses atomic operations. */
    bool uses_atomic_load_store;
+
+   /** Size (in bytes) of the kernel input data */
+   unsigned kernel_input_size;
 
    /** Size (in bytes) of the local (shared) data passed as kernel inputs */
    unsigned kernel_shared_size;
@@ -619,9 +620,6 @@ enum iris_surface_group {
 };
 
 enum {
-   /* Workaround index to HSDES #22020184996 */
-   IRIS_SURFACE_NULL_PUSH_TBIMR_WA = UINT16_MAX,
-
    /* Invalid value for a binding table index. */
    IRIS_SURFACE_NOT_USED = 0xa0a0a0a0,
 };
@@ -630,7 +628,7 @@ struct iris_binding_table {
    uint32_t size_bytes;
 
    /** Number of surfaces in each group, before compacting. */
-   uint32_t surf_count[IRIS_SURFACE_GROUP_COUNT];
+   uint32_t sizes[IRIS_SURFACE_GROUP_COUNT];
 
    /** Initial offset of each group. */
    uint32_t offsets[IRIS_SURFACE_GROUP_COUNT];
@@ -686,6 +684,9 @@ struct iris_compiled_shader {
    uint32_t *system_values;
    unsigned num_system_values;
 
+   /** Size (in bytes) of the kernel input data */
+   unsigned kernel_input_size;
+
    /** Number of constbufs expected by the shader. */
    unsigned num_cbufs;
 
@@ -697,17 +698,12 @@ struct iris_compiled_shader {
 
    struct iris_binding_table bt;
 
-   mesa_shader_stage stage;
+   gl_shader_stage stage;
 
    /**
-    * Data derived from ELK prog_data.
+    * Data derived from prog_data.
     */
    struct iris_ubo_range ubo_ranges[4];
-
-   /**
-    * Data derived from BRW prog_data.
-    */
-   uint16_t push_sizes[4];
 
    unsigned nr_params;
    unsigned total_scratch;
@@ -773,7 +769,7 @@ iris_vue_data(struct iris_compiled_shader *shader)
    case MESA_SHADER_TESS_EVAL: return &shader->tes.base;
    case MESA_SHADER_GEOMETRY:  return &shader->gs.base;
    default:
-      UNREACHABLE("invalid shader stage for vue prog data");
+      unreachable("invalid shader stage for vue prog data");
       return NULL;
    }
 }
@@ -839,10 +835,6 @@ enum iris_context_priority {
    IRIS_CONTEXT_MEDIUM_PRIORITY = 0,
    IRIS_CONTEXT_LOW_PRIORITY,
    IRIS_CONTEXT_HIGH_PRIORITY
-};
-
-struct iris_scissor_state {
-   uint16_t minx, miny, maxx, maxy;
 };
 
 /**
@@ -1018,12 +1010,10 @@ struct iris_context {
       struct pipe_blend_color blend_color;
       struct pipe_poly_stipple poly_stipple;
       struct pipe_viewport_state viewports[IRIS_MAX_VIEWPORTS];
-      struct iris_scissor_state scissors[IRIS_MAX_VIEWPORTS];
+      struct pipe_scissor_state scissors[IRIS_MAX_VIEWPORTS];
       struct pipe_stencil_ref stencil_ref;
-      struct iris_framebuffer_state framebuffer;
+      struct pipe_framebuffer_state framebuffer;
       struct pipe_clip_state clip_planes;
-      /* width and height treated like x2 and y2 */
-      struct pipe_box render_area;
 
       float default_outer_level[4];
       float default_inner_level[2];
@@ -1061,6 +1051,8 @@ struct iris_context {
       /** Aux usage of the fb's depth buffer (which may or may not exist). */
       enum isl_aux_usage hiz_usage;
 
+      enum intel_urb_deref_block_size urb_deref_block_size;
+
       /** Are depth writes enabled?  (Depth buffer may or may not exist.) */
       bool depth_writes_enabled;
 
@@ -1079,9 +1071,6 @@ struct iris_context {
 
       /** State for Wa_14015055625, Wa_14019166699 */
       bool uses_primitive_id;
-
-      /** State for Wa_14024997852. */
-      bool autostrip_state;
 
       /** Do we have integer RT in current framebuffer state? */
       bool has_integer_rt;
@@ -1117,7 +1106,7 @@ struct iris_context {
        * Query BO with a MI_PREDICATE_RESULT snapshot calculated on the
        * render context that needs to be uploaded to the compute context.
        */
-      struct iris_address compute_predicate;
+      struct iris_bo *compute_predicate;
 
       /** Is a PIPE_QUERY_PRIMITIVES_GENERATED query active? */
       bool prims_generated_query_active;
@@ -1170,11 +1159,6 @@ struct iris_context {
       struct pipe_resource *pixel_hashing_tables;
 
       bool use_tbimr;
-
-      /* For compute engine only */
-      uint8_t pixel_async_compute_thread_limit;
-      uint8_t z_pass_async_compute_thread_limit;
-      uint8_t np_z_async_throttle_settings;
    } state;
 };
 
@@ -1233,10 +1217,9 @@ struct iris_gen_indirect_params {
 };
 
 #define perf_debug(dbg, ...) do {                      \
-   void *__var = (void*)(dbg);                         \
    if (INTEL_DEBUG(DEBUG_PERF))                        \
       dbg_printf(__VA_ARGS__);                         \
-   if (unlikely(__var))                                \
+   if (unlikely(dbg))                                  \
       util_debug_message(dbg, PERF_INFO, __VA_ARGS__); \
 } while(0)
 
@@ -1305,7 +1288,7 @@ iris_blorp_batch_usage(struct iris_batch *batch, bool is_dest)
    case IRIS_BATCH_BLITTER:
       return is_dest ? ISL_SURF_USAGE_BLITTER_DST_BIT : ISL_SURF_USAGE_BLITTER_SRC_BIT;
    default:
-      UNREACHABLE("Unhandled batch type");
+      unreachable("Unhandled batch type");
    }
 }
 
@@ -1346,10 +1329,10 @@ void iris_upload_ubo_ssbo_surf_state(struct iris_context *ice,
                                      struct iris_state_ref *surf_state,
                                      isl_surf_usage_flags_t usage);
 const struct shader_info *iris_get_shader_info(const struct iris_context *ice,
-                                               mesa_shader_stage stage);
+                                               gl_shader_stage stage);
 struct iris_bo *iris_get_scratch_space(struct iris_context *ice,
                                        unsigned per_thread_scratch,
-                                       mesa_shader_stage stage);
+                                       gl_shader_stage stage);
 const struct iris_state_ref *iris_get_scratch_surf(struct iris_context *ice,
                                                    unsigned per_thread_scratch);
 uint32_t iris_group_index_to_bti(const struct iris_binding_table *bt,
@@ -1359,8 +1342,7 @@ uint32_t iris_bti_to_group_index(const struct iris_binding_table *bt,
                                  enum iris_surface_group group,
                                  uint32_t bti);
 void iris_apply_brw_prog_data(struct iris_compiled_shader *shader,
-                              struct brw_stage_prog_data *prog_data,
-                              struct brw_ubo_range *ubo_ranges);
+                              struct brw_stage_prog_data *prog_data);
 void iris_apply_elk_prog_data(struct iris_compiled_shader *shader,
                               struct elk_stage_prog_data *prog_data);
 struct intel_cs_dispatch_info
@@ -1375,9 +1357,9 @@ iris_fs_barycentric_modes(const struct iris_compiled_shader *shader,
                           enum intel_msaa_flags pushed_msaa_flags);
 bool iris_use_tcs_multi_patch(struct iris_screen *screen);
 bool iris_indirect_ubos_use_sampler(struct iris_screen *screen);
-const struct nir_shader_compiler_options *
-iris_get_compiler_options(struct pipe_screen *pscreen,
-                          mesa_shader_stage pstage);
+const void *iris_get_compiler_options(struct pipe_screen *pscreen,
+                                      enum pipe_shader_ir ir,
+                                      enum pipe_shader_type pstage);
 
 /* iris_disk_cache.c */
 
@@ -1405,7 +1387,7 @@ struct iris_compiled_shader *iris_find_cached_shader(struct iris_context *ice,
 
 struct iris_compiled_shader *iris_create_shader_variant(const struct iris_screen *,
                                                         void *mem_ctx,
-                                                        mesa_shader_stage stage,
+                                                        gl_shader_stage stage,
                                                         enum iris_program_cache_id cache_id,
                                                         uint32_t key_size,
                                                         const void *key);
@@ -1414,6 +1396,7 @@ void iris_finalize_program(struct iris_compiled_shader *shader,
                            uint32_t *streamout,
                            uint32_t *system_values,
                            unsigned num_system_values,
+                           unsigned kernel_input_size,
                            unsigned num_cbufs,
                            const struct iris_binding_table *bt);
 
@@ -1481,17 +1464,17 @@ void iris_ensure_indirect_generation_shader(struct iris_batch *batch);
 void iris_predraw_resolve_inputs(struct iris_context *ice,
                                  struct iris_batch *batch,
                                  bool *draw_aux_buffer_disabled,
-                                 mesa_shader_stage stage,
+                                 gl_shader_stage stage,
                                  bool consider_framebuffer);
 void iris_predraw_resolve_framebuffer(struct iris_context *ice,
                                       struct iris_batch *batch,
                                       bool *draw_aux_buffer_disabled);
 void iris_predraw_flush_buffers(struct iris_context *ice,
                                 struct iris_batch *batch,
-                                mesa_shader_stage stage);
+                                gl_shader_stage stage);
 void iris_postdraw_update_resolve_tracking(struct iris_context *ice);
 void iris_postdraw_update_image_resolve_tracking(struct iris_context *ice,
-                                                 mesa_shader_stage stage);
+                                                 gl_shader_stage stage);
 int iris_get_driver_query_info(struct pipe_screen *pscreen, unsigned index,
                                struct pipe_driver_query_info *info);
 int iris_get_driver_query_group_info(struct pipe_screen *pscreen,
@@ -1502,7 +1485,7 @@ int iris_get_driver_query_group_info(struct pipe_screen *pscreen,
 void gfx9_toggle_preemption(struct iris_context *ice,
                             struct iris_batch *batch,
                             const struct pipe_draw_info *draw);
-static bool
+static const bool
 iris_execute_indirect_draw_supported(const struct iris_context *ice,
                                      const struct pipe_draw_indirect_info *indirect,
                                      const struct pipe_draw_info *draw)
@@ -1528,11 +1511,9 @@ iris_execute_indirect_draw_supported(const struct iris_context *ice,
 #ifdef genX
 #  include "iris_genx_protos.h"
 #else
-#  ifdef INTEL_USE_ELK
-#    define genX(x) gfx8_##x
-#    include "iris_genx_protos.h"
-#    undef genX
-#  endif
+#  define genX(x) gfx8_##x
+#  include "iris_genx_protos.h"
+#  undef genX
 #  define genX(x) gfx9_##x
 #  include "iris_genx_protos.h"
 #  undef genX

@@ -87,7 +87,7 @@ nir_type_conversion_op(nir_alu_type src, nir_alu_type dst, nir_rounding_mode rnd
                                                                    dst_bits, rnd_t[1])};
 %                       endfor
                         default:
-                           UNREACHABLE("Invalid 16-bit nir rounding mode");
+                           unreachable("Invalid 16-bit nir rounding mode");
                      }
 %                    else:
                      assert(rnd == nir_rounding_mode_undef);
@@ -95,15 +95,15 @@ nir_type_conversion_op(nir_alu_type src, nir_alu_type dst, nir_rounding_mode rnd
 %                    endif
 %                 endfor
                   default:
-                     UNREACHABLE("Invalid nir alu bit size");
+                     unreachable("Invalid nir alu bit size");
                }
 %           endfor
             default:
-               UNREACHABLE("Invalid nir alu base type");
+               unreachable("Invalid nir alu base type");
          }
 %     endfor
       default:
-         UNREACHABLE("Invalid nir alu base type");
+         unreachable("Invalid nir alu base type");
    }
 }
 

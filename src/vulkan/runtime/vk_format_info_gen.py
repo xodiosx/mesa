@@ -104,7 +104,7 @@ vk_format_get_info(VkFormat format)
       return &ext${id}_format_infos[offset];
 % endfor
    default:
-      UNREACHABLE("Invalid extension");
+      unreachable("Invalid extension");
    }
 }
 

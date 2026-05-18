@@ -132,7 +132,7 @@ horiz_offset(const elk_fs_reg &reg, unsigned delta)
          }
       }
    }
-   UNREACHABLE("Invalid register file");
+   unreachable("Invalid register file");
 }
 
 static inline elk_fs_reg

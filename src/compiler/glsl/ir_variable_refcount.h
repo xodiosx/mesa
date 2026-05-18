@@ -35,18 +35,15 @@
 #include "ir.h"
 #include "ir_visitor.h"
 #include "compiler/glsl_types.h"
-#include "util/hash_table.h"
 
 struct assignment_entry {
-   ir_exec_node link;
+   exec_node link;
    ir_assignment *assign;
 };
 
 class ir_variable_refcount_entry
 {
 public:
-   DECLARE_LINEAR_ALLOC_CXX_OPERATORS(ir_variable_refcount_entry,,)
-
    ir_variable_refcount_entry(ir_variable *var);
 
    ir_variable *var; /* The key: the variable's pointer. */
@@ -56,7 +53,7 @@ public:
     * This is intended to be used for dead code optimisation and may
     * not be a complete list.
     */
-   ir_exec_list assign_list;
+   exec_list assign_list;
 
    /** Number of times the variable is referenced, including assignments. */
    unsigned referenced_count;
@@ -91,9 +88,9 @@ public:
    /**
     * Hash table mapping ir_variable to ir_variable_refcount_entry.
     */
-   struct hash_table ht;
+   struct hash_table *ht;
 
-   linear_ctx *linalloc;
+   void *mem_ctx;
 
    bool global;
 };

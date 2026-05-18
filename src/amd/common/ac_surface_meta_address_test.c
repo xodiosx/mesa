@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <amdgpu.h>
 #include "drm-uapi/amdgpu_drm.h"
 #include "drm-uapi/drm_fourcc.h"
 
@@ -24,7 +25,7 @@
 #include "util/mesa-sha1.h"
 #include "addrlib/inc/addrinterface.h"
 
-#include "ac_surface_test.h"
+#include "ac_fake_hw_db.h"
 
 /*
  * The main goal of this test is to validate that our dcc/htile addressing
@@ -314,7 +315,7 @@ static void run_dcc_address_test(const char *name, const struct radeon_info *inf
       swizzle_modes[num_swizzle_modes++] = ADDR_SW_256KB_R_X;
       break;
    default:
-      UNREACHABLE("unhandled gfx level");
+      unreachable("unhandled gfx level");
    }
 
    if (full) {
@@ -492,7 +493,7 @@ static void run_htile_address_test(const char *name, const struct radeon_info *i
       swizzle_modes[num_swizzle_modes++] = ADDR_SW_256KB_Z_X;
       break;
    default:
-      UNREACHABLE("unhandled gfx level");
+      unreachable("unhandled gfx level");
    }
 
    /* The test coverage is reduced for Gitlab CI because it timeouts. */

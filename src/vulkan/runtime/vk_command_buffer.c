@@ -23,7 +23,6 @@
 
 #include "vk_command_buffer.h"
 
-#include "vk_alloc.h"
 #include "vk_command_pool.h"
 #include "vk_common_entrypoints.h"
 #include "vk_device.h"
@@ -46,7 +45,7 @@ vk_command_buffer_init(struct vk_command_pool *pool,
    command_buffer->record_result = VK_SUCCESS;
    vk_cmd_queue_init(&command_buffer->cmd_queue, &pool->alloc);
    vk_meta_object_list_init(&command_buffer->meta_objects);
-   command_buffer->labels = UTIL_DYNARRAY_INIT;
+   util_dynarray_init(&command_buffer->labels, NULL);
    command_buffer->region_begin = true;
 
    list_add(&command_buffer->pool_link, &pool->command_buffers);
@@ -64,8 +63,6 @@ vk_command_buffer_reset(struct vk_command_buffer *command_buffer)
    vk_cmd_queue_reset(&command_buffer->cmd_queue);
    vk_meta_object_list_reset(command_buffer->base.device,
                              &command_buffer->meta_objects);
-   util_dynarray_foreach (&command_buffer->labels, VkDebugUtilsLabelEXT, label)
-      vk_free(&command_buffer->base.device->alloc, (void *)label->pLabelName);
    util_dynarray_clear(&command_buffer->labels);
    command_buffer->region_begin = true;
 }
@@ -100,8 +97,6 @@ vk_command_buffer_finish(struct vk_command_buffer *command_buffer)
    list_del(&command_buffer->pool_link);
    vk_command_buffer_reset_render_pass(command_buffer);
    vk_cmd_queue_finish(&command_buffer->cmd_queue);
-   util_dynarray_foreach (&command_buffer->labels, VkDebugUtilsLabelEXT, label)
-      vk_free(&command_buffer->base.device->alloc, (void *)label->pLabelName);
    util_dynarray_fini(&command_buffer->labels);
    vk_meta_object_list_finish(command_buffer->base.device,
                               &command_buffer->meta_objects);
@@ -221,7 +216,7 @@ vk_shader_stages_from_bind_point(VkPipelineBindPoint pipelineBindPoint)
              VK_SHADER_STAGE_INTERSECTION_BIT_KHR |
              VK_SHADER_STAGE_CALLABLE_BIT_KHR;
    default:
-      UNREACHABLE("unknown bind point!");
+      unreachable("unknown bind point!");
    }
    return 0;
 }

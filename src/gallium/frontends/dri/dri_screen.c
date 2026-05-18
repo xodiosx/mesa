@@ -74,7 +74,12 @@ dri_init_options(struct dri_screen *screen)
 static unsigned
 dri_loader_get_cap(struct dri_screen *screen, enum dri_loader_cap cap)
 {
+   const __DRIdri2LoaderExtension *dri2_loader = screen->dri2.loader;
    const __DRIimageLoaderExtension *image_loader = screen->image.loader;
+
+   if (dri2_loader && dri2_loader->base.version >= 4 &&
+       dri2_loader->getCapability)
+      return dri2_loader->getCapability(screen->loaderPrivate, cap);
 
    if (image_loader && image_loader->base.version >= 2 &&
        image_loader->getCapability)
@@ -376,7 +381,7 @@ dri_fill_in_modes(struct dri_screen *screen)
 #undef HAS_ZS
 
    mixed_color_depth =
-      p_screen->caps.mixed_color_depth_bits;
+      p_screen->get_param(p_screen, PIPE_CAP_MIXED_COLOR_DEPTH_BITS);
 
    /* Add configs. */
    for (unsigned f = 0; f < ARRAY_SIZE(pipe_formats); f++) {
@@ -601,6 +606,11 @@ dri_set_background_context(struct st_context *st,
                            struct util_queue_monitoring *queue_info)
 {
    struct dri_context *ctx = (struct dri_context *)st->frontend_context;
+   const __DRIbackgroundCallableExtension *backgroundCallable =
+      ctx->screen->dri2.backgroundCallable;
+
+   if (backgroundCallable)
+      backgroundCallable->setBackgroundContext(ctx->loaderPrivate);
 
    if (ctx->hud)
       hud_add_queue_for_monitoring(ctx->hud, queue_info);
@@ -617,7 +627,7 @@ dri_init_screen(struct dri_screen *screen,
    screen->base.set_background_context = dri_set_background_context;
    screen->base.validate_egl_image = dri_validate_egl_image;
 
-   if (pscreen->caps.npot_textures)
+   if (pscreen->get_param(pscreen, PIPE_CAP_NPOT_TEXTURES))
       screen->target = PIPE_TEXTURE_2D;
    else
       screen->target = PIPE_TEXTURE_RECT;
@@ -632,18 +642,20 @@ dri_init_screen(struct dri_screen *screen,
                          &screen->max_gl_es1_version,
                          &screen->max_gl_es2_version);
 
-   screen->throttle = pscreen->caps.throttle;
-   if (pscreen->caps.device_protected_context)
+   screen->throttle = pscreen->get_param(pscreen, PIPE_CAP_THROTTLE);
+   if (pscreen->get_param(pscreen, PIPE_CAP_DEVICE_PROTECTED_CONTEXT))
       screen->has_protected_context = true;
-   screen->has_reset_status_query = pscreen->caps.device_reset_status_query;
-   screen->has_multibuffer = has_multibuffer;
+   screen->has_reset_status_query = pscreen->get_param(pscreen, PIPE_CAP_DEVICE_RESET_STATUS_QUERY);
+
 
 #ifdef HAVE_LIBDRM
-   unsigned dmabuf_caps = pscreen->caps.dmabuf;
-   if (dmabuf_caps & DRM_PRIME_CAP_IMPORT)
-      screen->dmabuf_import = true;
-   if (screen->dmabuf_import && dmabuf_caps & DRM_PRIME_CAP_EXPORT)
-      screen->has_dmabuf = true;
+   if (has_multibuffer) {
+      int dmabuf_caps = pscreen->get_param(pscreen, PIPE_CAP_DMABUF);
+      if (dmabuf_caps & DRM_PRIME_CAP_IMPORT)
+         screen->dmabuf_import = true;
+      if (screen->dmabuf_import && dmabuf_caps & DRM_PRIME_CAP_EXPORT)
+         screen->has_dmabuf = true;
+   }
 #endif
 
    return dri_fill_in_modes(screen);

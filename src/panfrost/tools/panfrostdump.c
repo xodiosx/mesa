@@ -358,10 +358,7 @@ main(int argc, char *argv[])
                   return EXIT_FAILURE;
                }
 
-               if (fseek(data_fp, doh.file_offset, SEEK_SET)) {
-                  perror("fseek error");
-                  return EXIT_FAILURE;
-               }
+               fseek(data_fp, doh.file_offset, SEEK_SET);
 
                nbytes = fread(bos[j], 1, doh.file_size, data_fp);
                if (nbytes < doh.file_size) {

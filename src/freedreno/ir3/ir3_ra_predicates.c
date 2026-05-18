@@ -99,7 +99,7 @@ alloc_reg_comp(struct ra_predicates_ctx *ctx, struct block_liveness *live)
          return i;
    }
 
-   UNREACHABLE("Reg availability should have been checked before");
+   unreachable("Reg availability should have been checked before");
 }
 
 static struct live_def *

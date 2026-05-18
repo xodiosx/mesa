@@ -10,10 +10,6 @@
 #include "nir_intrinsics_indices.h"
 #include "sfn_nir.h"
 
-enum legalize_image_load_store_pass_flags {
-   FLAG_LEGALIZE_DONE = BITFIELD_BIT(7),
-};
-
 static nir_def *
 r600_legalize_image_load_store_impl(nir_builder *b,
                                     nir_instr *instr,
@@ -66,7 +62,7 @@ r600_legalize_image_load_store_impl(nir_builder *b,
          num_components = 3;
          break;
       default:
-         UNREACHABLE("Unexpected image size");
+         unreachable("Unexpected image size");
       }
 
       if (num_components < 3 && nir_intrinsic_image_array(ir))
@@ -117,7 +113,6 @@ r600_legalize_image_load_store_impl(nir_builder *b,
    auto new_load_ir = nir_instr_as_intrinsic(new_load);
 
    nir_builder_instr_insert(b, new_load);
-   new_load_ir->instr.pass_flags |= FLAG_LEGALIZE_DONE;
 
    if (load_value)
       result = &new_load_ir->def;
@@ -142,12 +137,10 @@ r600_legalize_image_load_store_impl(nir_builder *b,
    if (load_value)
       result = nir_if_phi(b, result, default_value);
 
-   {
-      nir_cf_list cf_list;
-      nir_cf_extract(&cf_list, nir_before_instr(instr), nir_after_instr(instr));
-      nir_cf_reinsert(&cf_list, nir_before_block(nir_if_first_then_block(if_exists)));
+   if (load_value)
+      b->cursor = nir_after_instr(result->parent_instr);
+   else
       b->cursor = nir_after_cf_node(&else_exists->cf_node);
-   }
 
    return result;
 }
@@ -165,7 +158,7 @@ r600_legalize_image_load_store_filter(const nir_instr *instr, UNUSED const void 
    case nir_intrinsic_image_atomic:
    case nir_intrinsic_image_atomic_swap:
    case nir_intrinsic_image_size:
-      return (instr->pass_flags & FLAG_LEGALIZE_DONE) ? false : true;
+      return true;
    default:
       return false;
    }

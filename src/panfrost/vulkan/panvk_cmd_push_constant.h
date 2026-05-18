@@ -11,16 +11,15 @@
 #include "genxml/gen_macros.h"
 
 struct panvk_cmd_buffer;
-struct panvk_shader_variant;
 
-#define MAX_PUSH_CONSTANTS_SIZE 256
+#define MAX_PUSH_CONSTANTS_SIZE 128
 
 struct panvk_push_constant_state {
-   uint64_t data[MAX_PUSH_CONSTANTS_SIZE / sizeof(uint64_t)];
+   uint8_t data[MAX_PUSH_CONSTANTS_SIZE];
 };
 
-VkResult panvk_per_arch(cmd_prepare_push_uniforms)(
-   struct panvk_cmd_buffer *cmdbuf, const struct panvk_shader_variant *shader,
-   uint32_t repeat_count);
+mali_ptr
+panvk_per_arch(cmd_prepare_push_uniforms)(struct panvk_cmd_buffer *cmdbuf,
+                                          void *sysvals, unsigned sysvals_sz);
 
 #endif

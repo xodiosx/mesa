@@ -57,7 +57,6 @@ svga_translate_blend_factor(const struct svga_context *svga, unsigned factor)
    }
 }
 
-
 static inline unsigned
 svga_translate_blend_func(unsigned mode)
 {
@@ -278,7 +277,8 @@ svga_create_blend_state(struct pipe_context *pipe,
 {
    struct svga_context *svga = svga_context(pipe);
    struct svga_screen *ss = svga_screen(pipe->screen);
-   struct svga_blend_state *blend = CALLOC_STRUCT(svga_blend_state);
+   struct svga_blend_state *blend = CALLOC_STRUCT( svga_blend_state );
+   unsigned i;
 
    if (!blend)
       return NULL;
@@ -287,7 +287,7 @@ svga_create_blend_state(struct pipe_context *pipe,
     * enabled at all, first_enabled will be zero.
     */
    unsigned first_enabled = 0;
-   for (unsigned i = 0; i < PIPE_MAX_COLOR_BUFS; i++) {
+   for (i = 0; i < PIPE_MAX_COLOR_BUFS; i++) {
       if (templ->rt[i].blend_enable) {
          first_enabled = i;
          break;
@@ -297,7 +297,7 @@ svga_create_blend_state(struct pipe_context *pipe,
    /* Fill in the per-rendertarget blend state.  We currently only
     * support independent blend enable and colormask per render target.
     */
-   for (unsigned i = 0; i < PIPE_MAX_COLOR_BUFS; i++) {
+   for (i = 0; i < PIPE_MAX_COLOR_BUFS; i++) {
       /* No way to set this in SVGA3D, and no way to correctly implement it on
        * top of D3D9 API.  Instead we try to simulate with various blend modes.
        */
@@ -404,9 +404,8 @@ svga_create_blend_state(struct pipe_context *pipe,
 }
 
 
-static void
-svga_bind_blend_state(struct pipe_context *pipe,
-                      void *blend)
+static void svga_bind_blend_state(struct pipe_context *pipe,
+                                  void *blend)
 {
    struct svga_context *svga = svga_context(pipe);
 
@@ -414,10 +413,8 @@ svga_bind_blend_state(struct pipe_context *pipe,
    svga->dirty |= SVGA_NEW_BLEND;
 }
 
-
-static void
-svga_delete_blend_state(struct pipe_context *pipe,
-                        void *blend)
+static void svga_delete_blend_state(struct pipe_context *pipe,
+                                    void *blend)
 {
    struct svga_context *svga = svga_context(pipe);
    struct svga_blend_state *bs =
@@ -437,10 +434,8 @@ svga_delete_blend_state(struct pipe_context *pipe,
    svga->hud.num_blend_objects--;
 }
 
-
-static void
-svga_set_blend_color(struct pipe_context *pipe,
-                     const struct pipe_blend_color *blend_color)
+static void svga_set_blend_color( struct pipe_context *pipe,
+                                  const struct pipe_blend_color *blend_color )
 {
    struct svga_context *svga = svga_context(pipe);
 
@@ -450,8 +445,7 @@ svga_set_blend_color(struct pipe_context *pipe,
 }
 
 
-void
-svga_init_blend_functions(struct svga_context *svga)
+void svga_init_blend_functions( struct svga_context *svga )
 {
    svga->pipe.create_blend_state = svga_create_blend_state;
    svga->pipe.bind_blend_state = svga_bind_blend_state;

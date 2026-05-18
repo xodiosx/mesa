@@ -8,7 +8,6 @@
 #include <stdbool.h>
 #include "asahi/compiler/agx_compile.h"
 #include "asahi/layout/layout.h"
-#include "agx_abi.h"
 #include "agx_pack.h"
 #include "agx_ppp.h"
 #include "libagx_shaders.h"
@@ -82,63 +81,14 @@ static inline enum agx_layout
 agx_translate_layout(enum ail_tiling tiling)
 {
    switch (tiling) {
-   case AIL_TILING_GPU:
-      return AGX_LAYOUT_GPU;
    case AIL_TILING_TWIDDLED:
+   case AIL_TILING_TWIDDLED_COMPRESSED:
       return AGX_LAYOUT_TWIDDLED;
    case AIL_TILING_LINEAR:
       return AGX_LAYOUT_LINEAR;
    }
 
-   UNREACHABLE("Invalid tiling");
-}
-
-static inline enum agx_zls_tiling
-agx_translate_zls_tiling(enum ail_tiling tiling)
-{
-   switch (tiling) {
-   case AIL_TILING_GPU:
-      return AGX_ZLS_TILING_GPU;
-   case AIL_TILING_TWIDDLED:
-      return AGX_ZLS_TILING_TWIDDLED;
-   default:
-      UNREACHABLE("Invalid ZLS tiling");
-   }
-}
-
-struct agx_zls {
-   bool z_load, z_store;
-   bool s_load, s_store;
-};
-
-static inline void
-agx_pack_zls_control(struct agx_zls_control_packed *packed,
-                     const struct ail_layout *z, const struct ail_layout *s,
-                     struct agx_zls *args)
-{
-   agx_pack(packed, ZLS_CONTROL, cfg) {
-      if (z) {
-         cfg.z_store = args->z_store;
-         cfg.z_load = args->z_load;
-         cfg.z_load_compress = cfg.z_store_compress = z->compressed;
-         cfg.z_load_tiling = cfg.z_store_tiling =
-            agx_translate_zls_tiling(z->tiling);
-
-         if (z->format == PIPE_FORMAT_Z16_UNORM) {
-            cfg.z_format = AGX_ZLS_FORMAT_16;
-         } else {
-            cfg.z_format = AGX_ZLS_FORMAT_32F;
-         }
-      }
-
-      if (s) {
-         cfg.s_load = args->s_load;
-         cfg.s_store = args->s_store;
-         cfg.s_load_compress = cfg.s_store_compress = s->compressed;
-         cfg.s_load_tiling = cfg.s_store_tiling =
-            agx_translate_zls_tiling(s->tiling);
-      }
-   }
+   unreachable("Invalid tiling");
 }
 
 static enum agx_sample_count
@@ -150,8 +100,26 @@ agx_translate_sample_count(unsigned samples)
    case 4:
       return AGX_SAMPLE_COUNT_4;
    default:
-      UNREACHABLE("Invalid sample count");
+      unreachable("Invalid sample count");
    }
+}
+
+static inline enum agx_index_size
+agx_translate_index_size(uint8_t size_B)
+{
+   /* Index sizes are encoded logarithmically */
+   STATIC_ASSERT(__builtin_ctz(1) == AGX_INDEX_SIZE_U8);
+   STATIC_ASSERT(__builtin_ctz(2) == AGX_INDEX_SIZE_U16);
+   STATIC_ASSERT(__builtin_ctz(4) == AGX_INDEX_SIZE_U32);
+
+   assert((size_B == 1) || (size_B == 2) || (size_B == 4));
+   return __builtin_ctz(size_B);
+}
+
+static inline uint8_t
+agx_index_size_to_B(enum agx_index_size size)
+{
+   return 1 << size;
 }
 
 static enum agx_conservative_depth
@@ -167,7 +135,7 @@ agx_translate_depth_layout(enum gl_frag_depth_layout layout)
    case FRAG_DEPTH_LAYOUT_UNCHANGED:
       return AGX_CONSERVATIVE_DEPTH_UNCHANGED;
    default:
-      UNREACHABLE("depth layout should have been canonicalized");
+      unreachable("depth layout should have been canonicalized");
    }
 }
 
@@ -218,35 +186,36 @@ agx_pack_line_width(float line_width)
  * the texture descriptor itself.
  */
 static void
-agx_set_null_texture(struct agx_texture_packed *tex)
+agx_set_null_texture(struct agx_texture_packed *tex, uint64_t valid_address)
 {
    agx_pack(tex, TEXTURE, cfg) {
-      cfg.layout = AGX_LAYOUT_TWIDDLED;
+      cfg.layout = AGX_LAYOUT_NULL;
       cfg.channels = AGX_CHANNELS_R8;
       cfg.type = AGX_TEXTURE_TYPE_UNORM /* don't care */;
       cfg.swizzle_r = AGX_CHANNEL_0;
       cfg.swizzle_g = AGX_CHANNEL_0;
       cfg.swizzle_b = AGX_CHANNEL_0;
       cfg.swizzle_a = AGX_CHANNEL_0;
-      cfg.address = AGX_ZERO_PAGE_ADDRESS;
+      cfg.address = valid_address;
+      cfg.null = true;
    }
 }
 
 static void
-agx_set_null_pbe(struct agx_pbe_packed *pbe)
+agx_set_null_pbe(struct agx_pbe_packed *pbe, uint64_t sink)
 {
    agx_pack(pbe, PBE, cfg) {
       cfg.width = 1;
       cfg.height = 1;
       cfg.levels = 1;
-      cfg.layout = AGX_LAYOUT_TWIDDLED;
+      cfg.layout = AGX_LAYOUT_NULL;
       cfg.channels = AGX_CHANNELS_R8;
       cfg.type = AGX_TEXTURE_TYPE_UNORM /* don't care */;
       cfg.swizzle_r = AGX_CHANNEL_R;
       cfg.swizzle_g = AGX_CHANNEL_R;
       cfg.swizzle_b = AGX_CHANNEL_R;
       cfg.swizzle_a = AGX_CHANNEL_R;
-      cfg.buffer = AGX_SCRATCH_PAGE_ADDRESS;
+      cfg.buffer = sink;
    }
 }
 
@@ -268,8 +237,8 @@ agx_set_null_pbe(struct agx_pbe_packed *pbe)
  *    i <= floor((size - src_offset - elsize_B) / stride)
  */
 static inline uint32_t
-agx_calculate_vbo_clamp(uint64_t vbuf, enum pipe_format format, uint32_t size_B,
-                        uint32_t stride_B, uint32_t offset_B,
+agx_calculate_vbo_clamp(uint64_t vbuf, uint64_t sink, enum pipe_format format,
+                        uint32_t size_B, uint32_t stride_B, uint32_t offset_B,
                         uint64_t *vbuf_out)
 {
    unsigned elsize_B = util_format_get_blocksize(format);
@@ -287,7 +256,7 @@ agx_calculate_vbo_clamp(uint64_t vbuf, enum pipe_format format, uint32_t size_B,
       else
          return UINT32_MAX;
    } else {
-      *vbuf_out = AGX_ZERO_PAGE_ADDRESS;
+      *vbuf_out = sink;
       return 0;
    }
 }
@@ -309,12 +278,21 @@ agx_fill_decompress_args(struct ail_layout *layout, unsigned layer,
 }
 
 #undef libagx_decompress
-#define libagx_decompress(context, grid, barrier, layout, layer, level, ptr,   \
-                          images)                                              \
+#define libagx_decompress(context, grid, layout, layer, level, ptr, images)    \
    libagx_decompress_struct(                                                   \
-      context, grid, barrier,                                                  \
+      context, grid,                                                           \
       agx_fill_decompress_args(layout, layer, level, ptr, images),             \
       util_logbase2(layout->sample_count_sa))
+
+#define libagx_tessellate(context, grid, prim, mode, state)                    \
+   if (prim == TESS_PRIMITIVE_QUADS) {                                         \
+      libagx_tess_quad(context, grid, state, mode);                            \
+   } else if (prim == TESS_PRIMITIVE_TRIANGLES) {                              \
+      libagx_tess_tri(context, grid, state, mode);                             \
+   } else {                                                                    \
+      assert(prim == TESS_PRIMITIVE_ISOLINES);                                 \
+      libagx_tess_isoline(context, grid, state, mode);                         \
+   }
 
 struct agx_border_packed;
 

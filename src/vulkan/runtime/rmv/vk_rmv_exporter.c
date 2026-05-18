@@ -887,7 +887,7 @@ token_type_to_rmt(enum vk_rmv_token_type type)
    case VK_RMV_TOKEN_TYPE_RESOURCE_DESTROY:
       return RMT_TOKEN_TYPE_RESOURCE_DESTROY;
    default:
-      UNREACHABLE("invalid token type");
+      unreachable("invalid token type");
    }
 }
 
@@ -1003,7 +1003,7 @@ rmt_file_domain_to_heap_type(enum vk_rmv_kernel_memory_domain domain, bool has_c
    case VK_RMV_KERNEL_MEMORY_DOMAIN_VRAM:
       return has_cpu_access ? RMT_HEAP_TYPE_LOCAL : RMT_HEAP_TYPE_INVISIBLE;
    default:
-      UNREACHABLE("invalid domain");
+      unreachable("invalid domain");
    }
 }
 
@@ -1078,7 +1078,7 @@ rmt_size_to_page_size(uint32_t size)
    case 2097152:
       return RMT_PAGE_SIZE_2_MB;
    default:
-      UNREACHABLE("invalid page size");
+      unreachable("invalid page size");
    }
 }
 
@@ -1190,7 +1190,7 @@ rmt_dump_image_resource(struct vk_rmv_image_description *description, FILE *outp
       tiling = RMT_TILING_OPTIMAL;
       break;
    default:
-      UNREACHABLE("invalid image tiling");
+      unreachable("invalid image tiling");
    }
 
    uint32_t create_flags = 0;
@@ -1273,7 +1273,7 @@ rmt_dump_query_pool_resource(struct vk_rmv_query_pool_description *description, 
       pool_type = RMT_QUERY_POOL_TYPE_STREAMOUT;
       break;
    default:
-      UNREACHABLE("invalid query pool type");
+      unreachable("invalid query pool type");
       break;
    }
 
@@ -1446,7 +1446,7 @@ rmt_dump_resource_create(struct vk_rmv_resource_create_token *token, FILE *outpu
       rmt_dump_misc_internal_resource(&token->misc_internal, output);
       break;
    default:
-      UNREACHABLE("invalid resource type");
+      unreachable("invalid resource type");
    }
 }
 
@@ -1686,7 +1686,7 @@ rmt_dump_data(struct vk_memory_trace_data *data, FILE *output)
          rmt_dump_cpu_map(&token->data.cpu_map, output);
          break;
       default:
-         UNREACHABLE("invalid token type");
+         unreachable("invalid token type");
       }
 
       current_timestamp = token->timestamp;

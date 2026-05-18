@@ -336,7 +336,7 @@ try_setup_line(struct lp_setup_context *setup,
    info.v1 = v1;
    info.v2 = v2;
 
-   const float pixel_offset = setup->pixel_offset;
+   const float pixel_offset = setup->multisample ? 0.0 : setup->pixel_offset;
 
    int x[4], y[4];
    if (setup->rectangular_lines) {
@@ -418,7 +418,9 @@ try_setup_line(struct lp_setup_context *setup,
 
          if (dx < 0.0f) {
             /* if v2 is to the right of v1, swap pointers */
-            SWAP(v1, v2);
+            const float (*temp)[4] = v1;
+            v1 = v2;
+            v2 = temp;
 
             /* Otherwise shift planes appropriately */
             /* left edge */
@@ -505,7 +507,7 @@ try_setup_line(struct lp_setup_context *setup,
           * the comparisons against zero are not mirroring what actually happens
           * when rasterizing using the plane equations).
           */
-
+         
          bool will_draw_start;
          bool will_draw_end;
 
@@ -515,7 +517,9 @@ try_setup_line(struct lp_setup_context *setup,
 
          if (dy > 0.0f) {
             /* if v2 is on top of v1, swap pointers */
-            SWAP(v1, v2);
+            const float (*temp)[4] = v1;
+            v1 = v2;
+            v2 = temp;
 
             if (setup->bottom_edge_rule) {
                will_draw_start = y1diff >= 0.f;
@@ -710,7 +714,8 @@ try_setup_line(struct lp_setup_context *setup,
    }
 
    if (nr_planes > 4) {
-      lp_setup_add_scissor_planes(scissor, &plane[4], s_planes);
+      lp_setup_add_scissor_planes(scissor, &plane[4], s_planes,
+                                  setup->multisample);
    }
 
    return lp_setup_bin_triangle(setup, line, use_32bits, false,

@@ -205,7 +205,6 @@ v3d_qpu_mul_op_name(enum v3d_qpu_mul_op op)
                 [V3D_QPU_M_ADD] = "add",
                 [V3D_QPU_M_SUB] = "sub",
                 [V3D_QPU_M_UMUL24] = "umul24",
-                [V3D_QPU_M_UMUL24_RTOP0] = "umul24_rtop0",
                 [V3D_QPU_M_VFMUL] = "vfmul",
                 [V3D_QPU_M_SMUL24] = "smul24",
                 [V3D_QPU_M_MULTOP] = "multop",
@@ -217,10 +216,6 @@ v3d_qpu_mul_op_name(enum v3d_qpu_mul_op op)
                 [V3D_QPU_M_FTOSNORM16] = "ftosnorm16",
                 [V3D_QPU_M_VFTOUNORM8] = "vftounorm8",
                 [V3D_QPU_M_VFTOSNORM8] = "vftosnorm8",
-                [V3D_QPU_M_FUNPACKUNORMLO] = "funpackunormlo",
-                [V3D_QPU_M_FUNPACKUNORMHI] = "funpackunormhi",
-                [V3D_QPU_M_FUNPACKSNORMLO] = "funpacksnormlo",
-                [V3D_QPU_M_FUNPACKSNORMHI] = "funpacksnormhi",
                 [V3D_QPU_M_VFTOUNORM10LO] = "vftounorm10lo",
                 [V3D_QPU_M_VFTOUNORM10HI] = "vftounorm10hi",
         };
@@ -246,7 +241,7 @@ v3d_qpu_cond_name(enum v3d_qpu_cond cond)
         case V3D_QPU_COND_IFNB:
                 return ".ifnb";
         default:
-                UNREACHABLE("bad cond value");
+                unreachable("bad cond value");
         }
 }
 
@@ -269,7 +264,7 @@ v3d_qpu_branch_cond_name(enum v3d_qpu_branch_cond cond)
         case V3D_QPU_BRANCH_COND_ALLNA:
                 return ".allna";
         default:
-                UNREACHABLE("bad branch cond value");
+                unreachable("bad branch cond value");
         }
 }
 
@@ -284,7 +279,7 @@ v3d_qpu_msfign_name(enum v3d_qpu_msfign msfign)
         case V3D_QPU_MSFIGN_Q:
                 return "q";
         default:
-                UNREACHABLE("bad branch cond value");
+                unreachable("bad branch cond value");
         }
 }
 
@@ -301,7 +296,7 @@ v3d_qpu_pf_name(enum v3d_qpu_pf pf)
         case V3D_QPU_PF_PUSHC:
                 return ".pushc";
         default:
-                UNREACHABLE("bad pf value");
+                unreachable("bad pf value");
         }
 }
 
@@ -336,7 +331,7 @@ v3d_qpu_uf_name(enum v3d_qpu_uf uf)
         case V3D_QPU_UF_NORNC:
                 return ".nornc";
         default:
-                UNREACHABLE("bad pf value");
+                unreachable("bad pf value");
         }
 }
 
@@ -351,7 +346,7 @@ v3d_qpu_pack_name(enum v3d_qpu_output_pack pack)
         case V3D_QPU_PACK_H:
                 return ".h";
         default:
-                UNREACHABLE("bad pack value");
+                unreachable("bad pack value");
         }
 }
 
@@ -382,7 +377,7 @@ v3d_qpu_unpack_name(enum v3d_qpu_input_unpack unpack)
         case V3D71_QPU_UNPACK_MAX0:
                 return ".max0";
         default:
-                UNREACHABLE("bad unpack value");
+                unreachable("bad unpack value");
         }
 }
 
@@ -509,7 +504,6 @@ static const uint8_t mul_op_args[] = {
         [V3D_QPU_M_ADD] = D | A | B,
         [V3D_QPU_M_SUB] = D | A | B,
         [V3D_QPU_M_UMUL24] = D | A | B,
-        [V3D_QPU_M_UMUL24_RTOP0] = D | A | B,
         [V3D_QPU_M_VFMUL] = D | A | B,
         [V3D_QPU_M_SMUL24] = D | A | B,
         [V3D_QPU_M_MULTOP] = D | A | B,
@@ -521,10 +515,6 @@ static const uint8_t mul_op_args[] = {
         [V3D_QPU_M_FTOSNORM16] = D | A,
         [V3D_QPU_M_VFTOUNORM8] = D | A,
         [V3D_QPU_M_VFTOSNORM8] = D | A,
-        [V3D_QPU_M_FUNPACKUNORMLO] = D | A,
-        [V3D_QPU_M_FUNPACKUNORMHI] = D | A,
-        [V3D_QPU_M_FUNPACKSNORMLO] = D | A,
-        [V3D_QPU_M_FUNPACKSNORMHI] = D | A,
         [V3D_QPU_M_VFTOUNORM10LO] = D | A,
         [V3D_QPU_M_VFTOUNORM10HI] = D | A,
 };
@@ -586,7 +576,7 @@ v3d_qpu_cond_invert(enum v3d_qpu_cond cond)
         case V3D_QPU_COND_IFNB:
                 return V3D_QPU_COND_IFB;
         default:
-                UNREACHABLE("Non-invertible cond");
+                unreachable("Non-invertible cond");
         }
 }
 

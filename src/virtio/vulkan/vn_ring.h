@@ -66,9 +66,6 @@ bool
 vn_ring_get_seqno_status(struct vn_ring *ring, uint32_t seqno);
 
 void
-vn_ring_wait_seqno(struct vn_ring *ring, uint32_t seqno);
-
-void
 vn_ring_wait_all(struct vn_ring *ring);
 
 struct vn_ring_submit_command {

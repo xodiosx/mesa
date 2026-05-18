@@ -1,6 +1,5 @@
 /*
  * Copyright © 2012 Collabora, Ltd.
- * Copyright (C) 2025 Arm Ltd.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -43,16 +42,11 @@
 #elif DETECT_OS_ANDROID
 #include <sys/syscall.h>
 #include <linux/memfd.h>
-#endif
-
-#if !(defined(__FreeBSD__) || DETECT_OS_ANDROID)
-#include "log.h"
-#include "os_misc.h"
-#include <sys/stat.h>
+#else
 #include <stdio.h>
 #endif
 
-#if !(defined(__FreeBSD__) || defined(HAVE_MKOSTEMP) || DETECT_OS_ANDROID)
+#if !(defined(__FreeBSD__) || defined(HAVE_MEMFD_CREATE) || defined(HAVE_MKOSTEMP) || DETECT_OS_ANDROID)
 static int
 set_cloexec_or_close(int fd)
 {
@@ -76,7 +70,7 @@ err:
 }
 #endif
 
-#if !(defined(__FreeBSD__) || DETECT_OS_ANDROID)
+#if !(defined(__FreeBSD__) || defined(HAVE_MEMFD_CREATE) || DETECT_OS_ANDROID) || defined __TERMUX__ 
 static int
 create_tmpfile_cloexec(char *tmpname)
 {
@@ -101,61 +95,6 @@ create_tmpfile_cloexec(char *tmpname)
 }
 #endif
 
-#if !(defined(__FreeBSD__) || DETECT_OS_ANDROID)
-/*
- * Gets the path to a suitable temporary directory for the current user.
- * Prefers using the environment variable `XDG_RUNTIME_DIR` if set,
- * otherwise falls back to creating or re-using a folder in `/tmp`.
- * Copies the path into the given `buf` of length `len` and also returns
- * a pointer to the same buffer for convenience.
- * Returns NULL if no suitable directory can found or created.
- */
-static char*
-get_or_create_user_temp_dir(char* buf, size_t len) {
-    const char* env;
-    struct stat st;
-    int uid = getuid();
-
-    env = os_get_option("XDG_RUNTIME_DIR");
-    if (env && env[0] != '\0') {
-        snprintf(buf, len, "%s", env);
-        return buf;
-    }
-
-    snprintf(buf, len, "/tmp/xdg-runtime-mesa-%ld", (long)getuid());
-    mesa_logd("%s: XDG_RUNTIME_DIR not set; falling back to temp dir %s",
-        __func__, buf);
-    if (stat(buf, &st) == 0) {
-        /* If already exists, confirm the owner/permissions */
-        if (!S_ISDIR(st.st_mode)) {
-            mesa_loge(
-                "%s: %s exists but is not a directory", __func__, buf);
-            return NULL;
-        }
-        if (st.st_uid != uid) {
-            mesa_loge(
-                "%s: %s exists but has wrong owner", __func__, buf);
-            return NULL;
-        }
-
-        return buf;
-    } else if (errno == ENOENT) {
-        /* Doesn't exist, try to create it */
-        if (mkdir(buf, 0700) != 0) {
-            mesa_loge("%s: mkdir %s failed: %s", __func__, buf,
-                strerror(errno));
-            return NULL;
-        }
-
-        return buf;
-    } else {
-        mesa_loge("%s: stat %s failed: %s", __func__, buf, 
-            strerror(errno));
-        return NULL;
-    }
-}
-#endif
-
 /*
  * Create a new, unique, anonymous file of the given size, and
  * return the file descriptor for it. The file descriptor is set
@@ -177,9 +116,8 @@ get_or_create_user_temp_dir(char* buf, size_t len) {
 int
 os_create_anonymous_file(int64_t size, const char *debug_name)
 {
-   int fd = -1, ret;
-   /* First try using preferred APIs */
-#if defined(HAVE_MEMFD_CREATE)
+   int fd, ret;
+#if defined(HAVE_MEMFD_CREATE) && !defined __TERMUX__
    if (!debug_name)
       debug_name = "mesa-shared";
    fd = memfd_create(debug_name, MFD_CLOEXEC | MFD_ALLOW_SEALING);
@@ -194,33 +132,31 @@ os_create_anonymous_file(int64_t size, const char *debug_name)
    fd = shm_mkstemp(template);
    if (fd != -1)
       shm_unlink(template);
+#else
+   const char *path;
+   char *name;
+
+   path = getenv("XDG_RUNTIME_DIR");
+#ifdef __TERMUX__
+   if (!path) {
+   	  path = getenv("TMPDIR");
+   }
 #endif
+   if (!path) {
+      errno = ENOENT;
+      return -1;
+   }
 
-    /*
-     * If preferred API failed (or not included in this build),
-     * fall back to using a file in a temporary dir
-     */
-#if !(defined(__FreeBSD__) || DETECT_OS_ANDROID)
-    if (fd == -1) {
-        char path[PATH_MAX];
-        char *name;
+   if (debug_name)
+      asprintf(&name, "%s/mesa-shared-%s-XXXXXX", path, debug_name);
+   else
+      asprintf(&name, "%s/mesa-shared-XXXXXX", path);
+   if (!name)
+      return -1;
 
-        if (!get_or_create_user_temp_dir(path, sizeof(path))) {
-            errno = ENOENT;
-            return -1;
-        }
+   fd = create_tmpfile_cloexec(name);
 
-        if (debug_name)
-            asprintf(&name, "%s/mesa-shared-%s-XXXXXX", path, debug_name);
-        else
-            asprintf(&name, "%s/mesa-shared-XXXXXX", path);
-        if (!name)
-            return -1;
-
-        fd = create_tmpfile_cloexec(name);
-
-        free(name);
-    }
+   free(name);
 #endif
 
    if (fd < 0)

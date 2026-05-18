@@ -45,7 +45,7 @@ find_identical_inline_sampler(nir_shader *nir,
       exec_list_push_tail(inline_samplers, &var->node);
       return var;
    }
-   UNREACHABLE("Should have at least found the input sampler");
+   unreachable("Should have at least found the input sampler");
 }
 
 static bool
@@ -144,10 +144,12 @@ nir_lower_cl_images(nir_shader *shader, bool lower_image_derefs, bool lower_samp
    }
    shader->info.num_textures = num_rd_images;
    BITSET_ZERO(shader->info.textures_used);
-   BITSET_SET_COUNT(shader->info.textures_used, 0, num_rd_images);
+   if (num_rd_images)
+      BITSET_SET_RANGE(shader->info.textures_used, 0, num_rd_images - 1);
 
    BITSET_ZERO(shader->info.images_used);
-   BITSET_SET_COUNT(shader->info.images_used, 0, num_wr_images);
+   if (num_wr_images)
+      BITSET_SET_RANGE(shader->info.images_used, 0, num_wr_images - 1);
    shader->info.num_images = num_wr_images;
 
    last_loc = -1;
@@ -165,7 +167,8 @@ nir_lower_cl_images(nir_shader *shader, bool lower_image_derefs, bool lower_samp
       }
    }
    BITSET_ZERO(shader->info.samplers_used);
-   BITSET_SET_COUNT(shader->info.samplers_used, 0, num_samplers);
+   if (num_samplers)
+      BITSET_SET_RANGE(shader->info.samplers_used, 0, num_samplers - 1);
 
    nir_builder b = nir_builder_create(impl);
 
@@ -261,7 +264,7 @@ nir_lower_cl_images(nir_shader *shader, bool lower_image_derefs, bool lower_samp
                   intrin->num_components = 4;
                   intrin->def.num_components = 4;
                   nir_def *scalar = nir_channel(&b, &intrin->def, 0);
-                  nir_def_rewrite_uses_after(&intrin->def, scalar);
+                  nir_def_rewrite_uses_after(&intrin->def, scalar, scalar->parent_instr);
                   progress = true;
                }
 
@@ -288,5 +291,11 @@ nir_lower_cl_images(nir_shader *shader, bool lower_image_derefs, bool lower_samp
       }
    }
 
-   return nir_progress(progress, impl, nir_metadata_control_flow);
+   if (progress) {
+      nir_metadata_preserve(impl, nir_metadata_control_flow);
+   } else {
+      nir_metadata_preserve(impl, nir_metadata_all);
+   }
+
+   return progress;
 }

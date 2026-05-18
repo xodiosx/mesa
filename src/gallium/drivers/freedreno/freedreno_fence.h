@@ -75,11 +75,9 @@ void fd_create_pipe_fence_fd(struct pipe_context *pctx,
                              struct pipe_fence_handle **pfence, int fd,
                              enum pipe_fd_type type);
 void fd_pipe_fence_server_sync(struct pipe_context *pctx,
-                               struct pipe_fence_handle *fence,
-                               uint64_t value);
+                               struct pipe_fence_handle *fence);
 void fd_pipe_fence_server_signal(struct pipe_context *ctx,
-                                 struct pipe_fence_handle *fence,
-                                 uint64_t value);
+                                 struct pipe_fence_handle *fence);
 int fd_pipe_fence_get_fd(struct pipe_screen *pscreen,
                          struct pipe_fence_handle *pfence);
 bool fd_pipe_fence_is_fd(struct pipe_fence_handle *fence);

@@ -353,7 +353,7 @@ _mesa_add_parameter(struct gl_program_parameter_list *paramList,
       paramList->LastStateVarIndex =
          MAX2(paramList->LastStateVarIndex, oldNum);
    } else {
-      UNREACHABLE("invalid parameter type");
+      unreachable("invalid parameter type");
    }
 
    assert(paramList->NumParameters <= paramList->Size);

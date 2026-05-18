@@ -18,7 +18,7 @@ libopengl32 = shared_library(
     inc_include, inc_wgl, inc_src, inc_gallium,
   ],
   link_with : [
-    libgallium_wgl, libglapi_bridge
+    libgallium_wgl, libglapi_bridge, libglapi
   ],
   dependencies : [
     idep_mesautil
@@ -45,12 +45,14 @@ if with_tests
     'test_wgl',
     files('tests/wgl_tests.cpp'),
     cpp_args : [cpp_msvc_compat_args, extra_test_defs],
-    dependencies : [idep_gtest, idep_mesautil, dep_dxheaders, extra_test_deps],
+    dependencies : [idep_gtest, dep_dxheaders, extra_test_deps],
   )
 
   wgl_test_env = environment()
   wgl_test_env.append('PATH', libgallium_wgl_build_dir)
-  wgl_test_env.append('PATH', libglapi_build_dir)
+  if with_shared_glapi
+    wgl_test_env.append('PATH', libglapi_build_dir)
+  endif
 
   test(
     'wgl',

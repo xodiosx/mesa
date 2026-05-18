@@ -31,7 +31,7 @@ begin_blit(struct svga_context *svga)
    util_blitter_save_tessctrl_shader(svga->blitter, svga->curr.tcs);
    util_blitter_save_tesseval_shader(svga->blitter, svga->curr.tes);
    util_blitter_save_so_targets(svga->blitter, svga->num_so_targets,
-                     (struct pipe_stream_output_target**)svga->so_targets, MESA_PRIM_UNKNOWN);
+                     (struct pipe_stream_output_target**)svga->so_targets);
    util_blitter_save_rasterizer(svga->blitter, (void*)svga->curr.rast);
    util_blitter_save_viewport(svga->blitter, &svga->curr.viewport[0]);
    util_blitter_save_scissor(svga->blitter, &svga->curr.scissor[0]);
@@ -42,7 +42,7 @@ begin_blit(struct svga_context *svga)
    util_blitter_save_stencil_ref(svga->blitter, &svga->curr.stencil_ref);
    util_blitter_save_sample_mask(svga->blitter, svga->curr.sample_mask, 0);
    util_blitter_save_fragment_constant_buffer_slot(svga->blitter,
-                                                   &svga->curr.constbufs[MESA_SHADER_FRAGMENT][0]);
+                                                   &svga->curr.constbufs[PIPE_SHADER_FRAGMENT][0]);
 }
 
 
@@ -57,7 +57,7 @@ clear_buffers_with_quad(struct svga_context *svga,
                         const union pipe_color_union *color,
                         double depth, unsigned stencil)
 {
-   const struct pipe_framebuffer_state *fb = &svga->curr.framebuffer.base;
+   const struct pipe_framebuffer_state *fb = &svga->curr.framebuffer;
 
    begin_blit(svga);
    util_blitter_clear(svga->blitter,
@@ -73,14 +73,14 @@ clear_buffers_with_quad(struct svga_context *svga,
  * Check if any of the color buffers are integer buffers.
  */
 static bool
-is_integer_target(const struct pipe_framebuffer_state *fb, unsigned buffers)
+is_integer_target(struct pipe_framebuffer_state *fb, unsigned buffers)
 {
    unsigned i;
 
    for (i = 0; i < fb->nr_cbufs; i++) {
       if ((buffers & (PIPE_CLEAR_COLOR0 << i)) &&
-          fb->cbufs[i].texture &&
-          util_format_is_pure_integer(fb->cbufs[i].format)) {
+          fb->cbufs[i] &&
+          util_format_is_pure_integer(fb->cbufs[i]->format)) {
          return true;
       }
    }
@@ -105,7 +105,7 @@ ints_fit_in_floats(const union pipe_color_union *color)
 
 
 static enum pipe_error
-try_clear(struct svga_context *svga,
+try_clear(struct svga_context *svga, 
           unsigned buffers,
           const union pipe_color_union *color,
           double depth,
@@ -115,7 +115,7 @@ try_clear(struct svga_context *svga,
    SVGA3dRect rect = { 0, 0, 0, 0 };
    bool restore_viewport = false;
    SVGA3dClearFlag flags = 0;
-   struct pipe_framebuffer_state *fb = &svga->curr.framebuffer.base;
+   struct pipe_framebuffer_state *fb = &svga->curr.framebuffer;
    union util_color uc = {0};
 
    ret = svga_update_state(svga, SVGA_STATE_HW_CLEAR);
@@ -137,14 +137,15 @@ try_clear(struct svga_context *svga,
       rect.h = fb->height;
    }
 
-   if ((buffers & PIPE_CLEAR_DEPTHSTENCIL) && fb->zsbuf.texture) {
+   if ((buffers & PIPE_CLEAR_DEPTHSTENCIL) && fb->zsbuf) {
       if (buffers & PIPE_CLEAR_DEPTH)
          flags |= SVGA3D_CLEAR_DEPTH;
 
       if (buffers & PIPE_CLEAR_STENCIL)
          flags |= SVGA3D_CLEAR_STENCIL;
-      rect.w = MAX2(rect.w, pipe_surface_width(&fb->zsbuf));
-      rect.h = MAX2(rect.h, pipe_surface_height(&fb->zsbuf));
+
+      rect.w = MAX2(rect.w, fb->zsbuf->width);
+      rect.h = MAX2(rect.h, fb->zsbuf->height);
    }
 
    if (!svga_have_vgpu10(svga) &&
@@ -164,7 +165,8 @@ try_clear(struct svga_context *svga,
             clear_buffers_with_quad(svga, buffers, color, depth, stencil);
             /* We also cleared depth/stencil, so that's done */
             flags &= ~(SVGA3D_CLEAR_DEPTH | SVGA3D_CLEAR_STENCIL);
-         } else {
+         }
+         else {
             struct pipe_surface *rtv;
             float rgba[4];
 
@@ -173,7 +175,8 @@ try_clear(struct svga_context *svga,
                rgba[1] = (float) color->i[1];
                rgba[2] = (float) color->i[2];
                rgba[3] = (float) color->i[3];
-            } else {
+            }
+            else {
                rgba[0] = color->f[0];
                rgba[1] = color->f[1];
                rgba[2] = color->f[2];
@@ -182,12 +185,12 @@ try_clear(struct svga_context *svga,
 
             /* Issue VGPU10 Clear commands */
             for (i = 0; i < fb->nr_cbufs; i++) {
-               if ((fb->cbufs[i].texture == NULL) ||
+               if ((fb->cbufs[i] == NULL) ||
                    !(buffers & (PIPE_CLEAR_COLOR0 << i)))
                   continue;
 
                rtv = svga_validate_surface_view(svga,
-                                                svga->curr.framebuffer.cbufs[i]);
+                                                svga_surface(fb->cbufs[i]));
                if (!rtv)
                   return PIPE_ERROR_OUT_OF_MEMORY;
 
@@ -199,7 +202,7 @@ try_clear(struct svga_context *svga,
       }
       if (flags & (SVGA3D_CLEAR_DEPTH | SVGA3D_CLEAR_STENCIL)) {
          struct pipe_surface *dsv =
-            svga_validate_surface_view(svga, svga->curr.framebuffer.zsbuf);
+            svga_validate_surface_view(svga, svga_surface(fb->zsbuf));
          if (!dsv)
             return PIPE_ERROR_OUT_OF_MEMORY;
 
@@ -208,7 +211,8 @@ try_clear(struct svga_context *svga,
          if (ret != PIPE_OK)
             return ret;
       }
-   } else {
+   }
+   else {
       ret = SVGA3D_ClearRect(svga->swc, flags, uc.ui[0], (float) depth, stencil,
                              rect.x, rect.y, rect.w, rect.h);
       if (ret != PIPE_OK)
@@ -218,7 +222,7 @@ try_clear(struct svga_context *svga,
    if (restore_viewport) {
       ret = SVGA3D_SetViewport(svga->swc, &svga->state.hw_clear.viewport);
    }
-
+   
    return ret;
 }
 
@@ -227,19 +231,17 @@ try_clear(struct svga_context *svga,
  * No masking, no scissor (clear entire buffer).
  */
 static void
-svga_clear(struct pipe_context *pipe,
-           unsigned buffers,
-           const struct pipe_scissor_state *scissor_state,
+svga_clear(struct pipe_context *pipe, unsigned buffers, const struct pipe_scissor_state *scissor_state,
            const union pipe_color_union *color,
-           double depth, unsigned stencil)
+	   double depth, unsigned stencil)
 {
-   struct svga_context *svga = svga_context(pipe);
+   struct svga_context *svga = svga_context( pipe );
    enum pipe_error ret;
 
    if (buffers & PIPE_CLEAR_COLOR) {
       struct svga_winsys_surface *h = NULL;
       if (svga->curr.framebuffer.cbufs[0]) {
-         h = svga->curr.framebuffer.cbufs[0]->handle;
+         h = svga_surface(svga->curr.framebuffer.cbufs[0])->handle;
       }
       SVGA_DBG(DEBUG_DMA, "clear sid %p\n", h);
    }
@@ -247,7 +249,7 @@ svga_clear(struct pipe_context *pipe,
    /* flush any queued prims (don't want them to appear after the clear!) */
    svga_hwtnl_flush_retry(svga);
 
-   SVGA_RETRY_OOM(svga, ret, try_clear(svga, buffers, color, depth, stencil));
+   SVGA_RETRY_OOM(svga, ret, try_clear( svga, buffers, color, depth, stencil));
 
    /*
     * Mark target surfaces as dirty
@@ -273,11 +275,11 @@ svga_clear_texture(struct pipe_context *pipe,
 
    memset(&tmpl, 0, sizeof(tmpl));
    tmpl.format = res->format;
-   tmpl.first_layer = box->z;
-   tmpl.last_layer = box->z + box->depth - 1;
-   tmpl.level = level;
+   tmpl.u.tex.first_layer = box->z;
+   tmpl.u.tex.last_layer = box->z + box->depth - 1;
+   tmpl.u.tex.level = level;
 
-   surface = svga_create_surface(pipe, res, &tmpl);
+   surface = pipe->create_surface(pipe, res, &tmpl);
    if (surface == NULL) {
       debug_printf("failed to create surface\n");
       return;
@@ -289,23 +291,25 @@ svga_clear_texture(struct pipe_context *pipe,
       util_format_description(surface->format);
 
    if (util_format_is_depth_or_stencil(surface->format)) {
-      float   depth = 0.0f;
-      uint8_t stencil = 0;
+      float depth;
+      uint8_t stencil;
       unsigned clear_flags = 0;
 
       /* If data is NULL, then set depthValue and stencilValue to zeros */
+      if (data == NULL) {
+         depth = 0.0;
+         stencil = 0;
+      }
+      else {
+         util_format_unpack_z_float(surface->format, &depth, data, 1);
+         util_format_unpack_s_8uint(surface->format, &stencil, data, 1);
+      }
 
       if (util_format_has_depth(desc)) {
          clear_flags |= PIPE_CLEAR_DEPTH;
-         if (data) {
-            util_format_unpack_z_float(surface->format, &depth, data, 1);
-         }
       }
       if (util_format_has_stencil(desc)) {
          clear_flags |= PIPE_CLEAR_STENCIL;
-         if (data) {
-            util_format_unpack_s_8uint(surface->format, &stencil, data, 1);
-         }
       }
 
       /* Setup depth stencil view */
@@ -317,20 +321,20 @@ svga_clear_texture(struct pipe_context *pipe,
          return;
       }
 
-
-      if (box->x == 0 && box->y == 0 && box->width == pipe_surface_width(surface) &&
-          box->height == pipe_surface_height(surface)) {
+      if (box->x == 0 && box->y == 0 && box->width == surface->width &&
+          box->height == surface->height) {
          /* clearing whole surface, use direct VGPU10 command */
          assert(svga_surface(dsv)->view_id != SVGA3D_INVALID_ID);
 
          SVGA_RETRY(svga, SVGA3D_vgpu10_ClearDepthStencilView(svga->swc, dsv,
                                                               clear_flags,
                                                               stencil, depth));
-      } else {
+      }
+      else {
          /* To clear subtexture use software fallback */
 
          util_blitter_save_framebuffer(svga->blitter,
-                                       &svga->curr.framebuffer.base);
+                                       &svga->curr.framebuffer);
          begin_blit(svga);
          util_blitter_clear_depth_stencil(svga->blitter,
                                           dsv, clear_flags,
@@ -338,13 +342,15 @@ svga_clear_texture(struct pipe_context *pipe,
                                           box->x, box->y,
                                           box->width, box->height);
       }
-   } else {
+   }
+   else {
       /* non depth-stencil formats */
 
       if (data == NULL) {
          /* If data is NULL, the texture image is filled with zeros */
          color.f[0] = color.f[1] = color.f[2] = color.f[3] = 0;
-      } else {
+      }
+      else {
          util_format_unpack_rgba(surface->format, &color, data, 1);
       }
 
@@ -357,15 +363,16 @@ svga_clear_texture(struct pipe_context *pipe,
          return;
       }
 
-      if (box->x == 0 && box->y == 0 && box->width == pipe_surface_width(surface) &&
-          box->height == pipe_surface_height(surface)) {
-         bool int_target =
-            is_integer_target(&svga->curr.framebuffer.base, PIPE_CLEAR_COLOR);
+      if (box->x == 0 && box->y == 0 && box->width == surface->width &&
+          box->height == surface->height) {
+         struct pipe_framebuffer_state *curr =  &svga->curr.framebuffer;
+         bool int_target = is_integer_target(curr, PIPE_CLEAR_COLOR);
 
          if (int_target && !ints_fit_in_floats(&color)) {
             /* To clear full texture with integer format */
             clear_buffers_with_quad(svga, PIPE_CLEAR_COLOR, &color, 0.0, 0);
-         } else {
+         }
+         else {
             float rgba[4];
 
             if (int_target) {
@@ -373,7 +380,8 @@ svga_clear_texture(struct pipe_context *pipe,
                rgba[1] = (float) color.i[1];
                rgba[2] = (float) color.i[2];
                rgba[3] = (float) color.i[3];
-            } else {
+            }
+            else {
                rgba[0] = color.f[0];
                rgba[1] = color.f[1];
                rgba[2] = color.f[2];
@@ -385,7 +393,8 @@ svga_clear_texture(struct pipe_context *pipe,
             SVGA_RETRY(svga, SVGA3D_vgpu10_ClearRenderTargetView(svga->swc, rtv,
                                                                  rgba));
          }
-      } else {
+      }
+      else {
          /* To clear subtexture use software fallback */
 
          /**
@@ -401,36 +410,36 @@ svga_clear_texture(struct pipe_context *pipe,
                                                PIPE_BIND_RENDER_TARGET)) {
             /* clear with quad drawing */
             util_blitter_save_framebuffer(svga->blitter,
-                                          &svga->curr.framebuffer.base);
+                                          &svga->curr.framebuffer);
             begin_blit(svga);
             util_blitter_clear_render_target(svga->blitter,
                                              rtv,
                                              &color,
                                              box->x, box->y,
                                              box->width, box->height);
-         } else {
+         }
+         else {
             /* clear with map/write/unmap */
 
             /* store layer values */
-            unsigned first_layer = rtv->first_layer;
-            unsigned last_layer = rtv->last_layer;
+            unsigned first_layer = rtv->u.tex.first_layer;
+            unsigned last_layer = rtv->u.tex.last_layer;
             unsigned box_depth = last_layer - first_layer + 1;
 
             for (unsigned i = 0; i < box_depth; i++) {
-               rtv->first_layer = rtv->last_layer =
+               rtv->u.tex.first_layer = rtv->u.tex.last_layer =
                   first_layer + i;
                util_clear_render_target(pipe, rtv, &color, box->x, box->y,
                                         box->width, box->height);
             }
             /* restore layer values */
-            rtv->first_layer = first_layer;
-            rtv->last_layer = last_layer;
+            rtv->u.tex.first_layer = first_layer;
+            rtv->u.tex.last_layer = last_layer;
          }
       }
    }
    pipe_surface_reference(&surface, NULL);
 }
-
 
 /**
  * \brief  Clear the whole render target using vgpu10 functionality
@@ -454,8 +463,7 @@ svga_try_clear_render_target(struct svga_context *svga,
 
    assert(svga_surface(rtv)->view_id != SVGA3D_INVALID_ID);
    return SVGA3D_vgpu10_ClearRenderTargetView(svga->swc, rtv, color->f);
-}
-
+ }
 
 /**
  * \brief  Clear part of render target using gallium blitter utilities
@@ -476,7 +484,7 @@ svga_blitter_clear_render_target(struct svga_context *svga,
                                  unsigned width, unsigned height)
 {
    begin_blit(svga);
-   util_blitter_save_framebuffer(svga->blitter, &svga->curr.framebuffer.base);
+   util_blitter_save_framebuffer(svga->blitter, &svga->curr.framebuffer);
 
    util_blitter_clear_render_target(svga->blitter, dst, color,
                                     dstx, dsty, width, height);
@@ -501,30 +509,27 @@ svga_clear_render_target(struct pipe_context *pipe,
                          struct pipe_surface *dst,
                          const union pipe_color_union *color,
                          unsigned dstx, unsigned dsty,
-                         unsigned dst_width, unsigned dst_height,
+                         unsigned width, unsigned height,
                          bool render_condition_enabled)
 {
-   struct svga_context *svga = svga_context(pipe);
+    struct svga_context *svga = svga_context( pipe );
 
-   svga_toggle_render_condition(svga, render_condition_enabled, false);
-   if (!svga_have_vgpu10(svga) || dstx != 0 || dsty != 0 ||
-       dst_width != pipe_surface_width(dst) ||
-       dst_height != pipe_surface_height(dst)) {
-      svga_blitter_clear_render_target(svga, dst, color, dstx, dsty, dst_width,
-                                       dst_height);
-   } else {
-      enum pipe_error ret;
+    svga_toggle_render_condition(svga, render_condition_enabled, false);
+    if (!svga_have_vgpu10(svga) || dstx != 0 || dsty != 0 ||
+        width != dst->width || height != dst->height) {
+       svga_blitter_clear_render_target(svga, dst, color, dstx, dsty, width,
+                                        height);
+    } else {
+       enum pipe_error ret;
 
-      SVGA_RETRY_OOM(svga, ret, svga_try_clear_render_target(svga, dst,
-                                                             color));
-      assert (ret == PIPE_OK);
-   }
-   svga_toggle_render_condition(svga, render_condition_enabled, true);
+       SVGA_RETRY_OOM(svga, ret, svga_try_clear_render_target(svga, dst,
+                                                              color));
+       assert (ret == PIPE_OK);
+    }
+    svga_toggle_render_condition(svga, render_condition_enabled, true);
 }
 
-
-void
-svga_init_clear_functions(struct svga_context *svga)
+void svga_init_clear_functions(struct svga_context *svga)
 {
    svga->pipe.clear_render_target = svga_clear_render_target;
    svga->pipe.clear_texture = svga_have_vgpu10(svga) ? svga_clear_texture : NULL;

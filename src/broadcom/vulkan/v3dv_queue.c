@@ -27,7 +27,6 @@
 #include "broadcom/clif/clif_dump.h"
 #include "util/libsync.h"
 #include "util/os_time.h"
-#include "util/perf/cpu_trace.h"
 #include "vk_drm_syncobj.h"
 
 #include <errno.h>
@@ -299,7 +298,6 @@ handle_reset_query_cpu_job(struct v3dv_queue *queue,
                            struct v3dv_submit_sync_info *sync_info,
                            bool signal_syncs)
 {
-   MESA_TRACE_FUNC();
    struct v3dv_device *device = queue->device;
    struct v3dv_reset_query_cpu_job_info *info = &job->cpu.query_reset;
    assert(info->pool);
@@ -495,7 +493,6 @@ export_perfmon_last_job_sync(struct v3dv_queue *queue, struct v3dv_job *job, int
 static VkResult
 handle_end_query_cpu_job(struct v3dv_job *job, uint32_t counter_pass_idx)
 {
-   MESA_TRACE_FUNC();
    VkResult result = VK_SUCCESS;
 
    mtx_lock(&job->device->query_mutex);
@@ -552,7 +549,6 @@ handle_copy_query_results_cpu_job(struct v3dv_queue *queue,
                                   struct v3dv_submit_sync_info *sync_info,
                                   bool signal_syncs)
 {
-   MESA_TRACE_FUNC();
    struct v3dv_device *device = queue->device;
    struct v3dv_copy_query_results_cpu_job_info *info =
       &job->cpu.query_copy_results;
@@ -717,7 +713,6 @@ handle_timestamp_query_cpu_job(struct v3dv_queue *queue,
                                struct v3dv_submit_sync_info *sync_info,
                                bool signal_syncs)
 {
-   MESA_TRACE_FUNC();
    struct v3dv_device *device = queue->device;
 
    assert(job->type == V3DV_JOB_TYPE_CPU_TIMESTAMP_QUERY);
@@ -822,7 +817,6 @@ handle_csd_indirect_cpu_job(struct v3dv_queue *queue,
                             struct v3dv_submit_sync_info *sync_info,
                             bool signal_syncs)
 {
-   MESA_TRACE_FUNC();
    struct v3dv_device *device = queue->device;
 
    assert(job->type == V3DV_JOB_TYPE_CPU_CSD_INDIRECT);
@@ -925,7 +919,6 @@ handle_cl_job(struct v3dv_queue *queue,
               struct v3dv_submit_sync_info *sync_info,
               bool signal_syncs)
 {
-   MESA_TRACE_FUNC();
    struct v3dv_device *device = queue->device;
 
    struct drm_v3d_submit_cl submit = { 0 };
@@ -1063,7 +1056,6 @@ handle_tfu_job(struct v3dv_queue *queue,
                struct v3dv_submit_sync_info *sync_info,
                bool signal_syncs)
 {
-   MESA_TRACE_FUNC();
    assert(!V3D_DBG(DISABLE_TFU));
 
    struct v3dv_device *device = queue->device;
@@ -1103,7 +1095,6 @@ handle_csd_job(struct v3dv_queue *queue,
                struct v3dv_submit_sync_info *sync_info,
                bool signal_syncs)
 {
-   MESA_TRACE_FUNC();
    struct v3dv_device *device = queue->device;
 
    struct drm_v3d_submit_csd *submit = &job->csd.submit;
@@ -1171,39 +1162,13 @@ handle_csd_job(struct v3dv_queue *queue,
    return VK_SUCCESS;
 }
 
-static void
-queue_apply_barrier_state(struct v3dv_job *job,
-                          struct v3dv_barrier_state *barrier)
-{
-   if (!v3dv_job_apply_barrier_state(job, barrier))
-      return;
-
-   if (job->type != V3DV_JOB_TYPE_GPU_CL)
-      return;
-
-   if (job->serialize &&
-       (barrier->bcl_buffer_access || barrier->bcl_image_access)) {
-      job->needs_bcl_sync = true;
-      barrier->bcl_buffer_access = barrier->bcl_image_access = 0;
-   }
-}
-
 static VkResult
 queue_handle_job(struct v3dv_queue *queue,
                  struct v3dv_job *job,
                  uint32_t counter_pass_idx,
-                 struct v3dv_barrier_state *barrier,
                  struct v3dv_submit_sync_info *sync_info,
                  bool signal_syncs)
 {
-   if (barrier)
-      queue_apply_barrier_state(job, barrier);
-
-   if (unlikely(V3D_DBG(SYNC))) {
-      job->serialize = V3DV_BARRIER_ALL;
-      job->needs_bcl_sync = job->type == V3DV_JOB_TYPE_GPU_CL;
-   }
-
    switch (job->type) {
    case V3DV_JOB_TYPE_GPU_CL:
       return handle_cl_job(queue, job, counter_pass_idx, sync_info, signal_syncs);
@@ -1222,7 +1187,7 @@ queue_handle_job(struct v3dv_queue *queue,
    case V3DV_JOB_TYPE_CPU_TIMESTAMP_QUERY:
       return handle_timestamp_query_cpu_job(queue, job, sync_info, signal_syncs);
    default:
-      UNREACHABLE("Unhandled job type");
+      unreachable("Unhandled job type");
    }
 }
 
@@ -1261,7 +1226,7 @@ queue_submit_noop_job(struct v3dv_queue *queue,
    }
 
    assert(queue->noop_job);
-   return queue_handle_job(queue, queue->noop_job, counter_pass_idx, NULL,
+   return queue_handle_job(queue, queue->noop_job, counter_pass_idx,
                            sync_info, signal_syncs);
 }
 
@@ -1269,7 +1234,6 @@ VkResult
 v3dv_queue_driver_submit(struct vk_queue *vk_queue,
                          struct vk_queue_submit *submit)
 {
-   MESA_TRACE_FUNC();
    struct v3dv_queue *queue = container_of(vk_queue, struct v3dv_queue, vk);
    VkResult result;
 
@@ -1283,7 +1247,6 @@ v3dv_queue_driver_submit(struct vk_queue *vk_queue,
    for (int i = 0; i < V3DV_QUEUE_COUNT; i++)
       queue->last_job_syncs.first[i] = true;
 
-   struct v3dv_barrier_state pending_barrier = { 0 };
    struct v3dv_job *first_suspend_job = NULL;
    struct v3dv_job *current_suspend_job = NULL;
    for (uint32_t i = 0; i < submit->command_buffer_count; i++) {
@@ -1321,7 +1284,7 @@ v3dv_queue_driver_submit(struct vk_queue *vk_queue,
                                           first_suspend_job : job;
             result =
                queue_handle_job(queue, submit_job, submit->perf_pass_index,
-                                &pending_barrier, &sync_info, false);
+                                &sync_info, false);
 
             if (result != VK_SUCCESS)
                return result;
@@ -1330,10 +1293,17 @@ v3dv_queue_driver_submit(struct vk_queue *vk_queue,
          }
       }
 
-      /* If the command buffer ends with a barrier, save the pending barrier
-       * state so we can apply it on the next command buffer.
+      /* If the command buffer ends with a barrier we need to consume it now.
+       *
+       * FIXME: this will drain all hw queues. Instead, we could use the pending
+       * barrier state to limit the queues we serialize against.
        */
-      v3dv_merge_barrier_state(&pending_barrier, &cmd_buffer->state.barrier);
+      if (cmd_buffer->state.barrier.dst_mask) {
+         result = queue_submit_noop_job(queue, submit->perf_pass_index,
+                                        &sync_info, false);
+         if (result != VK_SUCCESS)
+            return result;
+      }
    }
 
    assert(!first_suspend_job);

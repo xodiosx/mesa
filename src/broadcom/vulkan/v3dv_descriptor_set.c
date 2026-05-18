@@ -50,6 +50,19 @@ descriptor_bo_map(struct v3dv_device *device,
       array_index * binding_layout->plane_stride * bo_size;
 }
 
+static bool
+descriptor_type_is_dynamic(VkDescriptorType type)
+{
+   switch (type) {
+   case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+   case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+      return true;
+      break;
+   default:
+      return false;
+   }
+}
+
 /*
  * Tries to get a real descriptor using a descriptor map index from the
  * descriptor_state + pipeline_layout.
@@ -79,8 +92,7 @@ v3dv_descriptor_map_get_descriptor(struct v3dv_descriptor_state *descriptor_stat
    uint32_t array_index = map->array_index[index];
    assert(array_index < binding_layout->array_size);
 
-   if (vk_descriptor_type_is_dynamic(binding_layout->type)) {
-      assert(dynamic_offset);
+   if (descriptor_type_is_dynamic(binding_layout->type)) {
       uint32_t dynamic_offset_index =
          pipeline_layout->set[set_number].dynamic_offset_start +
          binding_layout->dynamic_offset_index + array_index;
@@ -245,7 +257,7 @@ v3dv_descriptor_map_get_texture_bo(struct v3dv_descriptor_state *descriptor_stat
       return image->planes[map->plane[index]].mem->bo;
    }
    default:
-      UNREACHABLE("descriptor type doesn't has a texture bo");
+      unreachable("descriptor type doesn't has a texture bo");
    }
 }
 
@@ -466,7 +478,7 @@ v3dv_CreateDescriptorPool(VkDevice _device,
       case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK:
          break;
       default:
-         UNREACHABLE("Unimplemented descriptor type");
+         unreachable("Unimplemented descriptor type");
          break;
       }
 
@@ -752,7 +764,7 @@ v3dv_CreateDescriptorSetLayout(VkDevice _device,
          /* Nothing here, just to keep the descriptor type filtering below */
          break;
       default:
-         UNREACHABLE("Unknown descriptor type\n");
+         unreachable("Unknown descriptor type\n");
          break;
       }
 
@@ -1266,7 +1278,7 @@ v3dv_UpdateDescriptorSets(VkDevice  _device,
             break;
          }
          default:
-            UNREACHABLE("unimplemented descriptor type");
+            unreachable("unimplemented descriptor type");
             break;
          }
          descriptor++;
@@ -1448,7 +1460,7 @@ v3dv_UpdateDescriptorSetWithTemplate(
       }
 
       default:
-         UNREACHABLE("Unsupported descriptor type");
+         unreachable("Unsupported descriptor type");
       }
    }
 }

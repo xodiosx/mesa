@@ -65,12 +65,6 @@ nvc0_miptree_surface_new(struct pipe_context *,
                          struct pipe_resource *,
                          const struct pipe_surface *templ);
 
-void
-nvc0_framebuffer_init(struct pipe_context *pctx,
-                      const struct pipe_framebuffer_state *fb,
-                      struct pipe_surface **cbufs,
-                      struct pipe_surface **zsbuf);
-
 unsigned
 nvc0_mt_zslice_offset(const struct nv50_miptree *, unsigned l, unsigned z);
 

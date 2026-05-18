@@ -36,7 +36,7 @@ struct shader_stats {
 };
 
 int disasm_a2xx(uint32_t *dwords, int sizedwords, int level,
-                mesa_shader_stage type);
+                gl_shader_stage type);
 int disasm_a3xx(uint32_t *dwords, int sizedwords, int level, FILE *out,
                 unsigned gpu_id);
 int disasm_a3xx_stat(uint32_t *dwords, int sizedwords, int level, FILE *out,

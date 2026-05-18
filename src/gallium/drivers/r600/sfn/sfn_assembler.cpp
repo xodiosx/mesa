@@ -70,7 +70,6 @@ public:
    void emit_loop_end();
    void emit_loop_break();
    void emit_loop_cont();
-   void emit_alu_push_before();
 
    void emit_alu_op(const AluInstr& ai);
    void emit_lds_op(const AluInstr& lds);
@@ -104,7 +103,6 @@ public:
    bool m_last_op_was_barrier{false};
    bool m_result{true};
    bool m_legacy_math_rules{false};
-   bool m_require_alu_extended{false};
 };
 
 bool
@@ -134,10 +132,10 @@ AssamblerVisitor::AssamblerVisitor(r600_shader *sh, const r600_shader_key& key,
     ps_alpha_to_one(key.ps.alpha_to_one),
     m_legacy_math_rules(legacy_math_rules)
 {
-   if (m_shader->processor_type == MESA_SHADER_FRAGMENT)
+   if (m_shader->processor_type == PIPE_SHADER_FRAGMENT)
       m_max_color_exports = MAX2(m_key.ps.nr_cbufs, 1);
 
-   if (m_shader->processor_type == MESA_SHADER_VERTEX && m_shader->ninput > 0)
+   if (m_shader->processor_type == PIPE_SHADER_VERTEX && m_shader->ninput > 0)
       r600_bytecode_add_cfinst(m_bc, CF_OP_CALL_FS);
 }
 
@@ -224,7 +222,7 @@ AssamblerVisitor::emit_lds_op(const AluInstr& lds)
       break;
    default:
       std::cerr << "\n R600: error op: " << lds << "\n";
-      UNREACHABLE("Unhandled LDS op");
+      unreachable("Unhandled LDS op");
    }
 
    copy_src(alu.src[0], lds.src(0));
@@ -306,19 +304,14 @@ AssamblerVisitor::emit_alu_op(const AluInstr& ai)
          }
 
          alu.dst.write = ai.has_alu_flag(alu_write);
+         alu.dst.clamp = ai.has_alu_flag(alu_dst_clamp);
          alu.dst.rel = dst->addr() ? 1 : 0;
       } else if (m_bc->gfx_level == CAYMAN && ai.dest()->sel() > 0) {
          alu.dst.sel = ai.dest()->sel() + 1;
       }
-   } else {
-      alu.dst.chan = ai.dest_chan();
    }
 
-   alu.dst.clamp = ai.has_alu_flag(alu_dst_clamp);
    alu.is_op3 = ai.n_sources() == 3;
-
-   if (!alu.is_op3)
-      alu.omod = ai.output_modifier();
 
    EBufferIndexMode kcache_index_mode = bim_none;
    PVirtualValue buffer_offset = nullptr;
@@ -336,7 +329,7 @@ AssamblerVisitor::emit_alu_op(const AluInstr& ai)
             case 1: kcache_index_mode = bim_zero; break;
             case 2: kcache_index_mode = bim_one; break;
             default:
-               UNREACHABLE("Unsupported index mode");
+               unreachable("Unsupported index mode");
             }
          } else {
             kcache_index_mode = bim_zero;
@@ -366,14 +359,15 @@ AssamblerVisitor::emit_alu_op(const AluInstr& ai)
    if (dst)
       sfn_log << SfnLog::assembly << "  Current dst register is " << *dst << "\n";
 
-   /*
    auto cf_op = ai.cf_type();
 
    unsigned type = 0;
    switch (cf_op) {
    case cf_alu:
-   case cf_alu_push_before:
       type = CF_OP_ALU;
+      break;
+   case cf_alu_push_before:
+      type = CF_OP_ALU_PUSH_BEFORE;
       break;
    case cf_alu_pop_after:
       type = CF_OP_ALU_POP_AFTER;
@@ -396,11 +390,11 @@ AssamblerVisitor::emit_alu_op(const AluInstr& ai)
    default:
       assert(0 && "cf_alu_undefined should have been replaced");
    }
-*/
+
    if (alu.last)
       m_nliterals_in_group.clear();
 
-   m_result = !r600_bytecode_add_alu(m_bc, &alu);
+   m_result = !r600_bytecode_add_alu_type(m_bc, &alu, type);
 
    if (unlikely(ai.opcode() == op1_mova_int)) {
       if (m_bc->gfx_level < CAYMAN || alu.dst.sel == 0) {
@@ -470,7 +464,24 @@ AssamblerVisitor::visit(const AluGroup& group)
    }
 
    auto [addr, is_index] = group.addr();
-   assert(!addr || addr->has_flag(Register::addr_or_idx));
+
+   if (addr) {
+      if (!addr->has_flag(Register::addr_or_idx)) {
+         if (is_index) {
+            emit_index_reg(*addr, 0);
+         } else {
+            auto reg = addr->as_register();
+            assert(reg);
+            if (!m_last_addr || !m_bc->ar_loaded || !m_last_addr->equal_to(*reg)) {
+               m_last_addr = reg;
+               m_bc->ar_reg = reg->sel();
+               m_bc->ar_chan = reg->chan();
+               m_bc->ar_loaded = 0;
+               r600_load_ar(m_bc, group.addr_for_src());
+            }
+         }
+      }
+   }
 
    for (auto& i : group) {
       if (i)
@@ -747,7 +758,7 @@ AssamblerVisitor::visit(const FetchInstr& fetch_instr)
    }
 
    m_bc->cf_last->vpm =
-      (m_bc->type == MESA_SHADER_FRAGMENT) && fetch_instr.has_fetch_flag(FetchInstr::vpm);
+      (m_bc->type == PIPE_SHADER_FRAGMENT) && fetch_instr.has_fetch_flag(FetchInstr::vpm);
    m_bc->cf_last->barrier = 1;
 }
 
@@ -826,7 +837,7 @@ AssamblerVisitor::visit(const RatInstr& instr)
              instr.data_swz(2) == PIPE_SWIZZLE_MAX);
    }
 
-   cf->vpm = m_bc->type == MESA_SHADER_FRAGMENT;
+   cf->vpm = m_bc->type == PIPE_SHADER_FRAGMENT;
    cf->barrier = 1;
    cf->mark = instr.need_ack();
    cf->output.elem_size = instr.elm_size();
@@ -855,9 +866,7 @@ AssamblerVisitor::visit(const Block& block)
    if (block.empty())
       return;
 
-   if (block.cf_start())
-      block.cf_start()->accept(*this);
-   else if (block.has_instr_flag(Instr::force_cf)) {
+   if (block.has_instr_flag(Instr::force_cf)) {
       m_bc->force_add_cf = 1;
       m_bc->ar_loaded = 0;
       m_last_addr = nullptr;
@@ -865,7 +874,6 @@ AssamblerVisitor::visit(const Block& block)
    sfn_log << SfnLog::assembly << "Translate block  size: " << block.size()
            << " new_cf:" << m_bc->force_add_cf << "\n";
 
-   m_require_alu_extended = block.kcache_needs_extended();
    for (const auto& i : block) {
       sfn_log << SfnLog::assembly << "Translate " << *i << " ";
       i->accept(*this);
@@ -874,17 +882,51 @@ AssamblerVisitor::visit(const Block& block)
       if (!m_result)
          break;
    }
-   m_require_alu_extended = false;
 }
 
 void
 AssamblerVisitor::visit(const IfInstr& instr)
 {
+   int elems = m_callstack.push(FC_PUSH_VPM);
+   bool needs_workaround = false;
+
+   if (m_bc->gfx_level == CAYMAN && m_bc->stack.loop > 1)
+      needs_workaround = true;
+
+   if (m_bc->gfx_level == EVERGREEN && m_bc->family != CHIP_HEMLOCK &&
+       m_bc->family != CHIP_CYPRESS && m_bc->family != CHIP_JUNIPER) {
+      unsigned dmod1 = (elems - 1) % m_bc->stack.entry_size;
+      unsigned dmod2 = (elems) % m_bc->stack.entry_size;
+
+      if (elems && (!dmod1 || !dmod2))
+         needs_workaround = true;
+   }
 
    auto pred = instr.predicate();
    auto [addr, dummy0, dummy1] = pred->indirect_addr();
+   {
+   }
    assert(!dummy1);
-   assert(!addr);
+   if (addr) {
+      if (!m_last_addr || !m_bc->ar_loaded || !m_last_addr->equal_to(*addr)) {
+         m_bc->ar_reg = addr->sel();
+         m_bc->ar_chan = addr->chan();
+         m_last_addr = addr;
+         m_bc->ar_loaded = 0;
+
+         r600_load_ar(m_bc, true);
+      }
+   }
+
+   if (needs_workaround) {
+      r600_bytecode_add_cfinst(m_bc, CF_OP_PUSH);
+      m_bc->cf_last->cf_addr = m_bc->cf_last->id + 2;
+      r600_bytecode_add_cfinst(m_bc, CF_OP_ALU);
+      pred->set_cf_type(cf_alu);
+   }
+
+   clear_states(sf_tex | sf_vtx);
+   pred->accept(*this);
 
    r600_bytecode_add_cfinst(m_bc, CF_OP_JUMP);
    clear_states(sf_all);
@@ -895,8 +937,6 @@ AssamblerVisitor::visit(const IfInstr& instr)
 void
 AssamblerVisitor::visit(const ControlFlowInstr& instr)
 {
-   sfn_log << SfnLog::assembly << "Translate " << instr << " ";
-
    clear_states(sf_all);
    switch (instr.cf_type()) {
    case ControlFlowInstr::cf_else:
@@ -906,7 +946,7 @@ AssamblerVisitor::visit(const ControlFlowInstr& instr)
       emit_endif();
       break;
    case ControlFlowInstr::cf_loop_begin: {
-      bool use_vpm = m_shader->processor_type == MESA_SHADER_FRAGMENT &&
+      bool use_vpm = m_shader->processor_type == PIPE_SHADER_FRAGMENT &&
                      instr.has_instr_flag(Instr::vpm) &&
                      !instr.has_instr_flag(Instr::helper);
       emit_loop_begin(use_vpm);
@@ -931,23 +971,8 @@ AssamblerVisitor::visit(const ControlFlowInstr& instr)
          m_result = false;
       }
    } break;
-   case ControlFlowInstr::cf_alu:
-      r600_bytecode_add_cfinst(m_bc, CF_OP_ALU);
-      break;
-   case ControlFlowInstr::cf_alu_push_before:
-      emit_alu_push_before();
-      break;
-   case ControlFlowInstr::cf_gds:
-      r600_bytecode_add_cfinst(m_bc, CF_OP_GDS);
-      break;
-   case ControlFlowInstr::cf_tex:
-      r600_bytecode_add_cfinst(m_bc, CF_OP_TEX);
-      break;
-   case ControlFlowInstr::cf_vtx:
-      r600_bytecode_add_cfinst(m_bc, CF_OP_VTX);
-      break;
    default:
-      UNREACHABLE("Unknown CF instruction type");
+      unreachable("Unknown CF instruction type");
    }
 }
 
@@ -997,7 +1022,7 @@ AssamblerVisitor::visit(const GDSInstr& instr)
       m_result = false;
       return;
    }
-   m_bc->cf_last->vpm = MESA_SHADER_FRAGMENT == m_bc->type;
+   m_bc->cf_last->vpm = PIPE_SHADER_FRAGMENT == m_bc->type;
    m_bc->cf_last->barrier = 1;
 }
 
@@ -1005,14 +1030,14 @@ void
 AssamblerVisitor::visit(const LDSAtomicInstr& instr)
 {
    (void)instr;
-   UNREACHABLE("LDSAtomicInstr must be lowered to ALUInstr");
+   unreachable("LDSAtomicInstr must be lowered to ALUInstr");
 }
 
 void
 AssamblerVisitor::visit(const LDSReadInstr& instr)
 {
    (void)instr;
-   UNREACHABLE("LDSReadInstr must be lowered to ALUInstr");
+   unreachable("LDSReadInstr must be lowered to ALUInstr");
 }
 
 EBufferIndexMode
@@ -1087,36 +1112,6 @@ AssamblerVisitor::emit_else()
 }
 
 void
-AssamblerVisitor::emit_alu_push_before()
-{
-   int elems = m_callstack.push(FC_PUSH_VPM);
-   bool needs_workaround = false;
-
-   if (m_bc->gfx_level == CAYMAN && m_bc->stack.loop > 1)
-      needs_workaround = true;
-
-   if (m_bc->gfx_level == EVERGREEN && m_bc->family != CHIP_HEMLOCK &&
-       m_bc->family != CHIP_CYPRESS && m_bc->family != CHIP_JUNIPER) {
-      unsigned dmod1 = (elems - 1) % m_bc->stack.entry_size;
-      unsigned dmod2 = (elems) % m_bc->stack.entry_size;
-
-      if (elems && (!dmod1 || !dmod2))
-         needs_workaround = true;
-   }
-
-   if (needs_workaround || m_require_alu_extended) {
-      r600_bytecode_add_cfinst(m_bc, CF_OP_PUSH);
-      m_bc->cf_last->cf_addr = m_bc->cf_last->id + 2;
-      r600_bytecode_add_cfinst(m_bc, CF_OP_ALU);
-      m_bc->cf_last->eg_alu_extended = m_require_alu_extended;
-   } else {
-      r600_bytecode_add_cfinst(m_bc, CF_OP_ALU_PUSH_BEFORE);
-   }
-
-   clear_states(sf_tex | sf_vtx);
-}
-
-void
 AssamblerVisitor::emit_endif()
 {
    m_callstack.pop(FC_PUSH_VPM);
@@ -1152,7 +1147,7 @@ void
 AssamblerVisitor::emit_loop_begin(bool vpm)
 {
    r600_bytecode_add_cfinst(m_bc, CF_OP_LOOP_START_DX10);
-   m_bc->cf_last->vpm = vpm && m_bc->type == MESA_SHADER_FRAGMENT;
+   m_bc->cf_last->vpm = vpm && m_bc->type == PIPE_SHADER_FRAGMENT;
    m_jump_tracker.push(m_bc->cf_last, jt_loop);
    m_callstack.push(FC_LOOP);
    ++m_loop_nesting;
@@ -1190,7 +1185,7 @@ AssamblerVisitor::emit_loop_cont()
 bool
 AssamblerVisitor::copy_dst(r600_bytecode_alu_dst& dst, const Register& d, bool write)
 {
-   if (write && d.sel() > g_clause_local_end && d.sel() != g_registers_unused) {
+   if (write && d.sel() > g_clause_local_end) {
       R600_ASM_ERR("shader_from_nir: Don't support more then 123 GPRs + 4 clause "
                    "local, but try using %d\n",
                    d.sel());
@@ -1198,11 +1193,18 @@ AssamblerVisitor::copy_dst(r600_bytecode_alu_dst& dst, const Register& d, bool w
       return false;
    }
 
-   dst.sel = d.sel() != g_registers_unused ? d.sel() : g_registers_end;
+   dst.sel = d.sel();
    dst.chan = d.chan();
 
    if (m_last_addr && m_last_addr->equal_to(d))
       m_last_addr = nullptr;
+
+   for (int i = 0; i < 2; ++i) {
+      /* Force emitting index register, if we didn't emit it yet, because
+       * the register value will change now */
+      if (dst.sel == m_bc->index_reg[i] && dst.chan == m_bc->index_reg_chan[i])
+         m_bc->index_loaded[i] = false;
+   }
 
    return true;
 }
@@ -1269,7 +1271,7 @@ void
 EncodeSourceVisitor::visit(const LocalArray& value)
 {
    (void)value;
-   UNREACHABLE("An array can't be a source register");
+   unreachable("An array can't be a source register");
 }
 
 void

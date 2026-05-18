@@ -39,7 +39,7 @@ uint32_t
 _mesa_unmarshal_GetActiveUniform(struct gl_context *ctx,
                                  const struct marshal_cmd_GetActiveUniform *restrict cmd)
 {
-   UNREACHABLE("never executed");
+   unreachable("never executed");
    return 0;
 }
 
@@ -83,7 +83,7 @@ uint32_t
 _mesa_unmarshal_GetUniformLocation(struct gl_context *ctx,
                                    const struct marshal_cmd_GetUniformLocation *restrict cmd)
 {
-   UNREACHABLE("never executed");
+   unreachable("never executed");
    return 0;
 }
 

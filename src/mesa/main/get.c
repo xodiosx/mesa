@@ -180,7 +180,6 @@ enum value_location {
    LOC_CONTEXT,
    LOC_ARRAY,
    LOC_TEXUNIT,
-   LOC_CAPS,
    LOC_CUSTOM
 };
 
@@ -214,7 +213,6 @@ enum value_extra {
    EXTRA_EXT_FB_NO_ATTACH_GS,
    EXTRA_EXT_ES_GS,
    EXTRA_EXT_PROVOKING_VERTEX_32,
-   EXTRA_EXT_TBO,
 };
 
 #define NO_EXTRA NULL
@@ -256,8 +254,6 @@ union value {
    LOC_CONTEXT, type, offsetof(struct gl_context, field)
 #define ARRAY_FIELD(field, type) \
    LOC_ARRAY, type, offsetof(struct gl_vertex_array_object, field)
-#define CAPS_FIELD(field, type) \
-   LOC_CAPS, type, offsetof(struct pipe_caps, field)
 #undef CONST /* already defined through windows.h */
 #define CONST(value) \
    LOC_CONTEXT, TYPE_CONST, value
@@ -298,10 +294,6 @@ union value {
 #define ARRAY_BOOL(field) ARRAY_FIELD(field, TYPE_BOOLEAN)
 #define ARRAY_UBYTE(field) ARRAY_FIELD(field, TYPE_UBYTE)
 #define ARRAY_SHORT(field) ARRAY_FIELD(field, TYPE_SHORT)
-
-/* pipe_caps fields */
-#define CAPS_UINT(field) CAPS_FIELD(field, TYPE_UINT)
-#define CAPS_BOOL(field) CAPS_FIELD(field, TYPE_BOOLEAN)
 
 #define EXT(f)					\
    offsetof(struct gl_extensions, f)
@@ -380,7 +372,7 @@ static const int extra_GLSL_130_es3_gpushader4[] = {
 };
 
 static const int extra_texture_buffer_object[] = {
-   EXTRA_EXT_TBO,
+   EXT(ARB_texture_buffer_object),
    EXTRA_END
 };
 
@@ -600,10 +592,6 @@ EXTRA_EXT(ARB_spirv_extensions);
 EXTRA_EXT(NV_viewport_swizzle);
 EXTRA_EXT(ARB_sparse_texture);
 EXTRA_EXT(KHR_shader_subgroup);
-EXTRA_EXT(OVR_multiview);
-EXTRA_EXT(NV_timeline_semaphore);
-EXTRA_EXT(EXT_mesh_shader);
-EXTRA_EXT(EXT_shader_pixel_local_storage);
 
 static const int extra_ARB_gl_spirv_or_es2_compat[] = {
    EXT(ARB_gl_spirv),
@@ -1040,12 +1028,6 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
             GLint i_bits =
                _mesa_get_format_bits(rb->Format, GL_TEXTURE_INTENSITY_SIZE);
 
-            /* Fix the case where some drivers may implement signed luminance
-             * as signed RGBA, which leads to reporting signed alpha.
-             */
-            if (rb->_BaseFormat == GL_LUMINANCE)
-               a_bits = 0;
-
             v->value_int_4[0] = r_bits + l_bits + i_bits > 0;
             v->value_int_4[1] = g_bits + l_bits + i_bits > 0;
             v->value_int_4[2] = b_bits + l_bits + i_bits > 0;
@@ -1277,7 +1259,7 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
       break;
    /* GL_EXT_textrue_integer */
    case GL_RGBA_INTEGER_MODE_EXT:
-      v->value_int = (ctx->DrawBuffer->_IntegerDrawBuffers != 0);
+      v->value_int = (ctx->DrawBuffer->_IntegerBuffers != 0);
       break;
    /* GL_ATI_meminfo & GL_NVX_gpu_memory_info */
    case GL_VBO_FREE_MEMORY_ATI:
@@ -1583,11 +1565,6 @@ check_extra(struct gl_context *ctx, const char *func, const struct value_desc *d
          if (_mesa_is_desktop_gl_compat(ctx) || version == 32)
             api_found = ctx->Extensions.EXT_provoking_vertex;
          break;
-      case EXTRA_EXT_TBO:
-         api_check = GL_TRUE;
-         if (_mesa_has_texture_buffer_object(ctx))
-            api_found = GL_TRUE;
-         break;
       case EXTRA_END:
          break;
       default: /* *e is a offset into the extension struct */
@@ -1701,9 +1678,6 @@ find_value(const char *func, GLenum pname, void **p, union value *v)
                   _mesa_enum_to_string(pname),
                   ctx->Texture.CurrentUnit);
       return &error_value;
-   case LOC_CAPS:
-      *p = ((char *) &ctx->screen->caps + d->offset);
-      return d;
    case LOC_CUSTOM:
       find_custom_value(ctx, d, v);
       *p = v;
@@ -2535,7 +2509,9 @@ tex_binding_to_index(const struct gl_context *ctx, GLenum binding)
          || _mesa_is_gles3(ctx)
          ? TEXTURE_2D_ARRAY_INDEX : -1;
    case GL_TEXTURE_BINDING_BUFFER:
-      return _mesa_has_texture_buffer_object(ctx) ? TEXTURE_BUFFER_INDEX : -1;
+      return (_mesa_has_ARB_texture_buffer_object(ctx) ||
+              _mesa_has_OES_texture_buffer(ctx)) ?
+             TEXTURE_BUFFER_INDEX : -1;
    case GL_TEXTURE_BINDING_CUBE_MAP_ARRAY:
       return _mesa_has_texture_cube_map_array(ctx)
          ? TEXTURE_CUBE_ARRAY_INDEX : -1;
@@ -3031,35 +3007,6 @@ find_value_indexed(const char *func, GLenum pname, GLuint index, union value *v)
       if (index >= ctx->Const.MaxViewports)
          goto invalid_value;
       v->value_int = ctx->ViewportArray[index].SwizzleW;
-      return TYPE_INT;
-   /* GL_EXT_mesh_shader */
-   case GL_MAX_TASK_WORK_GROUP_COUNT_EXT:
-      if (!ctx->Extensions.EXT_mesh_shader)
-         goto invalid_enum;
-      if (index >= 3)
-         goto invalid_value;
-      v->value_uint = ctx->screen->caps.mesh.max_task_work_group_count[index];
-      return TYPE_UINT;
-   case GL_MAX_MESH_WORK_GROUP_COUNT_EXT:
-      if (!ctx->Extensions.EXT_mesh_shader)
-         goto invalid_enum;
-      if (index >= 3)
-         goto invalid_value;
-      v->value_uint = ctx->screen->caps.mesh.max_mesh_work_group_count[index];
-      return TYPE_UINT;
-   case GL_MAX_TASK_WORK_GROUP_SIZE_EXT:
-      if (!ctx->Extensions.EXT_mesh_shader)
-         goto invalid_enum;
-      if (index >= 3)
-         goto invalid_value;
-      v->value_int = ctx->screen->caps.mesh.max_task_work_group_size[index];
-      return TYPE_INT;
-   case GL_MAX_MESH_WORK_GROUP_SIZE_EXT:
-      if (!ctx->Extensions.EXT_mesh_shader)
-         goto invalid_enum;
-      if (index >= 3)
-         goto invalid_value;
-      v->value_int = ctx->screen->caps.mesh.max_mesh_work_group_size[index];
       return TYPE_INT;
    }
 

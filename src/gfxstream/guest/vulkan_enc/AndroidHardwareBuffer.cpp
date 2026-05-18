@@ -67,15 +67,11 @@ VkResult getAndroidHardwareBufferPropertiesANDROID(
     gfxstream::Gralloc* grallocHelper, const AHardwareBuffer* buffer,
     VkAndroidHardwareBufferPropertiesANDROID* pProperties) {
     VkAndroidHardwareBufferFormatPropertiesANDROID* ahbFormatProps =
-        vk_find_struct(pProperties, ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_ANDROID);
+        vk_find_struct<VkAndroidHardwareBufferFormatPropertiesANDROID>(pProperties);
 
     const auto format = grallocHelper->getFormat(buffer);
     if (ahbFormatProps) {
         switch (format) {
-            case AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM:
-                ahbFormatProps->format = VK_FORMAT_B8G8R8A8_UNORM;
-                ahbFormatProps->externalFormat = DRM_FORMAT_ARGB8888;
-                break;
             case AHARDWAREBUFFER_FORMAT_R8_UNORM:
                 ahbFormatProps->format = VK_FORMAT_R8_UNORM;
                 ahbFormatProps->externalFormat = DRM_FORMAT_R8;
@@ -131,9 +127,6 @@ VkResult getAndroidHardwareBufferPropertiesANDROID(
             default:
                 ahbFormatProps->format = VK_FORMAT_UNDEFINED;
                 ahbFormatProps->externalFormat = DRM_FORMAT_INVALID;
-                mesa_loge("Unhandled AHB format:%u", format);
-                break;
-
         }
 
         // The formatFeatures member must include
@@ -190,7 +183,7 @@ VkResult getAndroidHardwareBufferPropertiesANDROID(
                 //  * V (CR) comes from the R-channel (after swizzle)
                 //
                 // See
-                // https://docs.vulkan.org/spec/latest/chapters/textures.html#textures-sampler-YCbCr-conversion
+                // https://www.khronos.org/registry/vulkan/specs/1.3-extensions/html/vkspec.html#textures-sampler-YCbCr-conversion
                 //
                 // To match the above, the guest needs to swizzle such that:
                 //

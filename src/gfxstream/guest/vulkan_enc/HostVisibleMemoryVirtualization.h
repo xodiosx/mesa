@@ -18,7 +18,9 @@ constexpr uint64_t kMegaByte = 1048576;
 // Some Windows drivers require a 64KB alignment for suballocated memory (b:152769369) for YUV
 // images.
 constexpr uint64_t kLargestPageSize = 65536;
+
 constexpr uint64_t kDefaultHostMemBlockSize = 16 * kMegaByte;  // 16 mb
+constexpr uint64_t kHostVisibleHeapSize = 512 * kMegaByte;     // 512 mb
 
 namespace gfxstream {
 namespace vk {
@@ -40,7 +42,7 @@ class CoherentMemory {
     VkDeviceMemory getDeviceMemory() const;
 
     bool subAllocate(uint64_t size, uint8_t** ptr, uint64_t& offset);
-    bool release(uint64_t offset);
+    bool release(uint8_t* ptr);
 
    private:
     CoherentMemory(CoherentMemory const&);

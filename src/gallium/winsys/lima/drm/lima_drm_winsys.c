@@ -30,9 +30,9 @@
 #include "lima/lima_screen.h"
 
 struct pipe_screen *
-lima_drm_screen_create(int fd, const struct pipe_screen_config *config)
+lima_drm_screen_create(int fd)
 {
-   return u_pipe_screen_lookup_or_create(os_dupfd_cloexec(fd), config,
+   return u_pipe_screen_lookup_or_create(os_dupfd_cloexec(fd), NULL,
                                          NULL, lima_screen_create);
 }
 

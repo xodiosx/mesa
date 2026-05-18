@@ -46,10 +46,12 @@ for asm_file in args.gen_folder.glob('*.asm'):
         command = elk_asm + [
             '--type', 'hex',
             '--gen', args.gen_name,
-            asm_file.as_posix()
+            asm_file
         ]
-        stdout = subprocess.check_output(command, timeout=1).decode()
-        lines_after = stdout.splitlines(keepends=True)
+        with subprocess.Popen(command,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL) as cmd:
+            lines_after = [line.decode('ascii') for line in cmd.stdout.readlines()]
     except OSError as e:
         if e.errno == errno.ENOEXEC:
             print('Skipping due to inability to run host binaries.',

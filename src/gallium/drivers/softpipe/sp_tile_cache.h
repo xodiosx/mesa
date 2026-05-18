@@ -82,7 +82,7 @@ struct softpipe_cached_tile
 struct softpipe_tile_cache
 {
    struct pipe_context *pipe;
-   struct pipe_surface surface;  /**< the surface we're caching */
+   struct pipe_surface *surface;  /**< the surface we're caching */
    struct pipe_transfer **transfer;
    void **transfer_map;
    int num_maps;
@@ -110,7 +110,10 @@ sp_destroy_tile_cache(struct softpipe_tile_cache *tc);
 
 extern void
 sp_tile_cache_set_surface(struct softpipe_tile_cache *tc,
-                          const struct pipe_surface *sps);
+                          struct pipe_surface *sps);
+
+extern struct pipe_surface *
+sp_tile_cache_get_surface(struct softpipe_tile_cache *tc);
 
 extern void
 sp_flush_tile_cache(struct softpipe_tile_cache *tc);
@@ -156,3 +159,4 @@ sp_get_cached_tile(struct softpipe_tile_cache *tc,
 
 
 #endif /* SP_TILE_CACHE_H */
+

@@ -100,9 +100,6 @@
                                  VA_ENC_PACKED_HEADER_MISC | \
                                  VA_ENC_PACKED_HEADER_RAW_DATA)
 
-/* vaCreateContext flags */
-#define VL_VA_CREATE_CONTEXT_PROTECTED (1 << 16)
-
 static inline enum pipe_video_chroma_format
 ChromaToPipe(int format)
 {
@@ -281,9 +278,6 @@ PipeToProfile(enum pipe_video_profile profile)
    case PIPE_VIDEO_PROFILE_HEVC_MAIN_12:
    case PIPE_VIDEO_PROFILE_HEVC_MAIN_STILL:
    case PIPE_VIDEO_PROFILE_HEVC_MAIN_444:
-   case PIPE_VIDEO_PROFILE_HEVC_MAIN10_444:
-   case PIPE_VIDEO_PROFILE_HEVC_MAIN_422:
-   case PIPE_VIDEO_PROFILE_HEVC_MAIN10_422:
    case PIPE_VIDEO_PROFILE_UNKNOWN:
       return VAProfileNone;
    default:
@@ -346,7 +340,6 @@ ProfileToPipe(VAProfile profile)
 typedef struct {
    struct vl_screen *vscreen;
    struct pipe_context *pipe;
-   struct pipe_context *pipe2;
    struct handle_table *htab;
    struct vl_compositor compositor;
    struct vl_compositor_state cstate;
@@ -355,6 +348,9 @@ typedef struct {
    char vendor_string[256];
 
    bool has_external_handles;
+
+   int efc_count;
+   void *last_efc_surface;
 } vlVaDriver;
 
 typedef struct {
@@ -380,6 +376,7 @@ typedef struct {
    VABufferInfo export_state;
    unsigned int coded_size;
    struct pipe_enc_feedback_metadata extended_metadata;
+   struct pipe_video_buffer *derived_image_buffer;
    void *feedback;
    struct vlVaContext *ctx;
    struct vlVaSurface *coded_surf;
@@ -402,12 +399,8 @@ typedef struct vlVaContext {
       struct pipe_h264_enc_picture_desc h264enc;
       struct pipe_h265_enc_picture_desc h265enc;
       struct pipe_av1_enc_picture_desc av1enc;
+      struct pipe_vpp_desc vidproc;
    } desc;
-
-   struct {
-      struct pipe_vpp_desc vpp;
-      struct vlVaSurface *dst_surface;
-   } proc;
 
    struct {
       unsigned long long int frame_num;
@@ -428,17 +421,19 @@ typedef struct vlVaContext {
    int target_id;
    int gop_coeff;
    bool needs_begin_frame;
+   void *blit_cs;
    int packed_header_type;
    bool packed_header_emulation_bytes;
    struct set *surfaces;
    struct set *buffers;
    unsigned slice_data_offset;
    bool have_slice_params;
-   mtx_t mutex;
 
    struct {
-      struct util_dynarray buffers;
-      struct util_dynarray sizes;
+      void **buffers;
+      unsigned *sizes;
+      unsigned num_buffers;
+      unsigned allocated_size;
    } bs;
 } vlVaContext;
 
@@ -446,6 +441,7 @@ typedef struct {
    enum pipe_video_profile profile;
    enum pipe_video_entrypoint entrypoint;
    enum pipe_h2645_enc_rate_control_method rc;
+   unsigned int rt_format;
 } vlVaConfig;
 
 typedef struct vlVaSurface {
@@ -453,12 +449,10 @@ typedef struct vlVaSurface {
    struct util_dynarray subpics; /* vlVaSubpicture */
    vlVaContext *ctx;
    vlVaBuffer *coded_buf;
-   struct pipe_fence_handle *fence; /* pipe_video_codec fence */
-   struct pipe_fence_handle *pipe_fence; /* pipe_context fence */
+   bool full_range;
+   struct pipe_fence_handle *fence;
+   struct vlVaSurface *efc_surface; /* input surface for EFC */
    bool is_dpb;
-   unsigned int strides[3];
-   unsigned int offsets[3];
-   unsigned int data_size;
 } vlVaSurface;
 
 typedef struct {
@@ -577,15 +571,11 @@ VAStatus vlVaHandleVAProcPipelineParameterBufferType(vlVaDriver *drv, vlVaContex
 VAStatus vlVaHandleSurfaceAllocate(vlVaDriver *drv, vlVaSurface *surface, struct pipe_video_buffer *templat,
                                    const uint64_t *modifiers, unsigned int modifiers_count);
 struct pipe_video_buffer *vlVaGetSurfaceBuffer(vlVaDriver *drv, vlVaSurface *surface);
-void vlVaSurfaceFlush(vlVaDriver *drv, vlVaSurface *surf);
 void vlVaAddRawHeader(struct util_dynarray *headers, uint8_t type, uint32_t size, uint8_t *buf,
                       bool is_slice, uint32_t emulation_bytes_start);
 void vlVaGetBufferFeedback(vlVaBuffer *buf);
 void vlVaSetSurfaceContext(vlVaDriver *drv, vlVaSurface *surf, vlVaContext *context);
-VAStatus vlVaPostProcCompositor(vlVaDriver *drv, struct pipe_video_buffer *src, struct pipe_video_buffer *dst,
-                                enum vl_compositor_deinterlace deinterlace, struct pipe_vpp_desc *param);
 void vlVaGetReferenceFrame(vlVaDriver *drv, VASurfaceID surface_id, struct pipe_video_buffer **ref_frame);
-VAStatus vlVaHandleDecBufferType(vlVaDriver *drv, vlVaContext *context, vlVaBuffer *buf);
 void vlVaHandlePictureParameterBufferMPEG12(vlVaDriver *drv, vlVaContext *context, vlVaBuffer *buf);
 void vlVaHandleIQMatrixBufferMPEG12(vlVaContext *context, vlVaBuffer *buf);
 void vlVaHandleSliceParameterBufferMPEG12(vlVaContext *context, vlVaBuffer *buf);
@@ -609,10 +599,8 @@ void vlVaHandleSliceParameterBufferMJPEG(vlVaContext *context, vlVaBuffer *buf);
 void vlVaHandlePictureParameterBufferVP9(vlVaDriver *drv, vlVaContext *context, vlVaBuffer *buf);
 void vlVaHandleSliceParameterBufferVP9(vlVaContext *context, vlVaBuffer *buf);
 void vlVaDecoderVP9BitstreamHeader(vlVaContext *context, vlVaBuffer *buf);
-void vlVaDecoderHEVCBitstreamHeader(vlVaContext *context, vlVaBuffer *buf);
-VAStatus vlVaHandlePictureParameterBufferAV1(vlVaDriver *drv, vlVaContext *context, vlVaBuffer *buf);
+void vlVaHandlePictureParameterBufferAV1(vlVaDriver *drv, vlVaContext *context, vlVaBuffer *buf);
 void vlVaHandleSliceParameterBufferAV1(vlVaContext *context, vlVaBuffer *buf);
-VAStatus vlVaHandleEncBufferType(vlVaDriver *drv, vlVaContext *context, vlVaBuffer *buf);
 void vlVaHandleVAEncMiscParameterTypeQualityLevel(struct pipe_enc_quality_modes *p, vlVaQualityBits *in);
 VAStatus vlVaHandleVAEncPictureParameterBufferTypeH264(vlVaDriver *drv, vlVaContext *context, vlVaBuffer *buf);
 VAStatus vlVaHandleVAEncSliceParameterBufferTypeH264(vlVaDriver *drv, vlVaContext *context, vlVaBuffer *buf);

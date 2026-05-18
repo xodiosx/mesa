@@ -90,8 +90,9 @@ hk_CmdSetEvent2(VkCommandBuffer commandBuffer, VkEvent _event,
 {
    VK_FROM_HANDLE(hk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(hk_event, event, _event);
+   struct hk_device *dev = hk_cmd_buffer_device(cmd);
 
-   perf_debug(cmd, "Set event");
+   perf_debug(dev, "Set event");
    hk_cmd_buffer_end_compute(cmd);
    hk_cmd_buffer_end_graphics(cmd);
    hk_queue_write(cmd, event->bo->va->addr, VK_EVENT_SET, false);
@@ -103,8 +104,9 @@ hk_CmdResetEvent2(VkCommandBuffer commandBuffer, VkEvent _event,
 {
    VK_FROM_HANDLE(hk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(hk_event, event, _event);
+   struct hk_device *dev = hk_cmd_buffer_device(cmd);
 
-   perf_debug(cmd, "Reset event");
+   perf_debug(dev, "Reset event");
    hk_cmd_buffer_end_compute(cmd);
    hk_cmd_buffer_end_graphics(cmd);
    hk_queue_write(cmd, event->bo->va->addr, VK_EVENT_RESET, false);
@@ -116,7 +118,9 @@ hk_CmdWaitEvents2(VkCommandBuffer commandBuffer, uint32_t eventCount,
                   const VkDependencyInfo *pDependencyInfos)
 {
    VK_FROM_HANDLE(hk_cmd_buffer, cmd, commandBuffer);
-   perf_debug(cmd, "Wait events");
+   struct hk_device *dev = hk_cmd_buffer_device(cmd);
+
+   perf_debug(dev, "Wait events");
 
    /* The big hammer. Need to check if this is actually needed.
     *

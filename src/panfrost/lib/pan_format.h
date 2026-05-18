@@ -32,132 +32,20 @@
 
 #include "util/format/u_format.h"
 
-#include "drm-uapi/drm_fourcc.h"
-
-/*
- * List of supported modifiers, in descending order of preference. AFBC is
- * faster than u-interleaved tiling which is faster than linear. Within AFBC,
- * enabling the YUV-like transform is typically a win where possible.
- * AFRC is only used if explicitly asked for (only for RGB formats).
- * Similarly MTK 16L32 is only used if explicitly asked for.
- */
-#define PAN_SUPPORTED_MODIFIERS(__name)                                        \
-   static const uint64_t __name[] = {                                          \
-      DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 |                \
-                              AFBC_FORMAT_MOD_SPARSE | AFBC_FORMAT_MOD_SPLIT), \
-      DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 |                \
-                              AFBC_FORMAT_MOD_SPARSE | AFBC_FORMAT_MOD_SPLIT | \
-                              AFBC_FORMAT_MOD_YTR),                            \
-                                                                               \
-      DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |               \
-                              AFBC_FORMAT_MOD_TILED | AFBC_FORMAT_MOD_SC |     \
-                              AFBC_FORMAT_MOD_SPARSE | AFBC_FORMAT_MOD_YTR),   \
-                                                                               \
-      DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |               \
-                              AFBC_FORMAT_MOD_TILED | AFBC_FORMAT_MOD_SC |     \
-                              AFBC_FORMAT_MOD_SPARSE),                         \
-                                                                               \
-      DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |               \
-                              AFBC_FORMAT_MOD_SPARSE | AFBC_FORMAT_MOD_YTR),   \
-                                                                               \
-      DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |               \
-                              AFBC_FORMAT_MOD_SPARSE),                         \
-                                                                               \
-      DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED,                            \
-      DRM_FORMAT_MOD_LINEAR,                                                   \
-                                                                               \
-      DRM_FORMAT_MOD_ARM_AFRC(                                                 \
-         AFRC_FORMAT_MOD_CU_SIZE_P0(AFRC_FORMAT_MOD_CU_SIZE_16)),              \
-      DRM_FORMAT_MOD_ARM_AFRC(                                                 \
-         AFRC_FORMAT_MOD_CU_SIZE_P0(AFRC_FORMAT_MOD_CU_SIZE_24)),              \
-      DRM_FORMAT_MOD_ARM_AFRC(                                                 \
-         AFRC_FORMAT_MOD_CU_SIZE_P0(AFRC_FORMAT_MOD_CU_SIZE_32)),              \
-      DRM_FORMAT_MOD_ARM_AFRC(                                                 \
-         AFRC_FORMAT_MOD_CU_SIZE_P0(AFRC_FORMAT_MOD_CU_SIZE_16) |              \
-         AFRC_FORMAT_MOD_LAYOUT_SCAN),                                         \
-      DRM_FORMAT_MOD_ARM_AFRC(                                                 \
-         AFRC_FORMAT_MOD_CU_SIZE_P0(AFRC_FORMAT_MOD_CU_SIZE_24) |              \
-         AFRC_FORMAT_MOD_LAYOUT_SCAN),                                         \
-      DRM_FORMAT_MOD_ARM_AFRC(                                                 \
-         AFRC_FORMAT_MOD_CU_SIZE_P0(AFRC_FORMAT_MOD_CU_SIZE_32) |              \
-         AFRC_FORMAT_MOD_LAYOUT_SCAN),                                         \
-   }
-
-/* DRM modifier helper */
-
-#define drm_is_afbc(mod)                                                       \
-   ((mod >> 52) ==                                                             \
-    (DRM_FORMAT_MOD_ARM_TYPE_AFBC | (DRM_FORMAT_MOD_VENDOR_ARM << 4)))
-
-#define drm_is_afrc(mod)                                                       \
-   ((mod >> 52) ==                                                             \
-    (DRM_FORMAT_MOD_ARM_TYPE_AFRC | (DRM_FORMAT_MOD_VENDOR_ARM << 4)))
-
-static inline bool
-pan_u_tiled_or_linear_supports_format(enum pipe_format format)
-{
-   switch (format) {
-   case PIPE_FORMAT_R8G8B8_420_UNORM_PACKED:
-   case PIPE_FORMAT_R10G10B10_420_UNORM_PACKED:
-      return false;
-
-   default:
-      return true;
-   }
-}
-
 /* Formats */
-
-static inline unsigned
-pan_format_get_plane_blocksize(enum pipe_format format, unsigned plane_idx)
-{
-   switch (format) {
-   case PIPE_FORMAT_R8_G8B8_420_UNORM:
-   case PIPE_FORMAT_R8_B8G8_420_UNORM:
-   case PIPE_FORMAT_R8_G8B8_422_UNORM:
-   case PIPE_FORMAT_R8_B8G8_422_UNORM:
-      return plane_idx ? 2 : 1;
-   case PIPE_FORMAT_R10_G10B10_420_UNORM:
-   case PIPE_FORMAT_R10_G10B10_422_UNORM:
-      return plane_idx ? 10 : 5;
-   case PIPE_FORMAT_R8_G8_B8_420_UNORM:
-   case PIPE_FORMAT_R8_B8_G8_420_UNORM:
-      return 1;
-   default:
-      assert(util_format_get_num_planes(format) == 1);
-      return util_format_get_blocksize(format);
-   }
-}
-
-static inline unsigned
-pan_format_tib_size(enum pipe_format format, bool internal)
-{
-   if (internal && !util_format_is_float(format)) {
-      /* Blendable UNORM and sRGB formats are always 32-bits in the tile
-       * buffer, extra bits are used as padding or to dither */
-      return 4;
-   } else {
-      /* Non-blendable and float formats are raw, rounded up to the nearest
-       * power-of-two size */
-      unsigned bytes = util_format_get_blocksize(format);
-      return util_next_power_of_two(bytes);
-   }
-}
 
 typedef uint32_t mali_pixel_format;
 
 /* pan bind flags */
-#define PAN_BIND_DEPTH_STENCIL BITFIELD_BIT(0)
-#define PAN_BIND_RENDER_TARGET BITFIELD_BIT(1)
-#define PAN_BIND_SAMPLER_VIEW  BITFIELD_BIT(2)
-#define PAN_BIND_VERTEX_BUFFER BITFIELD_BIT(3)
-#define PAN_BIND_STORAGE_IMAGE BITFIELD_BIT(4)
-#define PAN_BIND_TEXEL_BUFFER  BITFIELD_BIT(5)
+#define PAN_BIND_DEPTH_STENCIL (1 << 0)
+#define PAN_BIND_RENDER_TARGET (1 << 1)
+#define PAN_BIND_SAMPLER_VIEW  (1 << 3)
+#define PAN_BIND_VERTEX_BUFFER (1 << 4)
 
-struct pan_format {
-   uint32_t hw          : 21;
+struct panfrost_format {
+   uint32_t hw : 22;
    uint32_t texfeat_bit : 5;
-   uint32_t bind        : 6;
+   unsigned bind;
 };
 
 struct pan_blendable_format {
@@ -168,37 +56,29 @@ struct pan_blendable_format {
    mali_pixel_format bifrost[2];
 };
 
-#define pan_blendable_formats_v4 pan_blendable_formats_v5
+#define panfrost_blendable_formats_v4 panfrost_blendable_formats_v5
 extern const struct pan_blendable_format
-   pan_blendable_formats_v5[PIPE_FORMAT_COUNT];
+   panfrost_blendable_formats_v5[PIPE_FORMAT_COUNT];
 extern const struct pan_blendable_format
-   pan_blendable_formats_v6[PIPE_FORMAT_COUNT];
+   panfrost_blendable_formats_v6[PIPE_FORMAT_COUNT];
 extern const struct pan_blendable_format
-   pan_blendable_formats_v7[PIPE_FORMAT_COUNT];
+   panfrost_blendable_formats_v7[PIPE_FORMAT_COUNT];
 extern const struct pan_blendable_format
-   pan_blendable_formats_v9[PIPE_FORMAT_COUNT];
+   panfrost_blendable_formats_v9[PIPE_FORMAT_COUNT];
 extern const struct pan_blendable_format
-   pan_blendable_formats_v10[PIPE_FORMAT_COUNT];
-extern const struct pan_blendable_format
-   pan_blendable_formats_v12[PIPE_FORMAT_COUNT];
-extern const struct pan_blendable_format
-   pan_blendable_formats_v13[PIPE_FORMAT_COUNT];
-
-uint8_t pan_raw_format_mask_midgard(enum pipe_format *formats);
+   panfrost_blendable_formats_v10[PIPE_FORMAT_COUNT];
 
 static inline const struct pan_blendable_format *
-pan_blendable_format_table(unsigned arch)
+panfrost_blendable_format_table(unsigned arch)
 {
    switch (arch) {
-#define FMT_TABLE(x) case x: return pan_blendable_formats_v ## x
+#define FMT_TABLE(x) case x: return panfrost_blendable_formats_v ## x
    FMT_TABLE(4);
    FMT_TABLE(5);
    FMT_TABLE(6);
    FMT_TABLE(7);
    FMT_TABLE(9);
    FMT_TABLE(10);
-   FMT_TABLE(12);
-   FMT_TABLE(13);
 #undef FMT_TABLE
    default:
       assert(!"Unsupported architecture");
@@ -206,28 +86,24 @@ pan_blendable_format_table(unsigned arch)
    }
 }
 
-#define pan_pipe_format_v4 pan_pipe_format_v5
-extern const struct pan_format pan_pipe_format_v5[PIPE_FORMAT_COUNT];
-extern const struct pan_format pan_pipe_format_v6[PIPE_FORMAT_COUNT];
-extern const struct pan_format pan_pipe_format_v7[PIPE_FORMAT_COUNT];
-extern const struct pan_format pan_pipe_format_v9[PIPE_FORMAT_COUNT];
-extern const struct pan_format pan_pipe_format_v10[PIPE_FORMAT_COUNT];
-extern const struct pan_format pan_pipe_format_v12[PIPE_FORMAT_COUNT];
-extern const struct pan_format pan_pipe_format_v13[PIPE_FORMAT_COUNT];
+#define panfrost_pipe_format_v4 panfrost_pipe_format_v5
+extern const struct panfrost_format panfrost_pipe_format_v5[PIPE_FORMAT_COUNT];
+extern const struct panfrost_format panfrost_pipe_format_v6[PIPE_FORMAT_COUNT];
+extern const struct panfrost_format panfrost_pipe_format_v7[PIPE_FORMAT_COUNT];
+extern const struct panfrost_format panfrost_pipe_format_v9[PIPE_FORMAT_COUNT];
+extern const struct panfrost_format panfrost_pipe_format_v10[PIPE_FORMAT_COUNT];
 
-static inline const struct pan_format *
-pan_format_table(unsigned arch)
+static inline const struct panfrost_format *
+panfrost_format_table(unsigned arch)
 {
    switch (arch) {
-#define FMT_TABLE(x) case x: return pan_pipe_format_v ## x
+#define FMT_TABLE(x) case x: return panfrost_pipe_format_v ## x
    FMT_TABLE(4);
    FMT_TABLE(5);
    FMT_TABLE(6);
    FMT_TABLE(7);
    FMT_TABLE(9);
    FMT_TABLE(10);
-   FMT_TABLE(12);
-   FMT_TABLE(13);
 #undef FMT_TABLE
    default:
       assert(!"Unsupported architecture");
@@ -242,7 +118,7 @@ pan_format_table(unsigned arch)
     ((MALI_CHANNEL_##B) << 6) | ((MALI_CHANNEL_##A) << 9))
 
 static inline unsigned
-pan_get_default_swizzle(unsigned components)
+panfrost_get_default_swizzle(unsigned components)
 {
    switch (components) {
    case 1:
@@ -254,7 +130,7 @@ pan_get_default_swizzle(unsigned components)
    case 4:
       return PAN_V6_SWIZZLE(R, G, B, A);
    default:
-      UNREACHABLE("Invalid number of components");
+      unreachable("Invalid number of components");
    }
 }
 
@@ -316,10 +192,7 @@ struct pan_decomposed_swizzle
 
 #endif
 
-#define MALI_EXTRACT_INDEX(pixfmt) (((pixfmt) >> 12) & 0xFF)
-
-static inline bool
-pan_format_is_yuv(enum pipe_format f)
+static inline bool panfrost_format_is_yuv(enum pipe_format f)
 {
    enum util_format_layout layout = util_format_description(f)->layout;
 
@@ -330,28 +203,29 @@ pan_format_is_yuv(enum pipe_format f)
 }
 
 #ifdef PAN_ARCH
-static inline const struct pan_format *
-GENX(pan_format_from_pipe_format)(enum pipe_format f)
+static inline const struct panfrost_format *
+GENX(panfrost_format_from_pipe_format)(enum pipe_format f)
 {
-   return &GENX(pan_pipe_format)[f];
+   return &GENX(panfrost_pipe_format)[f];
 }
 
 static inline const struct pan_blendable_format *
-GENX(pan_blendable_format_from_pipe_format)(enum pipe_format f)
+GENX(panfrost_blendable_format_from_pipe_format)(enum pipe_format f)
 {
-   return &GENX(pan_blendable_formats)[f];
+   return &GENX(panfrost_blendable_formats)[f];
 }
 
 #if PAN_ARCH >= 6
 static inline unsigned
-GENX(pan_dithered_format_from_pipe_format)(enum pipe_format f, bool dithered)
+GENX(panfrost_dithered_format_from_pipe_format)(enum pipe_format f, bool dithered)
 {
-   mali_pixel_format pixfmt = GENX(pan_blendable_formats)[f].bifrost[dithered];
+   mali_pixel_format pixfmt =
+      GENX(panfrost_blendable_formats)[f].bifrost[dithered];
 
    /* Formats requiring blend shaders are stored raw in the tilebuffer and will
     * have 0 as their pixel format. Assumes dithering is set, I don't know of a
     * case when it makes sense to turn off dithering. */
-   return pixfmt ?: GENX(pan_format_from_pipe_format)(f)->hw;
+   return pixfmt ?: GENX(panfrost_format_from_pipe_format)(f)->hw;
 }
 #endif
 #endif

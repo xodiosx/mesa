@@ -155,7 +155,6 @@ struct vk_pipeline_cache {
    VkPipelineCacheCreateFlags flags;
    bool weak_ref;
    bool skip_disk_cache;
-   struct disk_cache *disk_cache;
 
    struct vk_pipeline_cache_header header;
 
@@ -199,9 +198,6 @@ struct vk_pipeline_cache_create_info {
 
    /** If true, do not attempt to use the disk cache */
    bool skip_disk_cache;
-
-   /** If non-NULL, use this disk cache object instead of the default one. */
-   struct disk_cache *disk_cache;
 };
 
 struct vk_pipeline_cache *

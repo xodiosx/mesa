@@ -125,8 +125,8 @@ update_swtnl_draw(struct svga_context *svga, uint64_t dirty)
     */
    if (dirty & SVGA_NEW_FRAME_BUFFER)
       draw_set_zs_format(svga->swtnl.draw,
-         (svga->curr.framebuffer.base.zsbuf.texture) ?
-             svga->curr.framebuffer.base.zsbuf.format : PIPE_FORMAT_NONE);
+         (svga->curr.framebuffer.zsbuf) ?
+             svga->curr.framebuffer.zsbuf->format : PIPE_FORMAT_NONE);
 
    SVGA_STATS_TIME_POP(svga_sws(svga));
    return PIPE_OK;
@@ -272,7 +272,6 @@ svga_swtnl_update_vdecl(struct svga_context *svga)
          break;
       case TGSI_SEMANTIC_POSITION:
       case TGSI_SEMANTIC_FACE:
-      case TGSI_SEMANTIC_PRIMID:
          /* generated internally, not a vertex shader output */
          break;
       default:

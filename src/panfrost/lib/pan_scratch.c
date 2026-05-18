@@ -19,6 +19,9 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Authors:
+ *   Alyssa Rosenzweig <alyssa.rosenzweig@collabora.com>
  */
 
 #include "util/macros.h"
@@ -61,7 +64,7 @@
 /* Computes log_stack_size = log2(ceil(s / 16)) */
 
 unsigned
-pan_get_stack_shift(unsigned stack_size)
+panfrost_get_stack_shift(unsigned stack_size)
 {
    if (stack_size)
       return util_logbase2_ceil(DIV_ROUND_UP(stack_size, 16));
@@ -72,8 +75,8 @@ pan_get_stack_shift(unsigned stack_size)
 /* Computes the aligned stack size given the shift and thread count. */
 
 unsigned
-pan_get_total_stack_size(unsigned thread_size, unsigned threads_per_core,
-                         unsigned core_id_range)
+panfrost_get_total_stack_size(unsigned thread_size, unsigned threads_per_core,
+                              unsigned core_id_range)
 {
    unsigned size_per_thread =
       (thread_size == 0) ? 0

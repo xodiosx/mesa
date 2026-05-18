@@ -14,6 +14,7 @@
 #include "radv_amdgpu_bo.h"
 #include "radv_debug.h"
 
+#include <amdgpu.h>
 #include <inttypes.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -35,12 +36,10 @@ radv_amdgpu_bo_va_op(struct radv_amdgpu_winsys *ws, uint32_t bo_handle, uint64_t
                      uint32_t bo_flags, uint64_t internal_flags, uint32_t ops)
 {
    uint64_t flags = internal_flags;
-   int r;
-
    if (bo_handle) {
       flags = AMDGPU_VM_PAGE_READABLE | AMDGPU_VM_PAGE_EXECUTABLE;
 
-      if ((bo_flags & RADEON_FLAG_GL2_BYPASS) && ws->info.gfx_level >= GFX9)
+      if ((bo_flags & RADEON_FLAG_VA_UNCACHED) && ws->info.gfx_level >= GFX9)
          flags |= AMDGPU_VM_MTYPE_UC;
 
       if (!(bo_flags & RADEON_FLAG_READ_ONLY))
@@ -49,35 +48,7 @@ radv_amdgpu_bo_va_op(struct radv_amdgpu_winsys *ws, uint32_t bo_handle, uint64_t
 
    size = align64(size, getpagesize());
 
-   if (bo_flags & RADEON_FLAG_VM_UPDATE_WAIT) {
-      /* Wait for VM MAP updates when requested instead of delaying the updates at submit time.
-       * This is a workaround to mitigate application bugs like use-before-alloc. Note that there is
-       * still a very short period of time where the submit could start before the VM MAP updates
-       * are actually done but this is deep UB territory. Also the BO VA will be only visible to the
-       * application after VM updates are done, so it should be safe in most scenarios.
-       */
-      assert(ops == AMDGPU_VA_OP_MAP);
-
-      simple_mtx_lock(&ws->vm_ioctl_lock);
-
-      uint64_t vm_timeline_point = ++ws->vm_timeline_seq_num;
-
-      r = ac_drm_bo_va_op_raw2(ws->dev, bo_handle, offset, size, addr, flags, ops, ws->vm_timeline_syncobj,
-                               vm_timeline_point, 0, 0);
-
-      simple_mtx_unlock(&ws->vm_ioctl_lock);
-
-      if (r)
-         return r;
-
-      r = ac_drm_cs_syncobj_timeline_wait(ws->dev, &ws->vm_timeline_syncobj, &vm_timeline_point, 1, INT64_MAX,
-                                          DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL | DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT,
-                                          NULL);
-   } else {
-      r = ac_drm_bo_va_op_raw(ws->dev, bo_handle, offset, size, addr, flags, ops);
-   }
-
-   return r;
+   return ac_drm_bo_va_op_raw(ws->fd, bo_handle, offset, size, addr, flags, ops);
 }
 
 static int
@@ -126,102 +97,29 @@ radv_amdgpu_winsys_rebuild_bo_list(struct radv_amdgpu_winsys_bo *bo)
    return VK_SUCCESS;
 }
 
-static uint64_t
-radv_amdgpu_canonicalize_va(uint64_t va)
-{
-   /* Would be less hardcoded to use addr32_hi (0xffff8000) to generate a mask,
-    * but there are confusing differences between page fault reports from kernel where
-    * it seems to report the top 48 bits, where addr32_hi has 47-bits. */
-   return va & ((1ull << 48) - 1);
-}
-
-static uint64_t
-radv_amdgpu_bo_va_size(uint64_t bo_size, uint32_t flags)
-{
-   if (flags & RADEON_FLAG_VM_PAD_1PAGE) {
-      const uint64_t va_padding = 4096;
-      return align64(bo_size, 4096) + va_padding;
-   }
-
-   return bo_size;
-}
-
 static void
-radv_amdgpu_log_va_op(struct radv_amdgpu_winsys *ws, struct radv_amdgpu_winsys_bo *bo, uint64_t offset, uint64_t size,
+radv_amdgpu_log_va_op(struct radv_amdgpu_winsys *ws,
+                      struct radv_amdgpu_winsys_bo *bo, uint64_t offset, uint64_t size,
                       uint64_t virtual_va)
 {
-   const uint64_t timestamp = os_time_get_nano();
-   uint64_t mapped_va = bo ? (bo->base.va + offset) : 0;
+   struct radv_amdgpu_winsys_bo_log *bo_log = NULL;
 
-   if (ws->debug_log_bos) {
-      struct radv_amdgpu_winsys_bo_log *bo_log = NULL;
+   if (!ws->debug_log_bos)
+      return;
 
-      bo_log = calloc(1, sizeof(*bo_log));
-      if (!bo_log)
-         return;
+   bo_log = calloc(1, sizeof(*bo_log));
+   if (!bo_log)
+      return;
 
-      bo_log->va = virtual_va;
-      bo_log->size = size;
-      bo_log->timestamp = timestamp;
-      bo_log->virtual_mapping = 1;
-      bo_log->mapped_va = mapped_va;
+   bo_log->va = virtual_va;
+   bo_log->size = size;
+   bo_log->timestamp = os_time_get_nano();
+   bo_log->virtual_mapping = 1;
+   bo_log->mapped_va = bo ? (bo->base.va + offset) : 0;
 
-      u_rwlock_wrlock(&ws->log_bo_list_lock);
-      list_addtail(&bo_log->list, &ws->log_bo_list);
-      u_rwlock_wrunlock(&ws->log_bo_list_lock);
-   }
-
-   if (ws->bo_history_logfile) {
-      fprintf(ws->bo_history_logfile, "timestamp=%llu, VA=%.16llx-%.16llx, mapped_to=%.16llx\n", (long long)timestamp,
-              (long long)radv_amdgpu_canonicalize_va(virtual_va),
-              (long long)radv_amdgpu_canonicalize_va(virtual_va + size),
-              (long long)radv_amdgpu_canonicalize_va(mapped_va));
-      fflush(ws->bo_history_logfile);
-   }
-}
-
-static int
-radv_amdgpu_virtual_bo_init_mapping(struct radv_amdgpu_winsys *ws, struct radv_amdgpu_winsys_bo *bo, uint64_t size)
-{
-
-   return radv_amdgpu_bo_va_op(ws, 0, 0, size, bo->base.va, 0, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_MAP);
-}
-
-static int
-radv_amdgpu_virtual_bo_clear_mapping(struct radv_amdgpu_winsys *ws, struct radv_amdgpu_winsys_bo *bo)
-{
-   const uint64_t va_size = radv_amdgpu_bo_va_size(bo->base.size, bo->flags);
-   return radv_amdgpu_bo_va_op(ws, 0, 0, va_size, bo->base.va, 0, 0, AMDGPU_VA_OP_CLEAR);
-}
-
-static int
-radv_amdgpu_virtual_bo_map(struct radv_amdgpu_winsys *ws, struct radv_amdgpu_winsys_bo *parent, uint64_t offset,
-                           uint64_t size, struct radv_amdgpu_winsys_bo *bo, uint64_t bo_offset)
-{
-   int r;
-
-   r = radv_amdgpu_bo_va_op(ws, bo->bo_handle, bo_offset, size, parent->base.va + offset, 0, 0, AMDGPU_VA_OP_REPLACE);
-   if (r)
-      return r;
-
-   radv_amdgpu_log_va_op(ws, bo, bo_offset, size, parent->base.va + offset);
-
-   return r;
-}
-
-static int
-radv_amdgpu_virtual_bo_unmap(struct radv_amdgpu_winsys *ws, struct radv_amdgpu_winsys_bo *parent, uint64_t offset,
-                             uint64_t size)
-{
-   int r;
-
-   r = radv_amdgpu_bo_va_op(ws, 0, 0, size, parent->base.va + offset, 0, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_REPLACE);
-   if (r)
-      return r;
-
-   radv_amdgpu_log_va_op(ws, NULL, 0, size, parent->base.va + offset);
-
-   return r;
+   u_rwlock_wrlock(&ws->log_bo_list_lock);
+   list_addtail(&bo_log->list, &ws->log_bo_list);
+   u_rwlock_wrunlock(&ws->log_bo_list_lock);
 }
 
 static VkResult
@@ -237,16 +135,19 @@ radv_amdgpu_winsys_bo_virtual_bind(struct radeon_winsys *_ws, struct radeon_wins
    VkResult result;
    int r;
 
-   assert(parent->base.is_virtual);
-   assert(!bo || !bo->base.is_virtual);
+   assert(parent->is_virtual);
+   assert(!bo || !bo->is_virtual);
 
    /* When the BO is NULL, AMDGPU will reset the PTE VA range to the initial state. Otherwise, it
     * will first unmap all existing VA that overlap the requested range and then map.
     */
    if (bo) {
-      r = radv_amdgpu_virtual_bo_map(ws, parent, offset, size, bo, bo_offset);
+      r =
+         radv_amdgpu_bo_va_op(ws, bo->bo_handle, bo_offset, size, parent->base.va + offset, 0, 0, AMDGPU_VA_OP_REPLACE);
+      radv_amdgpu_log_va_op(ws, bo, bo_offset, size, parent->base.va + offset);
    } else {
-      r = radv_amdgpu_virtual_bo_unmap(ws, parent, offset, size);
+      r = radv_amdgpu_bo_va_op(ws, 0, 0, size, parent->base.va + offset, 0, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_REPLACE);
+      radv_amdgpu_log_va_op(ws, NULL, 0, size, parent->base.va + offset);
    }
 
    if (r) {
@@ -370,32 +271,24 @@ radv_amdgpu_winsys_bo_virtual_bind(struct radeon_winsys *_ws, struct radeon_wins
 static void
 radv_amdgpu_log_bo(struct radv_amdgpu_winsys *ws, struct radv_amdgpu_winsys_bo *bo, bool destroyed)
 {
-   const uint64_t timestamp = os_time_get_nano();
+   struct radv_amdgpu_winsys_bo_log *bo_log = NULL;
 
-   if (ws->debug_log_bos) {
-      struct radv_amdgpu_winsys_bo_log *bo_log = NULL;
+   if (!ws->debug_log_bos)
+      return;
 
-      bo_log = calloc(1, sizeof(*bo_log));
-      if (!bo_log)
-         return;
+   bo_log = calloc(1, sizeof(*bo_log));
+   if (!bo_log)
+      return;
 
-      bo_log->va = bo->base.va;
-      bo_log->size = bo->base.size;
-      bo_log->timestamp = timestamp;
-      bo_log->is_virtual = bo->base.is_virtual;
-      bo_log->destroyed = destroyed;
+   bo_log->va = bo->base.va;
+   bo_log->size = bo->base.size;
+   bo_log->timestamp = os_time_get_nano();
+   bo_log->is_virtual = bo->is_virtual;
+   bo_log->destroyed = destroyed;
 
-      u_rwlock_wrlock(&ws->log_bo_list_lock);
-      list_addtail(&bo_log->list, &ws->log_bo_list);
-      u_rwlock_wrunlock(&ws->log_bo_list_lock);
-   }
-
-   if (ws->bo_history_logfile) {
-      fprintf(ws->bo_history_logfile, "timestamp=%llu, VA=%.16llx-%.16llx, destroyed=%d, is_virtual=%d\n",
-              (long long)timestamp, (long long)radv_amdgpu_canonicalize_va(bo->base.va),
-              (long long)radv_amdgpu_canonicalize_va(bo->base.va + bo->base.size), destroyed, bo->base.is_virtual);
-      fflush(ws->bo_history_logfile);
-   }
+   u_rwlock_wrlock(&ws->log_bo_list_lock);
+   list_addtail(&bo_log->list, &ws->log_bo_list);
+   u_rwlock_wrunlock(&ws->log_bo_list_lock);
 }
 
 static int
@@ -436,25 +329,6 @@ radv_amdgpu_global_bo_list_del(struct radv_amdgpu_winsys *ws, struct radv_amdgpu
 }
 
 static void
-radv_amdgpu_winsys_virtual_bo_destroy(struct radeon_winsys *_ws, struct radeon_winsys_bo *_bo)
-{
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-   struct radv_amdgpu_winsys_bo *bo = radv_amdgpu_winsys_bo(_bo);
-   int r;
-
-   r = radv_amdgpu_virtual_bo_clear_mapping(ws, bo);
-   if (r) {
-      fprintf(stderr, "radv/amdgpu: Failed to clear a PRT VA region (%d).\n", r);
-   }
-
-   free(bo->bos);
-   free(bo->ranges);
-   u_rwlock_destroy(&bo->lock);
-   ac_drm_va_range_free(bo->va_handle);
-   FREE(bo);
-}
-
-static void
 radv_amdgpu_winsys_bo_destroy(struct radeon_winsys *_ws, struct radeon_winsys_bo *_bo)
 {
    struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
@@ -462,20 +336,27 @@ radv_amdgpu_winsys_bo_destroy(struct radeon_winsys *_ws, struct radeon_winsys_bo
 
    radv_amdgpu_log_bo(ws, bo, true);
 
-   if (bo->base.is_virtual) {
-      radv_amdgpu_winsys_virtual_bo_destroy(_ws, _bo);
-      return;
+   if (bo->is_virtual) {
+      int r;
+
+      /* Clear mappings of this PRT VA region. */
+      r = radv_amdgpu_bo_va_op(ws, 0, 0, bo->base.size, bo->base.va, 0, 0, AMDGPU_VA_OP_CLEAR);
+      if (r) {
+         fprintf(stderr, "radv/amdgpu: Failed to clear a PRT VA region (%d).\n", r);
+      }
+
+      free(bo->bos);
+      free(bo->ranges);
+      u_rwlock_destroy(&bo->lock);
+   } else {
+      if (bo->cpu_map)
+         munmap(bo->cpu_map, bo->base.size);
+
+      if (ws->debug_all_bos)
+         radv_amdgpu_global_bo_list_del(ws, bo);
+      radv_amdgpu_bo_va_op(ws, bo->bo_handle, 0, bo->base.size, bo->base.va, 0, 0, AMDGPU_VA_OP_UNMAP);
+      amdgpu_bo_free(bo->bo);
    }
-
-   if (bo->cpu_map)
-      munmap(bo->cpu_map, bo->base.size);
-
-   if (ws->debug_all_bos)
-      radv_amdgpu_global_bo_list_del(ws, bo);
-
-   const uint64_t va_size = radv_amdgpu_bo_va_size(bo->base.size, bo->flags);
-   radv_amdgpu_bo_va_op(ws, bo->bo_handle, 0, va_size, bo->base.va, 0, 0, AMDGPU_VA_OP_UNMAP);
-   ac_drm_bo_free(ws->dev, bo->bo);
 
    if (bo->base.initial_domain & RADEON_DOMAIN_VRAM) {
       if (bo->base.vram_no_cpu_access) {
@@ -488,91 +369,8 @@ radv_amdgpu_winsys_bo_destroy(struct radeon_winsys *_ws, struct radeon_winsys_bo
    if (bo->base.initial_domain & RADEON_DOMAIN_GTT)
       p_atomic_add(&ws->allocated_gtt, -align64(bo->base.size, ws->info.gart_page_size));
 
-   ac_drm_va_range_free(bo->va_handle);
+   amdgpu_va_range_free(bo->va_handle);
    FREE(bo);
-}
-
-static VkResult
-radv_amdgpu_winsys_virtual_bo_create(struct radeon_winsys *_ws, uint64_t size, unsigned alignment,
-                                     enum radeon_bo_flag flags, uint64_t replay_address,
-                                     struct radeon_winsys_bo **out_bo)
-{
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-   struct radv_amdgpu_winsys_bo *bo;
-   struct radv_amdgpu_map_range *ranges = NULL;
-   uint64_t va = 0;
-   amdgpu_va_handle va_handle;
-   int r;
-   VkResult result = VK_SUCCESS;
-
-   /* Just be robust for callers that might use NULL-ness for determining if things should be freed.
-    */
-   *out_bo = NULL;
-
-   bo = CALLOC_STRUCT(radv_amdgpu_winsys_bo);
-   if (!bo) {
-      return VK_ERROR_OUT_OF_HOST_MEMORY;
-   }
-
-   unsigned virt_alignment = alignment;
-   if (size >= ws->info.pte_fragment_size)
-      virt_alignment = MAX2(virt_alignment, ws->info.pte_fragment_size);
-
-   assert(!replay_address || (flags & RADEON_FLAG_REPLAYABLE));
-
-   const uint64_t va_size = radv_amdgpu_bo_va_size(size, flags);
-   const uint64_t va_flags = AMDGPU_VA_RANGE_HIGH | (flags & RADEON_FLAG_32BIT ? AMDGPU_VA_RANGE_32_BIT : 0) |
-                             (flags & RADEON_FLAG_REPLAYABLE ? AMDGPU_VA_RANGE_REPLAYABLE : 0);
-   const uint64_t va_gap_size = ws->debug_vm ? MAX2(4 * virt_alignment, 64 * 1024) : 0;
-
-   r = ac_drm_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general, va_size + va_gap_size, virt_alignment, replay_address,
-                             &va, &va_handle, va_flags);
-   if (r) {
-      result = replay_address ? VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS : VK_ERROR_OUT_OF_DEVICE_MEMORY;
-      goto error_va_alloc;
-   }
-
-   bo->base.va = va;
-   bo->base.size = size;
-   bo->va_handle = va_handle;
-   bo->base.is_virtual = true;
-
-   ranges = realloc(NULL, sizeof(struct radv_amdgpu_map_range));
-   if (!ranges) {
-      result = VK_ERROR_OUT_OF_HOST_MEMORY;
-      goto error_ranges_alloc;
-   }
-
-   u_rwlock_init(&bo->lock);
-
-   bo->ranges = ranges;
-   bo->range_count = 1;
-   bo->range_capacity = 1;
-
-   bo->ranges[0].offset = 0;
-   bo->ranges[0].size = size;
-   bo->ranges[0].bo = NULL;
-   bo->ranges[0].bo_offset = 0;
-
-   /* Reserve a PRT VA region. */
-   r = radv_amdgpu_virtual_bo_init_mapping(ws, bo, va_size);
-   if (r) {
-      fprintf(stderr, "radv/amdgpu: Failed to reserve a PRT VA region (%d).\n", r);
-      result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
-      goto error_ranges_alloc;
-   }
-
-   radv_amdgpu_log_bo(ws, bo, false);
-
-   *out_bo = (struct radeon_winsys_bo *)bo;
-   return VK_SUCCESS;
-
-error_ranges_alloc:
-   ac_drm_va_range_free(va_handle);
-
-error_va_alloc:
-   FREE(bo);
-   return result;
 }
 
 static VkResult
@@ -584,14 +382,11 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws, uint64_t size, unsigned 
    struct radv_amdgpu_winsys_bo *bo;
    struct amdgpu_bo_alloc_request request = {0};
    struct radv_amdgpu_map_range *ranges = NULL;
-   ac_drm_bo buf_handle;
+   amdgpu_bo_handle buf_handle;
    uint64_t va = 0;
    amdgpu_va_handle va_handle;
    int r;
    VkResult result = VK_SUCCESS;
-
-   if (flags & RADEON_FLAG_VIRTUAL)
-      return radv_amdgpu_winsys_virtual_bo_create(_ws, size, alignment, flags, replay_address, out_bo);
 
    /* Just be robust for callers that might use NULL-ness for determining if things should be freed.
     */
@@ -608,13 +403,10 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws, uint64_t size, unsigned 
 
    assert(!replay_address || (flags & RADEON_FLAG_REPLAYABLE));
 
-   const uint64_t va_size = radv_amdgpu_bo_va_size(size, flags);
    const uint64_t va_flags = AMDGPU_VA_RANGE_HIGH | (flags & RADEON_FLAG_32BIT ? AMDGPU_VA_RANGE_32_BIT : 0) |
                              (flags & RADEON_FLAG_REPLAYABLE ? AMDGPU_VA_RANGE_REPLAYABLE : 0);
-   uint64_t va_gap_size = ws->debug_vm ? MAX2(4 * virt_alignment, 64 * 1024) : 0;
-
-   r = ac_drm_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general, va_size + va_gap_size, virt_alignment, replay_address,
-                             &va, &va_handle, va_flags);
+   r = amdgpu_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general, size, virt_alignment, replay_address, &va,
+                             &va_handle, va_flags);
    if (r) {
       result = replay_address ? VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS : VK_ERROR_OUT_OF_DEVICE_MEMORY;
       goto error_va_alloc;
@@ -623,6 +415,39 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws, uint64_t size, unsigned 
    bo->base.va = va;
    bo->base.size = size;
    bo->va_handle = va_handle;
+   bo->is_virtual = !!(flags & RADEON_FLAG_VIRTUAL);
+
+   if (flags & RADEON_FLAG_VIRTUAL) {
+      ranges = realloc(NULL, sizeof(struct radv_amdgpu_map_range));
+      if (!ranges) {
+         result = VK_ERROR_OUT_OF_HOST_MEMORY;
+         goto error_ranges_alloc;
+      }
+
+      u_rwlock_init(&bo->lock);
+
+      bo->ranges = ranges;
+      bo->range_count = 1;
+      bo->range_capacity = 1;
+
+      bo->ranges[0].offset = 0;
+      bo->ranges[0].size = size;
+      bo->ranges[0].bo = NULL;
+      bo->ranges[0].bo_offset = 0;
+
+      /* Reserve a PRT VA region. */
+      r = radv_amdgpu_bo_va_op(ws, 0, 0, size, bo->base.va, 0, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_MAP);
+      if (r) {
+         fprintf(stderr, "radv/amdgpu: Failed to reserve a PRT VA region (%d).\n", r);
+         result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+         goto error_ranges_alloc;
+      }
+
+      radv_amdgpu_log_bo(ws, bo, false);
+
+      *out_bo = (struct radeon_winsys_bo *)bo;
+      return VK_SUCCESS;
+   }
 
    request.alloc_size = size;
    request.phys_alignment = alignment;
@@ -645,8 +470,7 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws, uint64_t size, unsigned 
        * e.g. Horizon Zero Dawn allocates more memory than we have
        * VRAM.
        */
-      if (!(ws->perftest & RADV_PERFTEST_NO_GTT_SPILL))
-         request.preferred_heap |= AMDGPU_GEM_DOMAIN_GTT;
+      request.preferred_heap |= AMDGPU_GEM_DOMAIN_GTT;
    }
 
    if (initial_domain & RADEON_DOMAIN_GTT)
@@ -668,14 +492,10 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws, uint64_t size, unsigned 
       request.flags |= AMDGPU_GEM_CREATE_EXPLICIT_SYNC;
    if ((initial_domain & RADEON_DOMAIN_VRAM_GTT) && (flags & RADEON_FLAG_NO_INTERPROCESS_SHARING) &&
        ((ws->perftest & RADV_PERFTEST_LOCAL_BOS) || (flags & RADEON_FLAG_PREFER_LOCAL_BO))) {
-      assert(ws->info.has_vm_always_valid);
       bo->base.is_local = true;
       request.flags |= AMDGPU_GEM_CREATE_VM_ALWAYS_VALID;
    }
-   /* Set AMDGPU_GEM_CREATE_VIRTIO_SHARED if the driver didn't disable buffer sharing. */
-   if (ws->info.is_virtio && (initial_domain & RADEON_DOMAIN_VRAM_GTT) &&
-       (flags & RADEON_FLAG_NO_INTERPROCESS_SHARING) == 0)
-      request.flags |= AMDGPU_GEM_CREATE_VIRTIO_SHARED;
+
    if (initial_domain & RADEON_DOMAIN_VRAM) {
       if (ws->zero_all_vram_allocs || (flags & RADEON_FLAG_ZERO_VRAM))
          request.flags |= AMDGPU_GEM_CREATE_VRAM_CLEARED;
@@ -684,14 +504,7 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws, uint64_t size, unsigned 
    if (flags & RADEON_FLAG_DISCARDABLE && ws->info.drm_minor >= 47)
       request.flags |= AMDGPU_GEM_CREATE_DISCARDABLE;
 
-   if (flags & RADEON_FLAG_GFX12_ALLOW_DCC && ws->info.drm_minor >= 58) {
-      assert(ws->info.gfx_level >= GFX12 && (initial_domain & RADEON_DOMAIN_VRAM) &&
-             (flags & RADEON_FLAG_NO_CPU_ACCESS));
-      bo->base.gfx12_allow_dcc = true;
-      request.flags |= AMDGPU_GEM_CREATE_GFX12_DCC;
-   }
-
-   r = ac_drm_bo_alloc(ws->dev, &request, &buf_handle);
+   r = amdgpu_bo_alloc(ws->dev, &request, &buf_handle);
    if (r) {
       fprintf(stderr, "radv/amdgpu: Failed to allocate a buffer:\n");
       fprintf(stderr, "radv/amdgpu:    size      : %" PRIu64 " bytes\n", size);
@@ -702,23 +515,13 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws, uint64_t size, unsigned 
    }
 
    uint32_t kms_handle = 0;
-   r = ac_drm_bo_export(ws->dev, buf_handle, amdgpu_bo_handle_type_kms, &kms_handle);
+   r = amdgpu_bo_export(buf_handle, amdgpu_bo_handle_type_kms, &kms_handle);
    assert(!r);
 
    r = radv_amdgpu_bo_va_op(ws, kms_handle, 0, size, va, flags, 0, AMDGPU_VA_OP_MAP);
    if (r) {
-      result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+      result = VK_ERROR_UNKNOWN;
       goto error_va_map;
-   }
-
-   if (flags & RADEON_FLAG_VM_PAD_1PAGE) {
-      /* Map the first page of the same BO as read-only after the BO itself. */
-      r = radv_amdgpu_bo_va_op(ws, kms_handle, 0, 4096, va + align64(size, 4096), flags | RADEON_FLAG_READ_ONLY, 0,
-                               AMDGPU_VA_OP_MAP);
-      if (r) {
-         result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
-         goto error_va_map;
-      }
    }
 
    bo->bo = buf_handle;
@@ -727,8 +530,6 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws, uint64_t size, unsigned 
    bo->base.use_global_list = false;
    bo->priority = priority;
    bo->cpu_map = NULL;
-   bo->base.obj_id = (uintptr_t)(buf_handle.abo);
-   bo->flags = flags;
 
    if (initial_domain & RADEON_DOMAIN_VRAM) {
       /* Buffers allocated in VRAM with the NO_CPU_ACCESS flag
@@ -756,10 +557,13 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws, uint64_t size, unsigned 
    *out_bo = (struct radeon_winsys_bo *)bo;
    return VK_SUCCESS;
 error_va_map:
-   ac_drm_bo_free(ws->dev, buf_handle);
+   amdgpu_bo_free(buf_handle);
 
 error_bo_alloc:
    free(ranges);
+
+error_ranges_alloc:
+   amdgpu_va_range_free(va_handle);
 
 error_va_alloc:
    FREE(bo);
@@ -777,22 +581,6 @@ radv_amdgpu_winsys_bo_map(struct radeon_winsys *_ws, struct radeon_winsys_bo *_b
       return bo->cpu_map;
 
    assert(!bo->cpu_map);
-
-#if HAVE_AMDGPU_VIRTIO
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-   if (ws->info.is_virtio) {
-      /* We can't use DRM_AMDGPU_GEM_MMAP directly on virtio. Instead use bo_cpu_map since
-       * the virtio version will map the buffer at the given address (if not NULL).
-       */
-      void *data = NULL;
-      if (use_fixed_addr)
-         data = fixed_addr;
-
-      if (ac_drm_bo_cpu_map(ws->dev, bo->bo, &data))
-         return NULL;
-      return data;
-   }
-#endif
 
    union drm_amdgpu_gem_mmap args;
    memset(&args, 0, sizeof(args));
@@ -824,13 +612,7 @@ radv_amdgpu_winsys_bo_unmap(struct radeon_winsys *_ws, struct radeon_winsys_bo *
    if (replace) {
       (void)mmap(bo->cpu_map, bo->base.size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
    } else {
-#if HAVE_AMDGPU_VIRTIO
-      struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-      if (ws->info.is_virtio)
-         ac_drm_bo_cpu_unmap(ws->dev, bo->bo);
-      else
-#endif
-         munmap(bo->cpu_map, bo->base.size);
+      munmap(bo->cpu_map, bo->base.size);
    }
    bo->cpu_map = NULL;
 }
@@ -861,7 +643,7 @@ radv_amdgpu_winsys_bo_from_ptr(struct radeon_winsys *_ws, void *pointer, uint64_
                                struct radeon_winsys_bo **out_bo)
 {
    struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-   ac_drm_bo buf_handle;
+   amdgpu_bo_handle buf_handle;
    struct radv_amdgpu_winsys_bo *bo;
    uint64_t va;
    amdgpu_va_handle va_handle;
@@ -877,7 +659,7 @@ radv_amdgpu_winsys_bo_from_ptr(struct radeon_winsys *_ws, void *pointer, uint64_
    if (!bo)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-   ret = ac_drm_create_bo_from_user_mem(ws->dev, pointer, size, &buf_handle);
+   ret = amdgpu_create_bo_from_user_mem(ws->dev, pointer, size, &buf_handle);
    if (ret) {
       if (ret == -EINVAL) {
          result = VK_ERROR_INVALID_EXTERNAL_HANDLE;
@@ -892,17 +674,17 @@ radv_amdgpu_winsys_bo_from_ptr(struct radeon_winsys *_ws, void *pointer, uint64_
     */
    vm_alignment = radv_amdgpu_get_optimal_vm_alignment(ws, size, ws->info.gart_page_size);
 
-   if (ac_drm_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general, size, vm_alignment, 0, &va, &va_handle,
+   if (amdgpu_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general, size, vm_alignment, 0, &va, &va_handle,
                              AMDGPU_VA_RANGE_HIGH)) {
       result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
       goto error_va_alloc;
    }
 
    uint32_t kms_handle = 0;
-   ASSERTED int r = ac_drm_bo_export(ws->dev, buf_handle, amdgpu_bo_handle_type_kms, &kms_handle);
+   ASSERTED int r = amdgpu_bo_export(buf_handle, amdgpu_bo_handle_type_kms, &kms_handle);
    assert(!r);
 
-   if (radv_amdgpu_bo_va_op(ws, kms_handle, 0, size, va, 0, 0, AMDGPU_VA_OP_MAP)) {
+   if (ac_drm_bo_va_op(ws->fd, kms_handle, 0, size, va, 0, AMDGPU_VA_OP_MAP)) {
       result = VK_ERROR_UNKNOWN;
       goto error_va_map;
    }
@@ -917,7 +699,6 @@ radv_amdgpu_winsys_bo_from_ptr(struct radeon_winsys *_ws, void *pointer, uint64_
    bo->base.use_global_list = false;
    bo->priority = priority;
    bo->cpu_map = NULL;
-   bo->base.obj_id = (uintptr_t)(buf_handle.abo);
 
    p_atomic_add(&ws->allocated_gtt, align64(bo->base.size, ws->info.gart_page_size));
 
@@ -929,10 +710,10 @@ radv_amdgpu_winsys_bo_from_ptr(struct radeon_winsys *_ws, void *pointer, uint64_
    return VK_SUCCESS;
 
 error_va_map:
-   ac_drm_va_range_free(va_handle);
+   amdgpu_va_range_free(va_handle);
 
 error_va_alloc:
-   ac_drm_bo_free(ws->dev, buf_handle);
+   amdgpu_bo_free(buf_handle);
 
 error:
    FREE(bo);
@@ -948,7 +729,7 @@ radv_amdgpu_winsys_bo_from_fd(struct radeon_winsys *_ws, int fd, unsigned priori
    uint64_t va;
    amdgpu_va_handle va_handle;
    enum amdgpu_bo_handle_type type = amdgpu_bo_handle_type_dma_buf_fd;
-   struct ac_drm_bo_import_result result;
+   struct amdgpu_bo_import_result result;
    struct amdgpu_bo_info info;
    enum radeon_bo_domain initial = 0;
    int r;
@@ -962,17 +743,17 @@ radv_amdgpu_winsys_bo_from_fd(struct radeon_winsys *_ws, int fd, unsigned priori
    if (!bo)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-   r = ac_drm_bo_import(ws->dev, type, fd, &result);
+   r = amdgpu_bo_import(ws->dev, type, fd, &result);
    if (r) {
       vk_result = VK_ERROR_INVALID_EXTERNAL_HANDLE;
       goto error;
    }
 
    uint32_t kms_handle = 0;
-   r = ac_drm_bo_export(ws->dev, result.bo, amdgpu_bo_handle_type_kms, &kms_handle);
+   r = amdgpu_bo_export(result.buf_handle, amdgpu_bo_handle_type_kms, &kms_handle);
    assert(!r);
 
-   r = ac_drm_bo_query_info(ws->dev, kms_handle, &info);
+   r = ac_drm_bo_query_info(ws->fd, kms_handle, &info);
    if (r) {
       vk_result = VK_ERROR_UNKNOWN;
       goto error_query;
@@ -982,7 +763,7 @@ radv_amdgpu_winsys_bo_from_fd(struct radeon_winsys *_ws, int fd, unsigned priori
       *alloc_size = info.alloc_size;
    }
 
-   r = ac_drm_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general, result.alloc_size, 1 << 20, 0, &va, &va_handle,
+   r = amdgpu_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general, result.alloc_size, 1 << 20, 0, &va, &va_handle,
                              AMDGPU_VA_RANGE_HIGH);
    if (r) {
       vk_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -991,7 +772,7 @@ radv_amdgpu_winsys_bo_from_fd(struct radeon_winsys *_ws, int fd, unsigned priori
 
    r = radv_amdgpu_bo_va_op(ws, kms_handle, 0, result.alloc_size, va, 0, 0, AMDGPU_VA_OP_MAP);
    if (r) {
-      vk_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+      vk_result = VK_ERROR_UNKNOWN;
       goto error_va_map;
    }
 
@@ -1000,7 +781,7 @@ radv_amdgpu_winsys_bo_from_fd(struct radeon_winsys *_ws, int fd, unsigned priori
    if (info.preferred_heap & AMDGPU_GEM_DOMAIN_GTT)
       initial |= RADEON_DOMAIN_GTT;
 
-   bo->bo = result.bo;
+   bo->bo = result.buf_handle;
    bo->bo_handle = kms_handle;
    bo->base.va = va;
    bo->va_handle = va_handle;
@@ -1009,7 +790,6 @@ radv_amdgpu_winsys_bo_from_fd(struct radeon_winsys *_ws, int fd, unsigned priori
    bo->base.size = result.alloc_size;
    bo->priority = priority;
    bo->cpu_map = NULL;
-   bo->base.obj_id = (uintptr_t)(result.bo.abo);
 
    if (bo->base.initial_domain & RADEON_DOMAIN_VRAM)
       p_atomic_add(&ws->allocated_vram, align64(bo->base.size, ws->info.gart_page_size));
@@ -1023,10 +803,10 @@ radv_amdgpu_winsys_bo_from_fd(struct radeon_winsys *_ws, int fd, unsigned priori
    *out_bo = (struct radeon_winsys_bo *)bo;
    return VK_SUCCESS;
 error_va_map:
-   ac_drm_va_range_free(va_handle);
+   amdgpu_va_range_free(va_handle);
 
 error_query:
-   ac_drm_bo_free(ws->dev, result.bo);
+   amdgpu_bo_free(result.buf_handle);
 
 error:
    FREE(bo);
@@ -1036,12 +816,11 @@ error:
 static bool
 radv_amdgpu_winsys_get_fd(struct radeon_winsys *_ws, struct radeon_winsys_bo *_bo, int *fd)
 {
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
    struct radv_amdgpu_winsys_bo *bo = radv_amdgpu_winsys_bo(_bo);
    enum amdgpu_bo_handle_type type = amdgpu_bo_handle_type_dma_buf_fd;
    int r;
    unsigned handle;
-   r = ac_drm_bo_export(ws->dev, bo->bo, type, &handle);
+   r = amdgpu_bo_export(bo->bo, type, &handle);
    if (r)
       return false;
 
@@ -1054,23 +833,23 @@ radv_amdgpu_bo_get_flags_from_fd(struct radeon_winsys *_ws, int fd, enum radeon_
                                  enum radeon_bo_flag *flags)
 {
    struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-   struct ac_drm_bo_import_result result = {0};
+   struct amdgpu_bo_import_result result = {0};
    struct amdgpu_bo_info info = {0};
    int r;
 
    *domains = 0;
    *flags = 0;
 
-   r = ac_drm_bo_import(ws->dev, amdgpu_bo_handle_type_dma_buf_fd, fd, &result);
+   r = amdgpu_bo_import(ws->dev, amdgpu_bo_handle_type_dma_buf_fd, fd, &result);
    if (r)
       return false;
 
    uint32_t kms_handle = 0;
-   r = ac_drm_bo_export(ws->dev, result.bo, amdgpu_bo_handle_type_kms, &kms_handle);
+   r = amdgpu_bo_export(result.buf_handle, amdgpu_bo_handle_type_kms, &kms_handle);
    assert(!r);
 
-   r = ac_drm_bo_query_info(ws->dev, kms_handle, &info);
-   ac_drm_bo_free(ws->dev, result.bo);
+   r = ac_drm_bo_query_info(ws->fd, kms_handle, &info);
+   amdgpu_bo_free(result.buf_handle);
    if (r)
       return false;
 
@@ -1095,8 +874,6 @@ radv_amdgpu_bo_get_flags_from_fd(struct radeon_winsys *_ws, int fd, enum radeon_
       *flags |= RADEON_FLAG_NO_INTERPROCESS_SHARING | RADEON_FLAG_PREFER_LOCAL_BO;
    if (info.alloc_flags & AMDGPU_GEM_CREATE_VRAM_CLEARED)
       *flags |= RADEON_FLAG_ZERO_VRAM;
-   if (info.alloc_flags & AMDGPU_GEM_CREATE_GFX12_DCC)
-      *flags |= RADEON_FLAG_GFX12_ALLOW_DCC;
    return true;
 }
 
@@ -1164,14 +941,7 @@ radv_amdgpu_winsys_bo_set_metadata(struct radeon_winsys *_ws, struct radeon_wins
    struct amdgpu_bo_metadata metadata = {0};
    uint64_t tiling_flags = 0;
 
-   if (ws->info.gfx_level >= GFX12) {
-      tiling_flags |= AMDGPU_TILING_SET(GFX12_SWIZZLE_MODE, md->u.gfx12.swizzle_mode);
-      tiling_flags |= AMDGPU_TILING_SET(GFX12_DCC_MAX_COMPRESSED_BLOCK, md->u.gfx12.dcc_max_compressed_block);
-      tiling_flags |= AMDGPU_TILING_SET(GFX12_DCC_NUMBER_TYPE, md->u.gfx12.dcc_number_type);
-      tiling_flags |= AMDGPU_TILING_SET(GFX12_DCC_DATA_FORMAT, md->u.gfx12.dcc_data_format);
-      tiling_flags |= AMDGPU_TILING_SET(GFX12_DCC_WRITE_COMPRESS_DISABLE, md->u.gfx12.dcc_write_compress_disable);
-      tiling_flags |= AMDGPU_TILING_SET(GFX12_SCANOUT, md->u.gfx12.scanout);
-   } else if (ws->info.gfx_level >= GFX9) {
+   if (ws->info.gfx_level >= GFX9) {
       tiling_flags |= AMDGPU_TILING_SET(SWIZZLE_MODE, md->u.gfx9.swizzle_mode);
       tiling_flags |= AMDGPU_TILING_SET(DCC_OFFSET_256B, md->u.gfx9.dcc_offset_256b);
       tiling_flags |= AMDGPU_TILING_SET(DCC_PITCH_MAX, md->u.gfx9.dcc_pitch_max);
@@ -1205,7 +975,7 @@ radv_amdgpu_winsys_bo_set_metadata(struct radeon_winsys *_ws, struct radeon_wins
    metadata.size_metadata = md->size_metadata;
    memcpy(metadata.umd_metadata, md->metadata, sizeof(md->metadata));
 
-   ac_drm_bo_set_metadata(ws->dev, bo->bo_handle, &metadata);
+   ac_drm_bo_set_metadata(ws->fd, bo->bo_handle, &metadata);
 }
 
 static void
@@ -1216,20 +986,13 @@ radv_amdgpu_winsys_bo_get_metadata(struct radeon_winsys *_ws, struct radeon_wins
    struct radv_amdgpu_winsys_bo *bo = radv_amdgpu_winsys_bo(_bo);
    struct amdgpu_bo_info info = {0};
 
-   int r = ac_drm_bo_query_info(ws->dev, bo->bo_handle, &info);
+   int r = ac_drm_bo_query_info(ws->fd, bo->bo_handle, &info);
    if (r)
       return;
 
    uint64_t tiling_flags = info.metadata.tiling_info;
 
-   if (ws->info.gfx_level >= GFX12) {
-      md->u.gfx12.swizzle_mode = AMDGPU_TILING_GET(tiling_flags, GFX12_SWIZZLE_MODE);
-      md->u.gfx12.dcc_max_compressed_block = AMDGPU_TILING_GET(tiling_flags, GFX12_DCC_MAX_COMPRESSED_BLOCK);
-      md->u.gfx12.dcc_data_format = AMDGPU_TILING_GET(tiling_flags, GFX12_DCC_DATA_FORMAT);
-      md->u.gfx12.dcc_number_type = AMDGPU_TILING_GET(tiling_flags, GFX12_DCC_NUMBER_TYPE);
-      md->u.gfx12.dcc_write_compress_disable = AMDGPU_TILING_GET(tiling_flags, GFX12_DCC_WRITE_COMPRESS_DISABLE);
-      md->u.gfx12.scanout = AMDGPU_TILING_GET(tiling_flags, GFX12_SCANOUT);
-   } else if (ws->info.gfx_level >= GFX9) {
+   if (ws->info.gfx_level >= GFX9) {
       md->u.gfx9.swizzle_mode = AMDGPU_TILING_GET(tiling_flags, SWIZZLE_MODE);
       md->u.gfx9.scanout = AMDGPU_TILING_GET(tiling_flags, SCANOUT);
    } else {
@@ -1290,6 +1053,15 @@ radv_amdgpu_bo_va_compare(const void *a, const void *b)
    return bo_a->base.va < bo_b->base.va ? -1 : bo_a->base.va > bo_b->base.va ? 1 : 0;
 }
 
+static uint64_t
+radv_amdgpu_canonicalize_va(uint64_t va)
+{
+   /* Would be less hardcoded to use addr32_hi (0xffff8000) to generate a mask,
+    * but there are confusing differences between page fault reports from kernel where
+    * it seems to report the top 48 bits, where addr32_hi has 47-bits. */
+   return va & ((1ull << 48) - 1);
+}
+
 static void
 radv_amdgpu_dump_bo_log(struct radeon_winsys *_ws, FILE *file)
 {
@@ -1302,13 +1074,15 @@ radv_amdgpu_dump_bo_log(struct radeon_winsys *_ws, FILE *file)
    u_rwlock_rdlock(&ws->log_bo_list_lock);
    LIST_FOR_EACH_ENTRY (bo_log, &ws->log_bo_list, list) {
       if (bo_log->virtual_mapping) {
-         fprintf(file, "timestamp=%llu, VA=%.16llx-%.16llx, mapped_to=%.16llx\n", (long long)bo_log->timestamp,
+         fprintf(file, "timestamp=%llu, VA=%.16llx-%.16llx, mapped_to=%.16llx\n",
+                 (long long)bo_log->timestamp,
                  (long long)radv_amdgpu_canonicalize_va(bo_log->va),
                  (long long)radv_amdgpu_canonicalize_va(bo_log->va + bo_log->size),
                  (long long)radv_amdgpu_canonicalize_va(bo_log->mapped_va));
       } else {
          fprintf(file, "timestamp=%llu, VA=%.16llx-%.16llx, destroyed=%d, is_virtual=%d\n",
-                 (long long)bo_log->timestamp, (long long)radv_amdgpu_canonicalize_va(bo_log->va),
+                 (long long)bo_log->timestamp,
+                 (long long)radv_amdgpu_canonicalize_va(bo_log->va),
                  (long long)radv_amdgpu_canonicalize_va(bo_log->va + bo_log->size), bo_log->destroyed,
                  bo_log->is_virtual);
       }

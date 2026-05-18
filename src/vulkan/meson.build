@@ -55,14 +55,14 @@ if with_platform_wayland
   vulkan_wsi_list += '-DVK_USE_PLATFORM_WAYLAND_KHR'
 endif
 if system_has_kms_drm and not with_platform_android
-  vulkan_wsi_deps += [dep_libdrm, dep_display_info]
+  vulkan_wsi_deps += [dep_libdrm]
   vulkan_wsi_list += '-DVK_USE_PLATFORM_DISPLAY_KHR'
 endif
 if with_xlib_lease
   vulkan_wsi_deps += [dep_xlib_xrandr]
   vulkan_wsi_list += '-DVK_USE_PLATFORM_XLIB_XRANDR_EXT'
 endif
-if with_platform_android
+if with_platform_android or with_wrapper_vk
   vulkan_wsi_list += '-DVK_USE_PLATFORM_ANDROID_KHR'
 endif
 if with_platform_windows
@@ -95,9 +95,6 @@ endif
 if with_vulkan_screenshot_layer
   subdir('screenshot-layer')
 endif
-if with_vulkan_vram_report_limit_layer
-  subdir('vram-report-limit-layer')
-endif
-if with_vulkan_anti_lag_layer
-  subdir('anti-lag-layer')
+if with_wrapper_vk
+  subdir('wrapper')
 endif

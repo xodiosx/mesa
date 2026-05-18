@@ -13,7 +13,7 @@
 typedef struct {
    bool dynamic_rasterization_samples;
    unsigned num_rasterization_samples;
-   unsigned vgt_outprim_type;
+   unsigned rast_prim;
 } lower_fs_barycentric_state;
 
 static nir_def *
@@ -176,27 +176,19 @@ lower_triangle(nir_builder *b, nir_def *p1, nir_def *p2)
 }
 
 static bool
-lower_load_barycentric_coord(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
+lower_load_barycentric_coord(nir_builder *b, lower_fs_barycentric_state *state, nir_intrinsic_instr *intrin)
 {
-   lower_fs_barycentric_state *state = data;
-   if (intrin->intrinsic != nir_intrinsic_load_barycentric_coord_pixel &&
-       intrin->intrinsic != nir_intrinsic_load_barycentric_coord_centroid &&
-       intrin->intrinsic != nir_intrinsic_load_barycentric_coord_sample &&
-       intrin->intrinsic != nir_intrinsic_load_barycentric_coord_at_offset &&
-       intrin->intrinsic != nir_intrinsic_load_barycentric_coord_at_sample)
-      return false;
-
    nir_def *interp, *p1, *p2;
    nir_def *new_dest;
 
    b->cursor = nir_after_instr(&intrin->instr);
 
    /* When the rasterization primitive isn't known at compile time (GPL), load it. */
-   if (state->vgt_outprim_type == -1) {
-      nir_def *vgt_outprim_type = nir_load_rasterization_primitive_amd(b);
+   if (state->rast_prim == -1) {
+      nir_def *rast_prim = nir_load_rasterization_primitive_amd(b);
       nir_def *res1, *res2;
 
-      nir_def *is_point = nir_ieq_imm(b, vgt_outprim_type, V_028A6C_POINTLIST);
+      nir_def *is_point = nir_ieq_imm(b, rast_prim, V_028A6C_POINTLIST);
       nir_if *if_point = nir_push_if(b, is_point);
       {
          res1 = lower_point(b);
@@ -209,7 +201,7 @@ lower_load_barycentric_coord(nir_builder *b, nir_intrinsic_instr *intrin, void *
          p1 = nir_channel(b, interp, 0);
          p2 = nir_channel(b, interp, 1);
 
-         nir_def *is_line = nir_ieq_imm(b, vgt_outprim_type, V_028A6C_LINESTRIP);
+         nir_def *is_line = nir_ieq_imm(b, rast_prim, V_028A6C_LINESTRIP);
          nir_if *if_line = nir_push_if(b, is_line);
          {
             res_line = lower_line(b, p1, p2);
@@ -226,17 +218,17 @@ lower_load_barycentric_coord(nir_builder *b, nir_intrinsic_instr *intrin, void *
 
       new_dest = nir_if_phi(b, res1, res2);
    } else {
-      if (state->vgt_outprim_type == V_028A6C_POINTLIST) {
+      if (state->rast_prim == V_028A6C_POINTLIST) {
          new_dest = lower_point(b);
       } else {
          interp = get_interp_param(b, state, intrin);
          p1 = nir_channel(b, interp, 0);
          p2 = nir_channel(b, interp, 1);
 
-         if (state->vgt_outprim_type == V_028A6C_LINESTRIP) {
+         if (state->rast_prim == V_028A6C_LINESTRIP) {
             new_dest = lower_line(b, p1, p2);
          } else {
-            assert(state->vgt_outprim_type == V_028A6C_TRISTRIP);
+            assert(state->rast_prim == V_028A6C_TRISTRIP);
             new_dest = lower_triangle(b, p1, p2);
          }
       }
@@ -248,14 +240,44 @@ lower_load_barycentric_coord(nir_builder *b, nir_intrinsic_instr *intrin, void *
 }
 
 bool
-radv_nir_lower_fs_barycentric(nir_shader *shader, const struct radv_graphics_state_key *gfx_state,
-                              unsigned vgt_outprim_type)
+radv_nir_lower_fs_barycentric(nir_shader *shader, const struct radv_graphics_state_key *gfx_state, unsigned rast_prim)
 {
+   nir_function_impl *impl = nir_shader_get_entrypoint(shader);
+   bool progress = false;
+
+   nir_builder b;
+
    lower_fs_barycentric_state state = {
       .dynamic_rasterization_samples = gfx_state->dynamic_rasterization_samples,
       .num_rasterization_samples = gfx_state->ms.rasterization_samples,
-      .vgt_outprim_type = vgt_outprim_type,
+      .rast_prim = rast_prim,
    };
 
-   return nir_shader_intrinsics_pass(shader, lower_load_barycentric_coord, nir_metadata_none, &state);
+   nir_foreach_function (function, shader) {
+      if (!function->impl)
+         continue;
+
+      b = nir_builder_create(function->impl);
+
+      nir_foreach_block (block, impl) {
+         nir_foreach_instr_safe (instr, block) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+
+            nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+            if (intrin->intrinsic != nir_intrinsic_load_barycentric_coord_pixel &&
+                intrin->intrinsic != nir_intrinsic_load_barycentric_coord_centroid &&
+                intrin->intrinsic != nir_intrinsic_load_barycentric_coord_sample &&
+                intrin->intrinsic != nir_intrinsic_load_barycentric_coord_at_offset &&
+                intrin->intrinsic != nir_intrinsic_load_barycentric_coord_at_sample)
+               continue;
+
+            progress |= lower_load_barycentric_coord(&b, &state, intrin);
+         }
+      }
+   }
+
+   nir_metadata_preserve(impl, progress ? nir_metadata_none : nir_metadata_all);
+
+   return progress;
 }

@@ -29,9 +29,8 @@ Write-Output builddir:$builddir
 Write-Output installdir:$installdir
 Write-Output sourcedir:$sourcedir
 
-$vcvars_ver_arg="$args"
 $MyPath = $MyInvocation.MyCommand.Path | Split-Path -Parent
-. "$MyPath\mesa_init_msvc.ps1" "$vcvars_ver_arg"
+. "$MyPath\mesa_init_msvc.ps1"
 
 $depsInstallPath="C:\mesa-deps"
 
@@ -49,16 +48,13 @@ meson setup `
 -Dllvm=enabled `
 -Dshared-llvm=disabled `
 -Dvulkan-drivers="swrast,amd,microsoft-experimental" `
--Dgallium-drivers="llvmpipe,softpipe,d3d12,zink,virgl" `
+-Dgallium-drivers="swrast,d3d12,zink" `
 -Dgallium-va=enabled `
--Dgallium-d3d10umd=true `
--Dgallium-mediafoundation=enabled `
 -Dvideo-codecs="all" `
--Dmediafoundation-codecs="all" `
--Dmediafoundation-store-dll=false `
--Dgallium-mediafoundation-test=false `
+-Dshared-glapi=enabled `
 -Dgles1=enabled `
 -Dgles2=enabled `
+-Dgallium-opencl=icd `
 -Dgallium-rusticl=false `
 -Dmicrosoft-clc=enabled `
 -Dstatic-libclc=all `
@@ -66,7 +62,6 @@ meson setup `
 -Dbuild-tests=true `
 -Dwerror=true `
 -Dwarning_level=2 `
-$env:EXTRA_MESON_ARGS `
 $sourcedir && `
 meson install && `
 meson test --num-processes 32 --print-errorlogs

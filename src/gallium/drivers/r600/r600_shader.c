@@ -107,7 +107,8 @@ static int store_shader(struct pipe_context *ctx,
 	uint32_t *ptr, i;
 
 	if (shader->bo == NULL) {
-		shader->bo = r600_as_resource(pipe_buffer_create(ctx->screen, 0, PIPE_USAGE_IMMUTABLE, shader->shader.bc.ndw * 4));
+		shader->bo = (struct r600_resource*)
+			pipe_buffer_create(ctx->screen, 0, PIPE_USAGE_IMMUTABLE, shader->shader.bc.ndw * 4);
 		if (shader->bo == NULL) {
 			return -ENOMEM;
 		}
@@ -137,7 +138,10 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 	struct r600_pipe_shader_selector *sel = shader->selector;
 	int r;
 	const nir_shader_compiler_options *nir_options =
-		ctx->screen->nir_options[shader->shader.processor_type];
+		(const nir_shader_compiler_options *)
+			ctx->screen->get_compiler_options(ctx->screen,
+		                                     PIPE_SHADER_IR_NIR,
+		                                     shader->shader.processor_type);
 	if (!sel->nir && !(sel->ir_type == PIPE_SHADER_IR_TGSI)) {
 		assert(sel->nir_blob);
 		struct blob_reader blob_reader;
@@ -147,7 +151,7 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 
 	int processor = sel->ir_type == PIPE_SHADER_IR_TGSI ?
 		tgsi_get_processor_type(sel->tokens):
-		sel->nir->info.stage;
+		pipe_shader_type_from_mesa(sel->nir->info.stage);
 	
 	bool dump = r600_can_dump_shader(&rctx->screen->b, processor);
 
@@ -158,7 +162,8 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 	{
 		glsl_type_singleton_init_or_ref();
 		if (sel->ir_type == PIPE_SHADER_IR_TGSI) {
-			ralloc_free(sel->nir);
+			if (sel->nir)
+				ralloc_free(sel->nir);
 			if (sel->nir_blob) {
 				free(sel->nir_blob);
 				sel->nir_blob = NULL;
@@ -166,10 +171,10 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 			sel->nir = tgsi_to_nir(sel->tokens, ctx->screen, true);
 			/* Lower int64 ops because we have some r600 built-in shaders that use it */
 			if (nir_options->lower_int64_options) {
-				NIR_PASS(_, sel->nir, nir_lower_alu_to_scalar, r600_lower_to_scalar_instr_filter, NULL);
-				NIR_PASS(_, sel->nir, nir_lower_int64);
+				NIR_PASS_V(sel->nir, nir_lower_alu_to_scalar, r600_lower_to_scalar_instr_filter, NULL);
+				NIR_PASS_V(sel->nir, nir_lower_int64);
 			}
-			NIR_PASS(_, sel->nir, nir_lower_flrp, ~0, false);
+			NIR_PASS_V(sel->nir, nir_lower_flrp, ~0, false);
 		}
 		nir_tgsi_scan_shader(sel->nir, &sel->info, true);
 
@@ -177,8 +182,20 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 
 		glsl_type_singleton_decref();
 
-		if (r)
+		if (r) {
+			fprintf(stderr, "--Failed shader--------------------------------------------------\n");
+			
+			if (sel->ir_type == PIPE_SHADER_IR_TGSI) {
+				fprintf(stderr, "--TGSI--------------------------------------------------------\n");
+				tgsi_dump(sel->tokens, 0);
+			}
+			
+			fprintf(stderr, "--NIR --------------------------------------------------------\n");
+			nir_print_shader(sel->nir, stderr);
+			
+			R600_ERR("translation from NIR failed !\n");
 			goto error;
+		}
 	}
 	
 	if (dump) {
@@ -226,16 +243,16 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 
 	/* Build state. */
 	switch (shader->shader.processor_type) {
-	case MESA_SHADER_TESS_CTRL:
+	case PIPE_SHADER_TESS_CTRL:
 		evergreen_update_hs_state(ctx, shader);
 		break;
-	case MESA_SHADER_TESS_EVAL:
+	case PIPE_SHADER_TESS_EVAL:
 		if (key.tes.as_es)
 			evergreen_update_es_state(ctx, shader);
 		else
 			evergreen_update_vs_state(ctx, shader);
 		break;
-	case MESA_SHADER_GEOMETRY:
+	case PIPE_SHADER_GEOMETRY:
 		if (rctx->b.gfx_level >= EVERGREEN) {
 			evergreen_update_gs_state(ctx, shader);
 			evergreen_update_vs_state(ctx, shader->gs_copy_shader);
@@ -244,7 +261,7 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 			r600_update_vs_state(ctx, shader->gs_copy_shader);
 		}
 		break;
-	case MESA_SHADER_VERTEX:
+	case PIPE_SHADER_VERTEX:
 		export_shader = key.vs.as_es;
 		if (rctx->b.gfx_level >= EVERGREEN) {
 			if (key.vs.as_ls)
@@ -260,14 +277,14 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 				r600_update_vs_state(ctx, shader);
 		}
 		break;
-	case MESA_SHADER_FRAGMENT:
+	case PIPE_SHADER_FRAGMENT:
 		if (rctx->b.gfx_level >= EVERGREEN) {
 			evergreen_update_ps_state(ctx, shader);
 		} else {
 			r600_update_ps_state(ctx, shader);
 		}
 		break;
-	case MESA_SHADER_COMPUTE:
+	case PIPE_SHADER_COMPUTE:
 		evergreen_update_ls_state(ctx, shader);
 		break;
 	default:
@@ -275,16 +292,14 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 		goto error;
 	}
 
-	if (unlikely(rctx->screen->b.debug_flags & DBG_SHADER_DB)) {
-		util_debug_message(&rctx->b.debug, SHADER_INFO, "%s shader: %d dw, %d gprs, %d alu_groups, %d loops, %d cf, %d stack",
-				   _mesa_shader_stage_to_abbrev(processor),
-				   shader->shader.bc.ndw,
-				   shader->shader.bc.ngpr,
-				   shader->shader.bc.nalu_groups,
-				   shader->shader.num_loops,
-				   shader->shader.bc.ncf,
-				   shader->shader.bc.nstack);
-	}
+	util_debug_message(&rctx->b.debug, SHADER_INFO, "%s shader: %d dw, %d gprs, %d alu_groups, %d loops, %d cf, %d stack",
+		           _mesa_shader_stage_to_abbrev(tgsi_processor_to_shader_stage(processor)),
+	                   shader->shader.bc.ndw,
+	                   shader->shader.bc.ngpr,
+			   shader->shader.bc.nalu_groups,
+			   shader->shader.num_loops,
+			   shader->shader.bc.ncf,
+			   shader->shader.bc.nstack);
 
 	if (!sel->nir_blob && sel->nir && sel->ir_type != PIPE_SHADER_IR_TGSI) {
 		struct blob blob;
@@ -312,7 +327,8 @@ void r600_pipe_shader_destroy(struct pipe_context *ctx UNUSED, struct r600_pipe_
 		r600_bytecode_clear(&shader->shader.bc);
 	r600_release_command_buffer(&shader->command_buffer);
 
-	free(shader->shader.arrays);
+	if (shader->shader.arrays)
+		free(shader->shader.arrays);
 }
 
 struct r600_shader_ctx {
@@ -430,56 +446,6 @@ void *r600_create_vertex_fetch_shader(struct pipe_context *ctx,
 				shader->width_correction[elements[i].vertex_buffer_index] = 4 - 3;
 			else
 				shader->width_correction[elements[i].vertex_buffer_index] = 8 - 6;
-		}
-
-		if (unlikely(rctx->b.family >= CHIP_PALM &&
-			     format == FMT_2_10_10_10 &&
-			     !num_format && format_comp &&
-			     desc->swizzle[3] >= PIPE_SWIZZLE_X &&
-			     desc->swizzle[3] <= PIPE_SWIZZLE_W)) {
-			struct r600_bytecode_alu alu;
-			const unsigned sel_main = i + 1;
-
-			bc.force_add_cf = 1;
-
-			memset(&alu, 0, sizeof(alu));
-			alu.op = ALU_OP1_MOV;
-			alu.src[0].sel = sel_main;
-			alu.src[0].chan = desc->swizzle[3];
-			alu.dst.chan = 1;
-			alu.omod = 2;
-			alu.dst.clamp = 1;
-
-			if (unlikely(r = r600_bytecode_add_alu(&bc, &alu)))
-				goto fail;
-
-			memset(&alu, 0, sizeof(alu));
-			alu.op = ALU_OP2_SETGT;
-			alu.src[0].sel = sel_main;
-			alu.src[0].chan = desc->swizzle[3];
-			alu.src[1].sel = V_SQ_ALU_SRC_LITERAL;
-			alu.src[1].value = 0x3f000000;
-			alu.dst.chan = 3;
-			alu.omod = 1;
-			alu.last = 1;
-
-			if (unlikely(r = r600_bytecode_add_alu(&bc, &alu)))
-				goto fail;
-
-			memset(&alu, 0, sizeof(alu));
-			alu.op = ALU_OP2_ADD;
-			alu.src[0].sel = V_SQ_ALU_SRC_PV;
-			alu.src[0].chan = 1;
-			alu.src[1].sel = V_SQ_ALU_SRC_PV;
-			alu.src[1].chan = 3;
-			alu.src[1].neg = 1;
-			alu.dst.sel = sel_main;
-			alu.dst.chan = desc->swizzle[3];
-			alu.dst.write = 1;
-			alu.last = 1;
-
-			if (unlikely(r = r600_bytecode_add_alu(&bc, &alu)))
-				goto fail;
 		}
 	}
 
@@ -759,7 +725,7 @@ int generate_gs_copy_shader(struct r600_context *rctx,
 
 	ctx.shader = &cshader->shader;
 	ctx.bc = &ctx.shader->bc;
-	ctx.type = ctx.bc->type = MESA_SHADER_VERTEX;
+	ctx.type = ctx.bc->type = PIPE_SHADER_VERTEX;
 
 	r600_bytecode_init(ctx.bc, rctx->b.gfx_level, rctx->b.family,
 			   rctx->screen->has_compressed_msaa_texturing);

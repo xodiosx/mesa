@@ -29,11 +29,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-#include "util/detect_arch.h"
-#include "util/detect_cc.h"
 #include "util/u_cpu_detect.h"
 
-#if DETECT_ARCH_X86_64
+#if defined(USE_X86_64_ASM)
 #include <xmmintrin.h>
 #endif
 
@@ -59,7 +57,7 @@ uint16_t _mesa_float_to_float16_rtz_slow(float val);
 static inline uint16_t
 _mesa_float_to_half(float val)
 {
-#if DETECT_ARCH_X86_64 && DETECT_CC_GCC
+#if defined(USE_X86_64_ASM)
    if (util_get_cpu_caps()->has_f16c) {
       __m128 in = {val};
       __m128i out;
@@ -75,7 +73,7 @@ _mesa_float_to_half(float val)
 static inline float
 _mesa_half_to_float(uint16_t val)
 {
-#if DETECT_ARCH_X86_64 && DETECT_CC_GCC
+#if defined(USE_X86_64_ASM)
    if (util_get_cpu_caps()->has_f16c) {
       __m128i in = {val};
       __m128 out;
@@ -83,7 +81,7 @@ _mesa_half_to_float(uint16_t val)
       __asm volatile("vcvtph2ps %1, %0" : "=v"(out) : "v"(in));
       return out[0];
    }
-#elif DETECT_ARCH_AARCH64 && DETECT_CC_GCC
+#elif defined(USE_AARCH64_ASM)
    float result;
    uint16_t in = val;
 
@@ -100,7 +98,7 @@ _mesa_half_to_float(uint16_t val)
 static inline uint16_t
 _mesa_float_to_float16_rtz(float val)
 {
-#if DETECT_ARCH_X86_64 && DETECT_CC_GCC
+#if defined(USE_X86_64_ASM)
    if (util_get_cpu_caps()->has_f16c) {
       __m128 in = {val};
       __m128i out;
@@ -128,21 +126,16 @@ _mesa_half_is_negative(uint16_t h)
 
 #ifdef __cplusplus
 
-namespace mesa
-{
-
 /* Helper class for disambiguating fp16 from uint16_t in C++ overloads */
 
 struct float16_t {
    uint16_t bits;
    float16_t(float f) : bits(_mesa_float_to_half(f)) {}
-   float16_t(double d) : bits(_mesa_float_to_half((float)d)) {}
+   float16_t(double d) : bits(_mesa_float_to_half(d)) {}
    float16_t(uint16_t raw_bits) : bits(raw_bits) {}
    static float16_t one() { return float16_t(FP16_ONE); }
    static float16_t zero() { return float16_t(FP16_ZERO); }
 };
-
-} /* namespace mesa */
 
 #endif
 

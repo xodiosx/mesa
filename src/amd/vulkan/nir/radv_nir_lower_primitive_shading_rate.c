@@ -84,5 +84,10 @@ radv_nir_lower_primitive_shading_rate(nir_shader *nir, enum amd_gfx_level gfx_le
          break;
    }
 
-   return nir_progress(progress, impl, nir_metadata_control_flow);
+   if (progress)
+      nir_metadata_preserve(impl, nir_metadata_control_flow);
+   else
+      nir_metadata_preserve(impl, nir_metadata_all);
+
+   return progress;
 }

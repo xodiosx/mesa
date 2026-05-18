@@ -80,7 +80,7 @@ rebind_resource_in_ctx(struct fd_context *ctx,
       return;
 
    /* per-shader-stage resources: */
-   for (unsigned stage = 0; stage < MESA_SHADER_STAGES; stage++) {
+   for (unsigned stage = 0; stage < PIPE_SHADER_TYPES; stage++) {
       /* Constbufs.. note that constbuf[0] is normal uniforms emitted in
        * cmdstream rather than by pointer..
        */
@@ -190,13 +190,18 @@ realloc_bo(struct fd_resource *rsc, uint32_t size)
    struct pipe_resource *prsc = &rsc->b.b;
    struct fd_screen *screen = fd_screen(rsc->b.b.screen);
    uint32_t flags =
-      ((prsc->target == PIPE_BUFFER) ? FD_BO_HINT_BUFFER : FD_BO_HINT_IMAGE) |
+      (prsc->target == PIPE_BUFFER) ? FD_BO_HINT_BUFFER : FD_BO_HINT_IMAGE |
       COND(rsc->layout.tile_mode, FD_BO_NOMAP) |
-      COND((prsc->usage == PIPE_USAGE_STAGING) &&
+      COND((prsc->usage & PIPE_USAGE_STAGING) &&
            (prsc->flags & PIPE_RESOURCE_FLAG_MAP_COHERENT),
            FD_BO_CACHED_COHERENT) |
       COND(prsc->bind & PIPE_BIND_SHARED, FD_BO_SHARED) |
       COND(prsc->bind & PIPE_BIND_SCANOUT, FD_BO_SCANOUT);
+   /* TODO other flags? */
+
+   /* if we start using things other than write-combine,
+    * be sure to check for PIPE_RESOURCE_FLAG_MAP_COHERENT
+    */
 
    if (rsc->bo)
       fd_bo_del(rsc->bo);
@@ -522,7 +527,7 @@ fd_try_shadow_resource(struct fd_context *ctx, struct fd_resource *rsc,
       case PIPE_TEXTURE_2D:
          /* TODO */
       default:
-         UNREACHABLE("TODO");
+         unreachable("TODO");
       }
    }
 
@@ -1104,11 +1109,8 @@ fd_resource_get_handle(struct pipe_screen *pscreen, struct pipe_context *pctx,
 
       pctx = threaded_context_unwrap_sync(pctx);
 
-      /* Always use aux ctx, even if we are provided a valid pctx, since in
-       * the TC case this could be called from something other than the
-       * driver thread
-       */
-      struct fd_context *ctx = fd_screen_aux_context_get(pscreen);
+      struct fd_context *ctx = pctx ?
+            fd_context(pctx) : fd_screen_aux_context_get(pscreen);
 
       /* Since gl is horrible, we can end up getting asked to export a handle
        * for a rsc which was not originally allocated in a way that can be
@@ -1122,7 +1124,8 @@ fd_resource_get_handle(struct pipe_screen *pscreen, struct pipe_context *pctx,
 
       ret = fd_try_shadow_resource(ctx, rsc, 0, NULL, handle->modifier);
 
-      fd_screen_aux_context_put(pscreen);
+      if (!pctx)
+         fd_screen_aux_context_put(pscreen);
 
       if (!ret)
          return false;
@@ -1177,16 +1180,12 @@ fd_resource_resize(struct pipe_resource *prsc, uint32_t sz)
    assert(prsc->bind == PIPE_BIND_QUERY_BUFFER);
 
    prsc->width0 = sz;
-   fdl_layout_buffer(&rsc->layout, sz);
-
-   realloc_bo(rsc, rsc->layout.size);
+   realloc_bo(rsc, fd_screen(prsc->screen)->setup_slices(rsc));
 }
 
-/* Helper for legacy backends not using fdl: */
-void
+static void
 fd_resource_layout_init(struct pipe_resource *prsc)
 {
-   const struct fd_dev_info *info = fd_screen(prsc->screen)->info;
    struct fd_resource *rsc = fd_resource(prsc);
    struct fdl_layout *layout = &rsc->layout;
 
@@ -1198,10 +1197,7 @@ fd_resource_layout_init(struct pipe_resource *prsc)
 
    layout->cpp = util_format_get_blocksize(prsc->format);
    layout->cpp *= fd_resource_nr_samples(prsc);
-   layout->cpp_shift = ffs(util_next_power_of_two(layout->cpp)) - 1;
-
-   layout->linear_fallback_threshold_texels =
-      fdl_linear_fallback_threshold_texels(layout, info);
+   layout->cpp_shift = ffs(layout->cpp) - 1;
 }
 
 static struct fd_resource *
@@ -1242,6 +1238,13 @@ alloc_resource_struct(struct pipe_screen *pscreen,
    return rsc;
 }
 
+enum fd_layout_type {
+   ERROR,
+   LINEAR,
+   TILED,
+   UBWC,
+};
+
 static bool
 has_implicit_modifier(const uint64_t *modifiers, int count)
 {
@@ -1269,37 +1272,37 @@ get_best_layout(struct fd_screen *screen,
 
    /* First, find all the conditions which would force us to linear */
    if (!screen->tile_mode)
-      return FD_LAYOUT_LINEAR;
+      return LINEAR;
 
    if (!screen->tile_mode(tmpl))
-      return FD_LAYOUT_LINEAR;
+      return LINEAR;
 
    if (tmpl->target == PIPE_BUFFER)
-      return FD_LAYOUT_LINEAR;
+      return LINEAR;
 
    if ((tmpl->usage == PIPE_USAGE_STAGING) &&
        !util_format_is_depth_or_stencil(tmpl->format))
-      return FD_LAYOUT_LINEAR;
+      return LINEAR;
 
    if (tmpl->bind & PIPE_BIND_LINEAR) {
       if (tmpl->usage != PIPE_USAGE_STAGING)
          perf_debug("%" PRSC_FMT ": forcing linear: bind flags",
                     PRSC_ARGS(tmpl));
-      return FD_LAYOUT_LINEAR;
+      return LINEAR;
    }
 
    if (FD_DBG(NOTILE))
-       return FD_LAYOUT_LINEAR;
+       return LINEAR;
 
    /* Shared resources without explicit modifiers must always be linear */
    if (!can_explicit && (tmpl->bind & PIPE_BIND_SHARED)) {
       perf_debug("%" PRSC_FMT
                  ": forcing linear: shared resource + implicit modifiers",
                  PRSC_ARGS(tmpl));
-      return FD_LAYOUT_LINEAR;
+      return LINEAR;
    }
 
-   bool ubwc_ok = is_a6xx(screen) && !screen->info->props.is_a702;
+   bool ubwc_ok = is_a6xx(screen);
    if (FD_DBG(NOUBWC))
       ubwc_ok = false;
 
@@ -1324,21 +1327,21 @@ get_best_layout(struct fd_screen *screen,
    }
 
    if (ubwc_ok)
-      return FD_LAYOUT_UBWC;
+      return UBWC;
 
    if (can_implicit ||
        drm_find_modifier(DRM_FORMAT_MOD_QCOM_TILED3, modifiers, count))
-      return FD_LAYOUT_TILED;
+      return TILED;
 
    if (!drm_find_modifier(DRM_FORMAT_MOD_LINEAR, modifiers, count)) {
       perf_debug("%" PRSC_FMT ": need linear but not in modifier set",
                  PRSC_ARGS(tmpl));
-      return FD_LAYOUT_ERROR;
+      return ERROR;
    }
 
    perf_debug("%" PRSC_FMT ": not using tiling: explicit modifiers and no UBWC",
               PRSC_ARGS(tmpl));
-   return FD_LAYOUT_LINEAR;
+   return LINEAR;
 }
 
 /**
@@ -1375,12 +1378,19 @@ fd_resource_allocate_and_resolve(struct pipe_screen *pscreen,
    if (tmpl->bind & PIPE_BIND_SHARED)
       rsc->b.is_shared = true;
 
+   fd_resource_layout_init(prsc);
+
    enum fd_layout_type layout =
-      get_best_layout(screen, prsc, modifiers, count);
-   if (layout == FD_LAYOUT_ERROR) {
+      get_best_layout(screen, tmpl, modifiers, count);
+   if (layout == ERROR) {
       free(prsc);
       return NULL;
    }
+
+   if (layout >= TILED)
+      rsc->layout.tile_mode = screen->tile_mode(prsc);
+   if (layout == UBWC)
+      rsc->layout.ubwc = true;
 
    rsc->internal_format = format;
 
@@ -1389,7 +1399,7 @@ fd_resource_allocate_and_resolve(struct pipe_screen *pscreen,
       size = prsc->width0;
       fdl_layout_buffer(&rsc->layout, size);
    } else {
-      size = screen->layout_resource(rsc, layout);
+      size = screen->setup_slices(rsc);
    }
 
    /* special case for hw-query buffer, which we need to allocate before we
@@ -1505,37 +1515,51 @@ fd_resource_from_handle(struct pipe_screen *pscreen,
    if (tmpl->target == PIPE_BUFFER)
       tc_buffer_disable_cpu_storage(&rsc->b.b);
 
+   struct fdl_slice *slice = fd_resource_slice(rsc, 0);
    struct pipe_resource *prsc = &rsc->b.b;
 
    DBG("%" PRSC_FMT ", modifier=%" PRIx64, PRSC_ARGS(prsc), handle->modifier);
 
    rsc->b.is_shared = true;
 
+   fd_resource_layout_init(prsc);
+
    struct fd_bo *bo = fd_screen_bo_from_handle(pscreen, handle);
-   if (!bo) {
-      if (FD_DBG(LAYOUT))
-         mesa_loge("handle import failed for: %" PRSC_FMT, PRSC_ARGS(tmpl));
+   if (!bo)
       goto fail;
-   }
 
    fd_resource_set_bo(rsc, bo);
 
    rsc->internal_format = tmpl->format;
+   rsc->layout.layer_first = true;
+   rsc->layout.pitch0 = handle->stride;
+   slice->offset = handle->offset;
+   slice->size0 = handle->stride * prsc->height0;
 
-   if (tmpl->target == PIPE_BUFFER) {
-      fdl_layout_buffer(&rsc->layout, tmpl->width0);
-   } else if (!screen->layout_resource_for_handle(rsc, handle)) {
-      if (FD_DBG(LAYOUT))
-         mesa_loge("layout failed for: %" PRSC_FMT, PRSC_ARGS(tmpl));
-      goto fail;
-   }
+   /* use a pitchalign of gmem_align_w pixels, because GMEM resolve for
+    * lower alignments is not implemented (but possible for a6xx at least)
+    *
+    * for UBWC-enabled resources, layout_resource_for_modifier will further
+    * validate the pitch and set the right pitchalign
+    */
+   rsc->layout.pitchalign =
+      fdl_cpp_shift(&rsc->layout) + util_logbase2(screen->info->gmem_align_w);
 
-   if (rsc->layout.pitch0 != handle->stride) {
-      if (FD_DBG(LAYOUT))
-         mesa_loge("invalid pitch (%u vs %u) for: %" PRSC_FMT, rsc->layout.pitch0,
-                   handle->stride, PRSC_ARGS(tmpl));
+   /* apply the minimum pitchalign (note: actually 4 for a3xx but doesn't
+    * matter) */
+   if (is_a6xx(screen) || is_a5xx(screen))
+      rsc->layout.pitchalign = MAX2(rsc->layout.pitchalign, 6);
+   else
+      rsc->layout.pitchalign = MAX2(rsc->layout.pitchalign, 5);
+
+   if (rsc->layout.pitch0 < (prsc->width0 * rsc->layout.cpp) ||
+       fd_resource_pitch(rsc, 0) != rsc->layout.pitch0)
       goto fail;
-   }
+
+   assert(rsc->layout.cpp);
+
+   if (screen->layout_resource_for_modifier(rsc, handle->modifier) < 0)
+      goto fail;
 
    if (screen->ro) {
       rsc->scanout =
@@ -1544,9 +1568,6 @@ fd_resource_from_handle(struct pipe_screen *pscreen,
    }
 
    rsc->valid = true;
-
-   if (FD_DBG(LAYOUT))
-      fdl_dump_layout(&rsc->layout);
 
    return prsc;
 
@@ -1594,13 +1615,13 @@ fd_invalidate_resource(struct pipe_context *pctx,
       struct fd_batch *batch = rsc->track->write_batch;
       struct pipe_framebuffer_state *pfb = &batch->framebuffer;
 
-      if (pfb->zsbuf.texture == prsc) {
+      if (pfb->zsbuf && pfb->zsbuf->texture == prsc) {
          batch->resolve &= ~(FD_BUFFER_DEPTH | FD_BUFFER_STENCIL);
          fd_dirty_resource(ctx, prsc, FD_DIRTY_ZSA, true);
       }
 
       for (unsigned i = 0; i < pfb->nr_cbufs; i++) {
-         if (pfb->cbufs[i].texture == prsc) {
+         if (pfb->cbufs[i] && pfb->cbufs[i]->texture == prsc) {
             batch->resolve &= ~(PIPE_CLEAR_COLOR0 << i);
             fd_dirty_resource(ctx, prsc, FD_DIRTY_FRAMEBUFFER, true);
          }
@@ -1643,44 +1664,10 @@ static const struct u_transfer_vtbl transfer_vtbl = {
    .get_stencil = fd_resource_get_stencil,
 };
 
-static bool
-fd_layout_resource_for_handle(struct fd_resource *rsc, struct winsys_handle *handle)
+static int
+fd_layout_resource_for_modifier(struct fd_resource *rsc, uint64_t modifier)
 {
-   struct pipe_resource *prsc = &rsc->b.b;
-   struct fd_screen *screen = fd_screen(prsc->screen);
-
-   fd_resource_layout_init(prsc);
-
-   struct fdl_slice *slice = fd_resource_slice(rsc, 0);
-   rsc->layout.layer_first = true;
-   rsc->layout.pitch0 = handle->stride;
-   slice->offset = handle->offset;
-   slice->size0 = handle->stride * prsc->height0;
-
-   /* use a pitchalign of gmem_align_w pixels, because GMEM resolve for
-    * lower alignments is not implemented (but possible for a6xx at least)
-    *
-    * for UBWC-enabled resources, layout_resource_for_modifier will further
-    * validate the pitch and set the right pitchalign
-    */
-   rsc->layout.pitchalign =
-      fdl_cpp_shift(&rsc->layout) + util_logbase2(screen->info->gmem_align_w);
-
-   /* apply the minimum pitchalign (note: actually 4 for a3xx but doesn't
-    * matter)
-    */
-   if (is_a6xx(screen) || is_a5xx(screen))
-      rsc->layout.pitchalign = MAX2(rsc->layout.pitchalign, 6);
-   else
-      rsc->layout.pitchalign = MAX2(rsc->layout.pitchalign, 5);
-
-   if (rsc->layout.pitch0 < (prsc->width0 * rsc->layout.cpp) ||
-       fd_resource_pitch(rsc, 0) != rsc->layout.pitch0)
-      return false;
-
-   assert(rsc->layout.cpp);
-
-   switch (handle->modifier) {
+   switch (modifier) {
    case DRM_FORMAT_MOD_LINEAR:
       /* The dri gallium frontend will pass DRM_FORMAT_MOD_INVALID to us
        * when it's called through any of the non-modifier BO create entry
@@ -1688,9 +1675,9 @@ fd_layout_resource_for_handle(struct fd_resource *rsc, struct winsys_handle *han
        * other legacy backchannels, but for freedreno it just means
        * LINEAR. */
    case DRM_FORMAT_MOD_INVALID:
-      return true;
+      return 0;
    default:
-      return false;
+      return -1;
    }
 }
 
@@ -1699,6 +1686,7 @@ fd_resource_from_memobj(struct pipe_screen *pscreen,
                         const struct pipe_resource *tmpl,
                         struct pipe_memory_object *pmemobj, uint64_t offset)
 {
+   struct fd_screen *screen = fd_screen(pscreen);
    struct fd_memory_object *memobj = fd_memory_object(pmemobj);
    struct pipe_resource *prsc;
    struct fd_resource *rsc;
@@ -1717,6 +1705,8 @@ fd_resource_from_memobj(struct pipe_screen *pscreen,
       modifiers = metadata.modifier;
    } else if (tmpl->bind & PIPE_BIND_LINEAR) {
       modifiers = DRM_FORMAT_MOD_LINEAR;
+   } else if (is_a6xx(screen) && tmpl->width0 >= FDL_MIN_UBWC_WIDTH) {
+      modifiers = DRM_FORMAT_MOD_QCOM_COMPRESSED;
    }
 
    /* Allocate new pipe resource. */
@@ -1792,8 +1782,8 @@ fd_resource_screen_init(struct pipe_screen *pscreen)
                                U_TRANSFER_HELPER_SEPARATE_Z32S8 |
                                U_TRANSFER_HELPER_MSAA_MAP);
 
-   if (!screen->layout_resource_for_handle)
-      screen->layout_resource_for_handle = fd_layout_resource_for_handle;
+   if (!screen->layout_resource_for_modifier)
+      screen->layout_resource_for_modifier = fd_layout_resource_for_modifier;
 
    /* GL_EXT_memory_object */
    pscreen->memobj_create_from_handle = fd_memobj_create_from_handle;

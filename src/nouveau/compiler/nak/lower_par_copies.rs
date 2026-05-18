@@ -6,7 +6,7 @@ use crate::{
     ir::*,
 };
 
-use rustc_hash::FxHashMap;
+use std::collections::HashMap;
 
 struct CopyNode {
     num_reads: usize,
@@ -63,11 +63,10 @@ impl CopyGraph {
 
 fn copy_needs_tmp(dst: &RegRef, src: &SrcRef) -> bool {
     if let Some(src_reg) = src.as_reg() {
-        (dst.file() == RegFile::Mem && src_reg.file() != RegFile::GPR)
+        (dst.file() == RegFile::Mem && src_reg.file() == RegFile::Mem)
             || (dst.file() == RegFile::Bar && src_reg.file() == RegFile::Bar)
     } else {
-        // Non-GPR to Mem copies need a temporary
-        dst.file() == RegFile::Mem
+        false
     }
 }
 
@@ -90,15 +89,15 @@ fn cycle_use_swap(pc: &OpParCopy, file: RegFile) -> bool {
     }
 }
 
-fn lower_par_copy(pc: OpParCopy, sm: &ShaderModelInfo) -> MappedInstrs {
+fn lower_par_copy(pc: OpParCopy, sm: &dyn ShaderModel) -> MappedInstrs {
     let mut graph = CopyGraph::new();
     let mut vals = Vec::new();
-    let mut reg_to_idx = FxHashMap::default();
+    let mut reg_to_idx = HashMap::new();
 
     for (i, (dst, _)) in pc.dsts_srcs.iter().enumerate() {
         // Destinations must be pairwise unique
         let reg = dst.as_reg().unwrap();
-        assert!(!reg_to_idx.contains_key(reg));
+        assert!(reg_to_idx.get(reg).is_none());
 
         // Everything must be scalar
         assert!(reg.comps() == 1);
@@ -110,17 +109,17 @@ fn lower_par_copy(pc: OpParCopy, sm: &ShaderModelInfo) -> MappedInstrs {
     }
 
     for (dst_idx, (_, src)) in pc.dsts_srcs.iter().enumerate() {
-        assert!(src.is_unmodified());
-        let src = &src.src_ref;
+        assert!(src.src_mod.is_none());
+        let src = src.src_ref;
 
         let src_idx = if let SrcRef::Reg(reg) = src {
             // Everything must be scalar
             assert!(reg.comps() == 1);
 
-            *reg_to_idx.entry(*reg).or_insert_with(|| {
+            *reg_to_idx.entry(reg).or_insert_with(|| {
                 let node_idx = graph.add_node();
                 assert!(node_idx == vals.len());
-                vals.push(src.clone());
+                vals.push(src);
                 node_idx
             })
         } else {
@@ -130,7 +129,7 @@ fn lower_par_copy(pc: OpParCopy, sm: &ShaderModelInfo) -> MappedInstrs {
 
             let node_idx = graph.add_node();
             assert!(node_idx == vals.len());
-            vals.push(src.clone());
+            vals.push(src);
             node_idx
         };
 
@@ -150,7 +149,7 @@ fn lower_par_copy(pc: OpParCopy, sm: &ShaderModelInfo) -> MappedInstrs {
     while let Some(dst_idx) = ready.pop() {
         if let Some(src_idx) = graph.src(dst_idx) {
             let dst = *vals[dst_idx].as_reg().unwrap();
-            let src = vals[src_idx].clone();
+            let src = vals[src_idx];
             if copy_needs_tmp(&dst, &src) {
                 let tmp = pc.tmp.expect("This copy needs a temporary").comp(0);
                 b.copy_to(tmp.into(), src.into());
@@ -248,7 +247,7 @@ fn lower_par_copy(pc: OpParCopy, sm: &ShaderModelInfo) -> MappedInstrs {
         }
     }
 
-    b.into_mapped_instrs()
+    b.as_mapped_instrs()
 }
 
 impl Shader<'_> {
@@ -258,14 +257,14 @@ impl Shader<'_> {
             match instr.op {
                 Op::ParCopy(pc) => {
                     assert!(instr.pred.is_true());
-                    let mut instrs = Vec::new();
+                    let mut instrs = vec![];
                     if DEBUG.annotate() {
-                        instrs.push(Instr::new(OpAnnotate {
+                        instrs.push(Instr::new_boxed(OpAnnotate {
                             annotation: "par_copy lowered by lower_par_copy"
                                 .into(),
                         }));
                     }
-                    match lower_par_copy(*pc, sm) {
+                    match lower_par_copy(pc, sm) {
                         MappedInstrs::None => {
                             if let Some(instr) = instrs.pop() {
                                 MappedInstrs::One(instr)

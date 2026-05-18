@@ -134,7 +134,7 @@ check_first_ldunifa(struct v3d_compile *c,
                         return false;
         }
 
-        UNREACHABLE("could not find starting unifa for ldunifa sequence");
+        unreachable("could not find starting unifa for ldunifa sequence");
 }
 
 static bool

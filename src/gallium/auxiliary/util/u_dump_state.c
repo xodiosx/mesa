@@ -211,13 +211,6 @@ util_dump_ptr(FILE *stream, const void *value)
       util_dump_member_end(_stream); \
    } while(0)
 
-#define util_dump_member_val(_stream, _type, _obj, _member) \
-   do { \
-      util_dump_member_begin(_stream, #_member); \
-      util_dump_##_type(_stream, &(_obj)->_member); \
-      util_dump_member_end(_stream); \
-   } while(0)
-
 #define util_dump_arg_array(_stream, _type, _arg, _size) \
    do { \
       util_dump_arg_begin(_stream, #_arg); \
@@ -229,13 +222,6 @@ util_dump_ptr(FILE *stream, const void *value)
    do { \
       util_dump_member_begin(_stream, #_member); \
       util_dump_array(_stream, _type, (_obj)->_member, sizeof((_obj)->_member)/sizeof((_obj)->_member[0])); \
-      util_dump_member_end(_stream); \
-   } while(0)
-
-#define util_dump_member_array_val(_stream, _type, _obj, _member) \
-   do { \
-      util_dump_member_begin(_stream, #_member); \
-      util_dump_struct_array(_stream, _type, (_obj)->_member, sizeof((_obj)->_member)/sizeof((_obj)->_member[0])); \
       util_dump_member_end(_stream); \
    } while(0)
 
@@ -678,8 +664,8 @@ util_dump_framebuffer_state(FILE *stream, const struct pipe_framebuffer_state *s
    util_dump_member(stream, uint, state, samples);
    util_dump_member(stream, uint, state, layers);
    util_dump_member(stream, uint, state, nr_cbufs);
-   util_dump_member_array_val(stream, surface, state, cbufs);
-   util_dump_member_val(stream, ptr, state, zsbuf);
+   util_dump_member_array(stream, ptr, state, cbufs);
+   util_dump_member(stream, ptr, state, zsbuf);
 
    util_dump_struct_end(stream);
 }
@@ -726,11 +712,13 @@ util_dump_surface(FILE *stream, const struct pipe_surface *state)
    util_dump_struct_begin(stream, "pipe_surface");
 
    util_dump_member(stream, format, state, format);
+   util_dump_member(stream, uint, state, width);
+   util_dump_member(stream, uint, state, height);
 
    util_dump_member(stream, ptr, state, texture);
-   util_dump_member(stream, uint, state, level);
-   util_dump_member(stream, uint, state, first_layer);
-   util_dump_member(stream, uint, state, last_layer);
+   util_dump_member(stream, uint, state, u.tex.level);
+   util_dump_member(stream, uint, state, u.tex.first_layer);
+   util_dump_member(stream, uint, state, u.tex.last_layer);
 
    util_dump_struct_end(stream);
 }
@@ -990,6 +978,8 @@ void util_dump_grid_info(FILE *stream, const struct pipe_grid_info *state)
 
    util_dump_struct_begin(stream, "pipe_grid_info");
 
+   util_dump_member(stream, uint, state, pc);
+   util_dump_member(stream, ptr, state, input);
    util_dump_member(stream, uint, state, work_dim);
 
    util_dump_member_begin(stream, "block");

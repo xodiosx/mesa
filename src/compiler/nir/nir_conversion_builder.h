@@ -50,7 +50,7 @@ nir_round_float_to_int(nir_builder *b, nir_def *src,
    case nir_rounding_mode_rtz:
       break;
    }
-   UNREACHABLE("unexpected rounding mode");
+   unreachable("unexpected rounding mode");
 }
 
 static inline nir_def *
@@ -102,7 +102,7 @@ nir_round_float_to_float(nir_builder *b, nir_def *src,
    case nir_rounding_mode_undef:
       break;
    }
-   UNREACHABLE("unexpected rounding mode");
+   unreachable("unexpected rounding mode");
 }
 
 static inline nir_def *
@@ -126,7 +126,7 @@ nir_round_int_to_float(nir_builder *b, nir_def *src,
       mantissa_bits = 52;
       break;
    default:
-      UNREACHABLE("Unsupported bit size");
+      unreachable("Unsupported bit size");
    }
 
    if (src->bit_size < mantissa_bits)
@@ -160,7 +160,7 @@ nir_round_int_to_float(nir_builder *b, nir_def *src,
       case nir_rounding_mode_undef:
          break;
       }
-      UNREACHABLE("unexpected rounding mode");
+      unreachable("unexpected rounding mode");
    } else {
       nir_def *mantissa_bit_size = nir_imm_int(b, mantissa_bits);
       nir_def *msb = nir_imax(b, nir_ufind_msb(b, src), mantissa_bit_size);
@@ -181,7 +181,7 @@ nir_round_int_to_float(nir_builder *b, nir_def *src,
       case nir_rounding_mode_undef:
          break;
       }
-      UNREACHABLE("unexpected rounding mode");
+      unreachable("unexpected rounding mode");
    }
 }
 
@@ -297,7 +297,7 @@ nir_get_clamp_limits(nir_builder *b,
          fhigh = DBL_MAX;
          break;
       default:
-         UNREACHABLE("Unhandled bit size");
+         unreachable("Unhandled bit size");
       }
 
       switch (src_base_type) {
@@ -327,12 +327,12 @@ nir_get_clamp_limits(nir_builder *b,
          *high = nir_imm_floatN_t(b, fhigh, src_bit_size);
          break;
       default:
-         UNREACHABLE("Clamping from unknown type");
+         unreachable("Clamping from unknown type");
       }
       break;
    }
    default:
-      UNREACHABLE("clamping to unknown type");
+      unreachable("clamping to unknown type");
       break;
    }
 }
@@ -376,7 +376,7 @@ nir_clamp_to_type_range(nir_builder *b,
       high_cond = high ? nir_fge(b, src, high) : NULL;
       break;
    default:
-      UNREACHABLE("clamping from unknown type");
+      unreachable("clamping from unknown type");
    }
 
    nir_def *val_low = low, *val_high = high;

@@ -7,6 +7,7 @@
 #include "radv_cmd_buffer.h"
 #include "radv_device.h"
 #include "radv_entrypoints.h"
+#include "vk_common_entrypoints.h"
 #include "vk_framebuffer.h"
 
 VKAPI_ATTR void VKAPI_CALL

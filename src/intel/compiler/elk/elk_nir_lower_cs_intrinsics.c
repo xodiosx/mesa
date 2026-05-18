@@ -164,7 +164,7 @@ compute_local_index_id(nir_builder *b,
       break;
    }
    default:
-      UNREACHABLE("invalid derivative group");
+      unreachable("invalid derivative group");
    }
 }
 
@@ -289,7 +289,8 @@ lower_cs_intrinsics_convert_impl(struct lower_intrinsics_state *state)
       lower_cs_intrinsics_convert_block(state, block);
    }
 
-   nir_progress(true, state->impl, nir_metadata_control_flow);
+   nir_metadata_preserve(state->impl,
+                         nir_metadata_control_flow);
 }
 
 bool
@@ -297,7 +298,7 @@ elk_nir_lower_cs_intrinsics(nir_shader *nir,
                             const struct intel_device_info *devinfo,
                             struct elk_cs_prog_data *prog_data)
 {
-   assert(mesa_shader_stage_uses_workgroup(nir->info.stage));
+   assert(gl_shader_stage_uses_workgroup(nir->info.stage));
 
    struct lower_intrinsics_state state = {
       .nir = nir,
@@ -305,7 +306,7 @@ elk_nir_lower_cs_intrinsics(nir_shader *nir,
    };
 
    /* Constraints from NV_compute_shader_derivatives. */
-   if (mesa_shader_stage_is_compute(nir->info.stage) &&
+   if (gl_shader_stage_is_compute(nir->info.stage) &&
        !nir->info.workgroup_size_variable) {
       if (nir->info.derivative_group == DERIVATIVE_GROUP_QUADS) {
          assert(nir->info.workgroup_size[0] % 2 == 0);

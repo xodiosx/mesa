@@ -16,18 +16,15 @@ anv_hasvk_entrypoints = custom_target(
   depend_files : vk_entrypoints_gen_depend_files,
 )
 
-icd_file_name = libname_prefix + 'vulkan_intel_hasvk.' + libname_suffix
-
 intel_hasvk_icd = custom_target(
   'intel_hasvk_icd',
   input : [vk_icd_gen, vk_api_xml],
-  output : 'intel_hasvk_icd.' + vulkan_manifest_suffix,
+  output : 'intel_hasvk_icd.@0@.json'.format(host_machine.cpu()),
   command : [
     prog_python, '@INPUT0@',
     '--api-version', '1.3', '--xml', '@INPUT1@',
-    '--sizeof-pointer', sizeof_pointer,
-    '--icd-lib-path', vulkan_icd_lib_path,
-    '--icd-filename', icd_file_name,
+    '--lib-path', join_paths(get_option('prefix'), get_option('libdir'),
+                             'libvulkan_intel_hasvk.so'),
     '--out', '@OUTPUT@',
   ],
   build_by_default : true,
@@ -44,15 +41,15 @@ _dev_icd = custom_target(
   command : [
     prog_python, '@INPUT0@',
     '--api-version', '1.3', '--xml', '@INPUT1@',
-    '--sizeof-pointer', sizeof_pointer,
-    '--icd-lib-path', meson.current_build_dir(),
-    '--icd-filename', icd_file_name,
+    '--lib-path', meson.current_build_dir() / 'libvulkan_intel_hasvk.so',
     '--out', '@OUTPUT@',
   ],
   build_by_default : true,
 )
 
 devenv.append('VK_DRIVER_FILES', _dev_icd.full_path())
+# Deprecated: replaced by VK_DRIVER_FILES above
+devenv.append('VK_ICD_FILENAMES', _dev_icd.full_path())
 
 libanv_per_hw_ver_libs = []
 anv_per_hw_ver_files = files(
@@ -93,6 +90,7 @@ libanv_files = files(
   'anv_android.h',
   'anv_batch_chain.c',
   'anv_blorp.c',
+  'anv_bo_sync.c',
   'anv_cmd_buffer.c',
   'anv_descriptor_set.c',
   'anv_device.c',
@@ -208,8 +206,7 @@ if with_symbols_check
   )
 endif
 
-# HasVK and its tests can only run on x86
-if with_tests and host_machine.cpu_family().startswith('x86')
+if with_tests
   libvulkan_intel_hasvk_test = static_library(
     'vulkan_intel_hasvk_test',
     [files('anv_gem_stubs.c'), anv_hasvk_entrypoints[0]],

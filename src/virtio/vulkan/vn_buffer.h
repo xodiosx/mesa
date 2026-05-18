@@ -27,10 +27,14 @@ struct vn_buffer_reqs_cache {
    uint64_t max_buffer_size;
    uint32_t queue_family_count;
 
+   /* cache memory type requirement for AHB backed VkBuffer */
+   uint32_t ahb_mem_type_bits;
+   atomic_bool ahb_mem_type_bits_valid;
+
    /* lazily cache memory requirements for native buffer infos */
    struct util_sparse_array entries;
 
-   /* protect entries */
+   /* protect both entries and ahb_mem_type_bits */
    simple_mtx_t mutex;
 
    struct {
@@ -46,7 +50,7 @@ struct vn_buffer {
    struct vn_buffer_memory_requirements requirements;
 };
 VK_DEFINE_NONDISP_HANDLE_CASTS(vn_buffer,
-                               base.vk,
+                               base.base,
                                VkBuffer,
                                VK_OBJECT_TYPE_BUFFER)
 
@@ -54,7 +58,7 @@ struct vn_buffer_view {
    struct vn_object_base base;
 };
 VK_DEFINE_NONDISP_HANDLE_CASTS(vn_buffer_view,
-                               base.vk,
+                               base.base,
                                VkBufferView,
                                VK_OBJECT_TYPE_BUFFER_VIEW)
 

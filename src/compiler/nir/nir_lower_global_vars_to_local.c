@@ -88,8 +88,9 @@ nir_lower_global_vars_to_local(nir_shader *shader)
          exec_node_remove(&var->node);
          var->data.mode = nir_var_function_temp;
          exec_list_push_tail(&impl->locals, &var->node);
-         progress = nir_progress(true, impl,
-                                 nir_metadata_control_flow | nir_metadata_live_defs);
+         nir_metadata_preserve(impl, nir_metadata_control_flow |
+                                        nir_metadata_live_defs);
+         progress = true;
       }
    }
 
@@ -99,7 +100,7 @@ nir_lower_global_vars_to_local(nir_shader *shader)
       nir_fixup_deref_modes(shader);
 
    nir_foreach_function_impl(impl, shader) {
-      nir_no_progress(impl);
+      nir_metadata_preserve(impl, nir_metadata_all);
    }
 
    return progress;

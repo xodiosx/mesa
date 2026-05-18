@@ -20,15 +20,10 @@ struct ir3_validate_ctx {
    /* Current instruction being validated: */
    struct ir3_instruction *current_instr;
 
-   /* Lazily set up set of instructions that are rpts within the current block. */
-   struct set *rpt_set;
-   struct ir3_block *rpt_block;
-
-   /* Bitset of instructions found so far, used to validate that we don't have
-    * SSA uses that occur before defs.
+   /* Set of instructions found so far, used to validate that we
+    * don't have SSA uses that occure before def's
     */
-   BITSET_WORD *defs;
-   unsigned defs_count;
+   struct set *defs;
 };
 
 static void
@@ -65,36 +60,14 @@ validate_reg(struct ir3_validate_ctx *ctx, struct ir3_register *reg)
       validate_assert(ctx, reg->num >= SHARED_REG_START);
       validate_assert(ctx, reg->num - SHARED_REG_START < SHARED_REG_SIZE);
    }
-
-   if (reg->flags & IR3_REG_UNIFORM) {
-      validate_assert(ctx, ctx->ir->compiler->has_scalar_predicates);
-      validate_assert(ctx, reg->flags & IR3_REG_PREDICATE);
-   }
-
 }
 
 static void
 validate_src(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr,
              struct ir3_register *reg)
 {
-   if ((reg->flags & IR3_REG_IMMED) && !(reg->flags & IR3_REG_ALIAS))
+   if (reg->flags & IR3_REG_IMMED)
       validate_assert(ctx, ir3_valid_immediate(instr, reg->iim_val));
-
-   if (reg->flags & IR3_REG_FIRST_ALIAS)
-      validate_assert(ctx, reg->flags & IR3_REG_ALIAS);
-
-   if (reg->flags & IR3_REG_ALIAS) {
-      unsigned valid_flags = IR3_REG_ALIAS | IR3_REG_FIRST_ALIAS |
-                             IR3_REG_HALF | IR3_REG_CONST | IR3_REG_IMMED |
-                             IR3_REG_SSA | IR3_REG_KILL | IR3_REG_FIRST_KILL |
-                             IR3_REG_LAST_USE;
-      validate_assert(ctx, !(reg->flags & ~valid_flags));
-   }
-
-   if (instr->opc == OPC_ALIAS && instr->cat7.alias_scope == ALIAS_RT) {
-      unsigned valid_flags = IR3_REG_HALF | IR3_REG_CONST | IR3_REG_IMMED;
-      validate_assert(ctx, !(reg->flags & ~valid_flags));
-   }
 
    if (!(reg->flags & IR3_REG_SSA) || !reg->def)
       return;
@@ -104,17 +77,8 @@ validate_src(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr,
 
    struct ir3_register *src = reg->def;
 
-   validate_assert(ctx, src->instr->serialno < ctx->defs_count &&
-                           BITSET_TEST(ctx->defs, src->instr->serialno));
-
-   if (src->instr->opc == OPC_META_COLLECT) {
-      /* We only support reading a subset of written components from collects.
-       */
-      validate_assert(ctx, !(reg->wrmask & ~src->wrmask));
-   } else {
-      validate_assert(ctx, src->wrmask == reg->wrmask);
-   }
-
+   validate_assert(ctx, _mesa_set_search(ctx->defs, src->instr));
+   validate_assert(ctx, src->wrmask == reg->wrmask);
    validate_assert(ctx, reg_class_flags(src) == reg_class_flags(reg));
 
    if (src->flags & IR3_REG_CONST)
@@ -159,21 +123,9 @@ validate_phi_src(struct ir3_validate_ctx *ctx, struct ir3_block *block,
 }
 
 static void
-validate_def(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr)
-{
-   /* Should have been initialized when it was inserted. */
-   validate_assert(ctx, instr->serialno != 0);
-   /* The def should only be seen once (no
-                                 duplicate serialnos). */
-   validate_assert(ctx, instr->serialno < ctx->defs_count &&
-                           !BITSET_TEST(ctx->defs, instr->serialno));
-   BITSET_SET(ctx->defs, instr->serialno);
-}
-
-static void
 validate_phi(struct ir3_validate_ctx *ctx, struct ir3_instruction *phi)
 {
-   validate_def(ctx, phi);
+   _mesa_set_add(ctx->defs, phi);
    validate_assert(ctx, phi->dsts_count == 1);
    validate_assert(ctx, is_dest_gpr(phi->dsts[0]));
 }
@@ -182,13 +134,6 @@ static void
 validate_dst(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr,
              struct ir3_register *reg)
 {
-   if (reg->flags & IR3_REG_RT) {
-      validate_assert(ctx, instr->opc == OPC_ALIAS);
-      validate_assert(ctx, instr->cat7.alias_scope == ALIAS_RT);
-      validate_assert(ctx, !(reg->flags & ~IR3_REG_RT));
-      validate_assert(ctx, !reg->tied);
-   }
-
    if (reg->tied) {
       validate_assert(ctx, reg->tied->tied == reg);
       validate_assert(ctx, reg_class_flags(reg->tied) == reg_class_flags(reg));
@@ -214,9 +159,6 @@ validate_dst(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr,
    if (reg->flags & IR3_REG_RELATIV)
       validate_assert(ctx, instr->address);
 
-   if (reg->flags & IR3_REG_UNIFORM)
-      validate_assert(ctx, opc_cat(instr->opc) == 2);
-
    validate_reg(ctx, reg);
 }
 
@@ -225,19 +167,14 @@ validate_dst(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr,
       ctx, (type_size(type) <= 16) == !!((reg)->flags & IR3_REG_HALF))
 
 static bool
-block_contains_rpt(struct ir3_validate_ctx *ctx, struct ir3_block *block,
-                   struct ir3_instruction *instr)
+block_contains(struct ir3_block *block, struct ir3_instruction *instr)
 {
-   if (ctx->rpt_block != block) {
-      _mesa_set_clear(ctx->rpt_set, NULL);
-      foreach_instr (block_instr, &block->instr_list) {
-         if (ir3_instr_is_rpt(block_instr))
-            _mesa_set_add(ctx->rpt_set, block_instr);
-      }
-      ctx->rpt_block = block;
+   foreach_instr (block_instr, &block->instr_list) {
+      if (block_instr == instr)
+         return true;
    }
 
-   return _mesa_set_search(ctx->rpt_set, instr);
+   return false;
 }
 
 static void
@@ -254,7 +191,7 @@ validate_rpt(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr)
           * fail if, for example, list_delinit is called instead of
           * ir3_instr_remove.
           */
-         validate_assert(ctx, block_contains_rpt(ctx, instr->block, rpt));
+         validate_assert(ctx, block_contains(instr->block, rpt));
       }
    } else if (instr->repeat) {
       validate_assert(ctx, ir3_supports_rpt(ctx->ir->compiler, instr->opc));
@@ -269,10 +206,7 @@ validate_instr(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr)
 
    validate_rpt(ctx, instr);
 
-   /* Use alias-group-aware iterator to make sure the src number will be the
-    * same with and without alias groups.
-    */
-   foreach_src_with_alias_n (reg, n, _, instr) {
+   foreach_src_n (reg, n, instr) {
       if (reg->flags & IR3_REG_RELATIV)
          validate_assert(ctx, instr->address);
 
@@ -329,7 +263,7 @@ validate_instr(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr)
       validate_dst(ctx, instr, reg);
    }
 
-   validate_def(ctx, instr);
+   _mesa_set_add(ctx->defs, instr);
 
    if ((opc_cat(instr->opc) == 2 || opc_cat(instr->opc) == 3 ||
         opc_cat(instr->opc) == 4)) {
@@ -386,10 +320,6 @@ validate_instr(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr)
          validate_assert(ctx,
                          reg_class_flags(instr->dsts[instr->dsts_count - 1]) ==
                             reg_class_flags(instr->srcs[1]));
-      } else if (instr->opc == OPC_MOVS) {
-         validate_assert(ctx, instr->dsts[0]->flags & IR3_REG_SHARED);
-         validate_reg_size(ctx, instr->dsts[0], instr->cat1.dst_type);
-         validate_reg_size(ctx, instr->srcs[0], instr->cat1.src_type);
       } else {
          foreach_dst (dst, instr)
             validate_reg_size(ctx, dst, instr->cat1.dst_type);
@@ -416,7 +346,7 @@ validate_instr(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr)
          }
       }
 
-      if (instr->opc != OPC_MOV && instr->opc != OPC_MOVS)
+      if (instr->opc != OPC_MOV)
          validate_assert(ctx, !instr->address);
 
       break;
@@ -504,10 +434,8 @@ validate_instr(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr)
       case OPC_LDC:
          validate_assert(ctx, !(instr->srcs[0]->flags & IR3_REG_HALF));
          validate_assert(ctx, !(instr->srcs[1]->flags & IR3_REG_HALF));
-         if (instr->dsts[0]->num != INVALID_REG) {
-            validate_assert(ctx, !!(instr->dsts[0]->flags & IR3_REG_SHARED) ==
-                                 !!(instr->flags & IR3_INSTR_U));
-         }
+         validate_assert(ctx, !!(instr->dsts[0]->flags & IR3_REG_SHARED) ==
+                              !!(instr->flags & IR3_INSTR_U));
          break;
       case OPC_LDC_K:
          validate_assert(ctx, !(instr->srcs[0]->flags & IR3_REG_HALF));
@@ -555,38 +483,11 @@ validate_instr(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr)
          validate_assert(ctx, !(instr->srcs[1]->flags & IR3_REG_HALF));
          validate_reg_size(ctx, instr->dsts[0], instr->cat6.type);
          break;
-      case OPC_RAY_INTERSECTION:
-         validate_assert(ctx, !(instr->srcs[0]->flags & IR3_REG_HALF));
-         validate_assert(ctx, !(instr->srcs[1]->flags & IR3_REG_HALF));
-         validate_assert(ctx, !(instr->srcs[2]->flags & IR3_REG_HALF));
-         validate_assert(ctx, !(instr->srcs[3]->flags & IR3_REG_HALF));
-         validate_assert(ctx, !(instr->srcs[4]->flags & IR3_REG_HALF));
-         validate_assert(ctx, !(instr->dsts[0]->flags & IR3_REG_HALF));
-         break;
       default:
          validate_reg_size(ctx, instr->dsts[0], instr->cat6.type);
          validate_assert(ctx, !(instr->srcs[0]->flags & IR3_REG_HALF));
          if (instr->srcs_count > 1)
             validate_assert(ctx, !(instr->srcs[1]->flags & IR3_REG_HALF));
-         break;
-      }
-      break;
-   case 7:
-      switch (instr->opc) {
-      case OPC_ALIAS:
-         switch (instr->cat7.alias_scope) {
-         case ALIAS_RT:
-            validate_assert(ctx, instr->dsts[0]->flags & IR3_REG_RT);
-            validate_assert(ctx, instr->cat7.alias_table_size_minus_one == 0);
-            break;
-         case ALIAS_TEX:
-            validate_assert(ctx, instr->cat7.alias_table_size_minus_one < 16);
-            break;
-         case ALIAS_MEM:
-            break;
-         }
-         break;
-      default:
          break;
       }
    }
@@ -629,10 +530,7 @@ ir3_validate(struct ir3 *ir)
    struct ir3_validate_ctx *ctx = ralloc_size(NULL, sizeof(*ctx));
 
    ctx->ir = ir;
-   ctx->defs_count = ir->instr_count + 1; /* serialno comes from pre-incrementing this. */
-   ctx->defs = BITSET_RZALLOC(ctx, ctx->defs_count);
-   ctx->rpt_set = _mesa_pointer_set_create(ctx);
-   ctx->rpt_block = NULL;
+   ctx->defs = _mesa_pointer_set_create(ctx);
 
    foreach_block (block, &ir->block_list) {
       ctx->current_block = block;

@@ -36,8 +36,6 @@
 #ifdef GLX_DIRECT_RENDERING
 
 #include "glxclient.h"
-#include "mesa/glapi/glapi/glapi.h"
-#include "dispatch.h"
 
 /* Implementation.  */
 
@@ -148,7 +146,7 @@ isvalid(XFontStruct * fs, int which)
    return (NULL);
 }
 
-void
+_X_HIDDEN void
 DRI_glXUseXFont(struct glx_context *CC, Font font, int first, int count, int listbase)
 {
    Display *dpy;
@@ -199,22 +197,22 @@ DRI_glXUseXFont(struct glx_context *CC, Font font, int first, int count, int lis
 #endif
 
    /* Save the current packing mode for bitmaps.  */
-   CALL_GetIntegerv(GET_DISPATCH(), (GL_UNPACK_SWAP_BYTES, &swapbytes));
-   CALL_GetIntegerv(GET_DISPATCH(), (GL_UNPACK_LSB_FIRST, &lsbfirst));
-   CALL_GetIntegerv(GET_DISPATCH(), (GL_UNPACK_ROW_LENGTH, &rowlength));
-   CALL_GetIntegerv(GET_DISPATCH(), (GL_UNPACK_SKIP_ROWS, &skiprows));
-   CALL_GetIntegerv(GET_DISPATCH(), (GL_UNPACK_SKIP_PIXELS, &skippixels));
-   CALL_GetIntegerv(GET_DISPATCH(), (GL_UNPACK_ALIGNMENT, &alignment));
+   glGetIntegerv(GL_UNPACK_SWAP_BYTES, &swapbytes);
+   glGetIntegerv(GL_UNPACK_LSB_FIRST, &lsbfirst);
+   glGetIntegerv(GL_UNPACK_ROW_LENGTH, &rowlength);
+   glGetIntegerv(GL_UNPACK_SKIP_ROWS, &skiprows);
+   glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &skippixels);
+   glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
 
    /* Enforce a standard packing mode which is compatible with
       fill_bitmap() from above.  This is actually the default mode,
       except for the (non)alignment.  */
-   CALL_PixelStorei(GET_DISPATCH(), (GL_UNPACK_SWAP_BYTES, GL_FALSE));
-   CALL_PixelStorei(GET_DISPATCH(), (GL_UNPACK_LSB_FIRST, GL_FALSE));
-   CALL_PixelStorei(GET_DISPATCH(), (GL_UNPACK_ROW_LENGTH, 0));
-   CALL_PixelStorei(GET_DISPATCH(), (GL_UNPACK_SKIP_ROWS, 0));
-   CALL_PixelStorei(GET_DISPATCH(), (GL_UNPACK_SKIP_PIXELS, 0));
-   CALL_PixelStorei(GET_DISPATCH(), (GL_UNPACK_ALIGNMENT, 1));
+   glPixelStorei(GL_UNPACK_SWAP_BYTES, GL_FALSE);
+   glPixelStorei(GL_UNPACK_LSB_FIRST, GL_FALSE);
+   glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+   glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+   glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
    pixmap = XCreatePixmap(dpy, RootWindow(dpy, screen), 10, 10, 1);
    values.foreground = BlackPixel(dpy, DefaultScreen(dpy));
@@ -262,18 +260,18 @@ DRI_glXUseXFont(struct glx_context *CC, Font font, int first, int count, int lis
       bm_width = (width + 7) / 8;
       bm_height = height;
 
-      CALL_NewList(GET_DISPATCH(), (list, GL_COMPILE));
+      glNewList(list, GL_COMPILE);
       if (valid && (bm_width > 0) && (bm_height > 0)) {
 
          memset(bm, '\0', bm_width * bm_height);
          fill_bitmap(dpy, screen, gc, bm_width, bm_height, x, y, c, bm);
 
-         CALL_Bitmap(GET_DISPATCH(), (width, height, x0, y0, dx, dy, bm));
+         glBitmap(width, height, x0, y0, dx, dy, bm);
          }
       else {
-         CALL_Bitmap(GET_DISPATCH(), (0, 0, 0.0, 0.0, dx, dy, NULL));
+         glBitmap(0, 0, 0.0, 0.0, dx, dy, NULL);
       }
-      CALL_EndList(GET_DISPATCH(), ());
+      glEndList();
    }
 
    free(bm);
@@ -281,12 +279,12 @@ DRI_glXUseXFont(struct glx_context *CC, Font font, int first, int count, int lis
    XFreeGC(dpy, gc);
 
    /* Restore saved packing modes.  */
-   CALL_PixelStorei(GET_DISPATCH(), (GL_UNPACK_SWAP_BYTES, swapbytes));
-   CALL_PixelStorei(GET_DISPATCH(), (GL_UNPACK_LSB_FIRST, lsbfirst));
-   CALL_PixelStorei(GET_DISPATCH(), (GL_UNPACK_ROW_LENGTH, rowlength));
-   CALL_PixelStorei(GET_DISPATCH(), (GL_UNPACK_SKIP_ROWS, skiprows));
-   CALL_PixelStorei(GET_DISPATCH(), (GL_UNPACK_SKIP_PIXELS, skippixels));
-   CALL_PixelStorei(GET_DISPATCH(), (GL_UNPACK_ALIGNMENT, alignment));
+   glPixelStorei(GL_UNPACK_SWAP_BYTES, swapbytes);
+   glPixelStorei(GL_UNPACK_LSB_FIRST, lsbfirst);
+   glPixelStorei(GL_UNPACK_ROW_LENGTH, rowlength);
+   glPixelStorei(GL_UNPACK_SKIP_ROWS, skiprows);
+   glPixelStorei(GL_UNPACK_SKIP_PIXELS, skippixels);
+   glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
 }
 
 #endif

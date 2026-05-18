@@ -204,7 +204,7 @@ nir_opt_idiv_const_instr(nir_builder *b, nir_alu_instr *alu, void *user_data)
          q[comp] = build_irem(b, n, d);
          break;
       default:
-         UNREACHABLE("Unknown integer division op");
+         unreachable("Unknown integer division op");
       }
    }
 

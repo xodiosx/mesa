@@ -28,14 +28,14 @@
 #include "compiler/nir/nir_builder.h"
 #include "etnaviv_compiler.h"
 
-bool
+void
 etna_lower_io(nir_shader *shader, struct etna_shader_variant *v);
 
-bool
+void
 etna_lower_alu(nir_shader *shader, bool has_new_transcendentals);
 
 bool
-etna_nir_lower_texture(nir_shader *s, struct etna_shader_key *key, const struct etna_core_info *info);
+etna_nir_lower_texture(nir_shader *s, struct etna_shader_key *key);
 
 bool
 etna_nir_lower_to_source_mods(nir_shader *shader);

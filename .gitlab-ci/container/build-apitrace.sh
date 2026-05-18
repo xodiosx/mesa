@@ -3,13 +3,15 @@
 
 # When changing this file, you need to bump the following
 # .gitlab-ci/image-tags.yml tags:
-# DEBIAN_TEST_BASE_TAG
+# DEBIAN_TEST_GL_TAG
+# DEBIAN_TEST_VK_TAG
+# KERNEL_ROOTFS_TAG
 
 set -uex
 
 uncollapsed_section_start apitrace "Building apitrace"
 
-APITRACE_VERSION="45a005875d348b055d5b88dca285c109dee90457"
+APITRACE_VERSION="0a6506433e1f9f7b69757b4e5730326970c4321a"
 
 git clone https://github.com/apitrace/apitrace.git --single-branch --no-checkout /apitrace
 pushd /apitrace

@@ -184,7 +184,7 @@ vc4_nir_lower_vertex_attr(struct vc4_compile *c, nir_builder *b,
          * be reordered, the actual reads will be generated at the top of the
          * shader by ntq_setup_inputs().
          */
-        nir_def *vpm_reads[4] = { 0 };
+        nir_def *vpm_reads[4];
         for (int i = 0; i < align(attr_size, 4) / 4; i++)
                 vpm_reads[i] = nir_load_input(b, 1, 32, nir_imm_int(b, 0),
                                               .base = nir_intrinsic_base(intr),
@@ -252,7 +252,9 @@ vc4_nir_lower_fs_input(struct vc4_compile *c, nir_builder *b,
                         result = nir_fsub_imm(b, 1.0, result);
 
                 if (result != &intr->def) {
-                        nir_def_rewrite_uses_after(&intr->def, result);
+                        nir_def_rewrite_uses_after(&intr->def,
+                                                       result,
+                                                       result->parent_instr);
                 }
         }
 }
@@ -307,10 +309,13 @@ vc4_nir_lower_uniform(struct vc4_compile *c, nir_builder *b,
         replace_intrinsic_with_vec(b, intr, dests);
 }
 
-static bool
-vc4_nir_lower_io_impl(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+static void
+vc4_nir_lower_io_instr(struct vc4_compile *c, nir_builder *b,
+                       struct nir_instr *instr)
 {
-        struct vc4_compile *c = data;
+        if (instr->type != nir_instr_type_intrinsic)
+                return;
+        nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
 
         switch (intr->intrinsic) {
         case nir_intrinsic_load_input:
@@ -330,15 +335,29 @@ vc4_nir_lower_io_impl(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 
         case nir_intrinsic_load_user_clip_plane:
         default:
-                return false;
+                break;
         }
+}
+
+static bool
+vc4_nir_lower_io_impl(struct vc4_compile *c, nir_function_impl *impl)
+{
+        nir_builder b = nir_builder_create(impl);
+
+        nir_foreach_block(block, impl) {
+                nir_foreach_instr_safe(instr, block)
+                        vc4_nir_lower_io_instr(c, &b, instr);
+        }
+
+        nir_metadata_preserve(impl, nir_metadata_control_flow);
 
         return true;
 }
 
-bool
+void
 vc4_nir_lower_io(nir_shader *s, struct vc4_compile *c)
 {
-        return nir_shader_intrinsics_pass(s, vc4_nir_lower_io_impl,
-                                          nir_metadata_control_flow, c);
+        nir_foreach_function_impl(impl, s) {
+                vc4_nir_lower_io_impl(c, impl);
+        }
 }

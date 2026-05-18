@@ -6,11 +6,11 @@
 #
 # When changing this file, you need to bump the following
 # .gitlab-ci/image-tags.yml tags:
-# DEBIAN_TEST_GL_TAG
+# KERNEL_ROOTFS_TAG
 
 set -uex
 
-uncollapsed_section_start skqp "Building SkQP"
+uncollapsed_section_start skqp "Building skqp"
 
 SKQP_BRANCH=android-cts-12.1_r5
 
@@ -68,14 +68,14 @@ cat "${SKQP_PATCH_DIR}"/build-skqp_*.patch |
 
 # hack for skqp see the clang
 pushd /usr/bin/
-ln -s "../lib/llvm-${LLVM_VERSION}/bin/clang" clang
-ln -s "../lib/llvm-${LLVM_VERSION}/bin/clang++" clang++
+ln -s "../lib/llvm-${LLVM_VERSION:-15}/bin/clang" clang
+ln -s "../lib/llvm-${LLVM_VERSION:-15}/bin/clang++" clang++
 popd
 
 # Fetch some needed build tools needed to build skia/skqp.
 # Basically, it clones repositories with commits SHAs from ${SKIA_DIR}/DEPS
 # directory.
-python3 tools/git-sync-deps
+python tools/git-sync-deps
 
 mkdir -p "${SKQP_OUT_DIR}"
 mkdir -p "${SKQP_INSTALL_DIR}"

@@ -27,9 +27,6 @@
 #define min(x,y) (x < y ? x : y)
 #define max(x,y) (x > y ? x : y)
 
-// Working around -Wmissing-prototype without deleting un-used code.
-int GetMSB(int val);
-
 //=================================================================================================================================
 // Some D3D Compliant Float Math (reference rasterizer implements these in RefALU class)
 //=================================================================================================================================
@@ -385,7 +382,7 @@ static const FXP s_fixedReciprocal[PIPE_TESSELLATOR_MAX_TESSELLATION_FACTOR+1] =
 //---------------------------------------------------------------------------------------------------------------------------------
 // floatToFixed
 //---------------------------------------------------------------------------------------------------------------------------------
-static FXP floatToFixed(const float& input)
+FXP floatToFixed(const float& input)
 {
     return floatToIDotF< FXP_INTEGER_BITS, FXP_FRACTION_BITS, /*bSigned*/false >( input );
 }
@@ -393,7 +390,7 @@ static FXP floatToFixed(const float& input)
 //---------------------------------------------------------------------------------------------------------------------------------
 // fixedToFloat
 //---------------------------------------------------------------------------------------------------------------------------------
-static float fixedToFloat(const FXP& input)
+float fixedToFloat(const FXP& input)
 {
     // not worrying about denorm flushing the float operations (the DX spec behavior for div), since the numbers will not be that small during tessellation.
     return ((float)(input>>FXP_FRACTION_BITS) + (float)(input&FXP_FRACTION_MASK)/(1<<FXP_FRACTION_BITS));
@@ -402,7 +399,7 @@ static float fixedToFloat(const FXP& input)
 //---------------------------------------------------------------------------------------------------------------------------------
 // isEven
 //---------------------------------------------------------------------------------------------------------------------------------
-static bool isEven(const float& input)
+bool isEven(const float& input)
 {
     return (((int)input) & 1) ? false : true;
 }
@@ -410,7 +407,7 @@ static bool isEven(const float& input)
 //---------------------------------------------------------------------------------------------------------------------------------
 // fxpCeil
 //---------------------------------------------------------------------------------------------------------------------------------
-static FXP fxpCeil(const FXP& input)
+FXP fxpCeil(const FXP& input)
 {
     if( input & FXP_FRACTION_MASK )
     {
@@ -422,7 +419,7 @@ static FXP fxpCeil(const FXP& input)
 //---------------------------------------------------------------------------------------------------------------------------------
 // fxpFloor
 //---------------------------------------------------------------------------------------------------------------------------------
-static FXP fxpFloor(const FXP& input)
+FXP fxpFloor(const FXP& input)
 {
     return (input & FXP_INTEGER_MASK);
 }
@@ -1693,7 +1690,7 @@ void CHWTessellator::DumpAllPointsAsInOrderLineList()
 //---------------------------------------------------------------------------------------------------------------------------------
 // RemoveMSB
 //---------------------------------------------------------------------------------------------------------------------------------
-static int RemoveMSB(int val)
+int RemoveMSB(int val)
 {
     int check;
     if( val <= 0x0000ffff ) { check = ( val <= 0x000000ff ) ? 0x00000080 : 0x00008000; }
@@ -2233,7 +2230,7 @@ void CHLSLTessellator::QuadHLSLProcessTessFactors( float tessFactor_Ueq0, float 
             insideTessFactor[U] = (tessFactor_Veq0 + tessFactor_Veq1 + tessFactor_Ueq0 + tessFactor_Ueq1) / 4;
             break;
         default:
-            UNREACHABLE("impossible m_insideTessFactorReduction");
+            unreachable("impossible m_insideTessFactorReduction");
         }
         // Scale inside tessFactor based on user scale factor.
 
@@ -2300,7 +2297,7 @@ void CHLSLTessellator::QuadHLSLProcessTessFactors( float tessFactor_Ueq0, float 
             insideTessFactor[V] = (tessFactor_Ueq0 + tessFactor_Ueq1) / 2;
             break;
         default:
-            UNREACHABLE("impossible m_insideTessFactorReduction");
+            unreachable("impossible m_insideTessFactorReduction");
         }
         // Scale inside tessFactors based on user scale factor.
 
@@ -2473,7 +2470,7 @@ void CHLSLTessellator::TriHLSLProcessTessFactors( float tessFactor_Ueq0, float t
         insideTessFactor = (tessFactor_Ueq0 + tessFactor_Veq0 + tessFactor_Weq0) / 3;
         break;
     default:
-        UNREACHABLE("impossible m_insideTessFactorReduction");
+        unreachable("impossible m_insideTessFactorReduction");
     }
 
     // Scale inside TessFactor based on user scale factor.

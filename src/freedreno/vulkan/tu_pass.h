@@ -26,9 +26,7 @@ struct tu_subpass_barrier {
    VkPipelineStageFlags2 src_stage_mask;
    VkPipelineStageFlags2 dst_stage_mask;
    VkAccessFlags2 src_access_mask;
-   VkAccessFlags3KHR src_access_mask2;
    VkAccessFlags2 dst_access_mask;
-   VkAccessFlags3KHR dst_access_mask2;
    bool incoherent_ccu_color, incoherent_ccu_depth;
 };
 
@@ -48,7 +46,6 @@ struct tu_subpass
    uint32_t input_count;
    uint32_t color_count;
    uint32_t resolve_count;
-   uint32_t unresolve_count;
    bool resolve_depth_stencil;
 
    bool legacy_dithering_enabled;
@@ -65,7 +62,6 @@ struct tu_subpass
    struct tu_subpass_attachment *input_attachments;
    struct tu_subpass_attachment *color_attachments;
    struct tu_subpass_attachment *resolve_attachments;
-   struct tu_subpass_attachment *unresolve_attachments;
    struct tu_subpass_attachment depth_stencil_attachment;
 
    uint32_t fsr_attachment;
@@ -82,8 +78,6 @@ struct tu_subpass
    bool depth_used;
    bool stencil_used;
 
-   bool custom_resolve;
-
    VkSampleCountFlagBits samples;
 
    uint32_t srgb_cntl;
@@ -98,19 +92,7 @@ struct tu_render_pass_attachment
    VkSampleCountFlagBits samples;
    uint32_t cpp;
    VkImageAspectFlags clear_mask;
-
-   /* All views that are used with the attachment in all subpasses. Used to
-    * determine which views to apply loadOp/storeOp to.
-    */
-   uint32_t used_views;
-   /* The internal MSRTSS attachment to clear when the user says to clear
-    * this attachment. Clear values must be remapped to this attachment.
-    */
-   uint32_t remapped_clear_att;
-   /* For internal attachments created for MSRTSS, the original user attachment
-    * which it is resolved/unresolved to.
-    */
-   uint32_t user_att;
+   uint32_t clear_views;
    bool load;
    bool store;
    bool gmem;
@@ -134,7 +116,7 @@ struct tu_render_pass
 {
    struct vk_object_base base;
 
-   uint32_t attachment_count, user_attachment_count;
+   uint32_t attachment_count;
    uint32_t subpass_count;
    uint32_t gmem_pixels[TU_GMEM_LAYOUT_COUNT];
    uint32_t tile_align_w;
@@ -154,8 +136,6 @@ struct tu_render_pass
    struct tu_render_pass_attachment *attachments;
    bool has_cond_load_store;
    bool has_fdm;
-   bool allow_ib2_skipping;
-   bool has_layered_fdm;
 
    struct tu_subpass_barrier end_barrier;
    struct tu_subpass subpasses[0];
@@ -172,8 +152,5 @@ void tu_setup_dynamic_inheritance(struct tu_cmd_buffer *cmd_buffer,
 
 uint32_t
 tu_subpass_get_attachment_to_resolve(const struct tu_subpass *subpass, uint32_t index);
-
-uint32_t
-tu_subpass_get_attachment_to_unresolve(const struct tu_subpass *subpass, uint32_t index);
 
 #endif /* TU_PASS_H */

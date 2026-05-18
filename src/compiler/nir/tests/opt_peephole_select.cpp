@@ -94,12 +94,7 @@ TEST_F(nir_opt_peephole_select_test, opt_load_ubo_no_speculate)
    nir_index_blocks(main->impl);
    EXPECT_EQ(main->impl->num_blocks, 4);
 
-   nir_opt_peephole_select_options peephole_select_options = {
-      .limit = 16,
-      .indirect_load_ok = true,
-      .expensive_alu_ok = true,
-   };
-   ASSERT_FALSE(nir_opt_peephole_select(bld.shader, &peephole_select_options));
+   ASSERT_FALSE(nir_opt_peephole_select(bld.shader, 16, true, true));
    nir_validate_shader(bld.shader, NULL);
 
    nir_index_blocks(main->impl);
@@ -150,12 +145,7 @@ TEST_F(nir_opt_peephole_select_test, opt_load_ubo_speculate)
    nir_index_blocks(main->impl);
    EXPECT_EQ(main->impl->num_blocks, 4);
 
-   nir_opt_peephole_select_options peephole_select_options = {
-      .limit = 16,
-      .indirect_load_ok = true,
-      .expensive_alu_ok = true,
-   };
-   ASSERT_TRUE(nir_opt_peephole_select(bld.shader, &peephole_select_options));
+   ASSERT_TRUE(nir_opt_peephole_select(bld.shader, 16, true, true));
    nir_validate_shader(bld.shader, NULL);
 
    nir_index_blocks(main->impl);

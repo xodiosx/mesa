@@ -206,7 +206,7 @@ encode_char6(char ch)
    case '.': return 62;
    case '_': return 63;
    default:
-      UNREACHABLE("invalid char6-character");
+      unreachable("invalid char6-character");
    }
 }
 
@@ -311,7 +311,7 @@ emit_record_abbrev(struct dxil_buffer *b,
             break;
 
          default:
-            UNREACHABLE("unexpected operand type");
+            unreachable("unexpected operand type");
          }
          return true; /* we're done */
 
@@ -322,10 +322,10 @@ emit_record_abbrev(struct dxil_buffer *b,
          break;
 
       case DXIL_OP_BLOB:
-         UNREACHABLE("HALP, unplement!");
+         unreachable("HALP, unplement!");
 
       default:
-         UNREACHABLE("unexpected operand type");
+         unreachable("unexpected operand type");
       }
    }
 
@@ -424,7 +424,7 @@ dxil_type_to_nir_type(const struct dxil_type *type)
    case TYPE_FLOAT:
       return nir_type_float;
    default:
-      UNREACHABLE("Unexpected type in dxil_type_to_nir_type");
+      unreachable("Unexpected type in dxil_type_to_nir_type");
    }
 }
 
@@ -523,7 +523,7 @@ dxil_module_get_int_type(struct dxil_module *m, unsigned bit_size)
    case 32: return get_int32_type(m);
    case 64: return get_int64_type(m);
    default:
-      UNREACHABLE("unsupported bit-width");
+      unreachable("unsupported bit-width");
    }
 }
 
@@ -559,7 +559,7 @@ dxil_module_get_float_type(struct dxil_module *m, unsigned bit_size)
    case 32: return get_float32_type(m);
    case 64: return get_float64_type(m);
    default:
-      UNREACHABLE("unsupported bit-width");
+      unreachable("unsupported bit-width");
    }
    return get_float32_type(m);
 }
@@ -684,7 +684,7 @@ dxil_get_overload_type(struct dxil_module *mod, enum overload_type overload)
    case DXIL_F32: return get_float32_type(mod);
    case DXIL_F64: return get_float64_type(mod);
    default:
-      UNREACHABLE("unexpected overload type");
+      unreachable("unexpected overload type");
    }
 }
 
@@ -727,7 +727,7 @@ dxil_module_get_cbuf_ret_type(struct dxil_module *mod, enum overload_type overlo
       additional = ".8";
       break;
    default:
-      UNREACHABLE("unexpected overload type");
+      unreachable("unexpected overload type");
    }
    snprintf(name, sizeof(name), "dx.types.CBufRet.%s%s", dxil_overload_suffix(overload), additional);
 
@@ -759,7 +759,7 @@ dxil_module_get_type_from_comp_type(struct dxil_module *m, enum dxil_component_t
 
    case DXIL_COMP_TYPE_F16:
    default:
-      UNREACHABLE("unexpected component type");
+      unreachable("unexpected component type");
    }
 }
 
@@ -774,7 +774,7 @@ get_res_comp_type_name(enum dxil_component_type comp_type)
    case DXIL_COMP_TYPE_I64: return "int64";
    case DXIL_COMP_TYPE_U64: return "uint64";
    default:
-      UNREACHABLE("unexpected resource component type");
+      unreachable("unexpected resource component type");
    }
 }
 
@@ -793,7 +793,7 @@ get_res_dimension_type_name(enum dxil_resource_kind kind)
    case DXIL_RESOURCE_KIND_TEXTURECUBE: return "TextureCube";
    case DXIL_RESOURCE_KIND_TEXTURECUBE_ARRAY: return "TextureCubeArray";
    default:
-      UNREACHABLE("unexpected resource kind");
+      unreachable("unexpected resource kind");
    }
 }
 
@@ -852,7 +852,7 @@ dxil_module_get_res_type(struct dxil_module *m, enum dxil_resource_kind kind,
    }
 
    default:
-      UNREACHABLE("resource type not supported");
+      unreachable("resource type not supported");
    }
 }
 
@@ -876,7 +876,7 @@ dxil_module_get_resret_type(struct dxil_module *m, enum overload_type overload)
    case DXIL_F32: name = "dx.types.ResRet.f32"; break;
    case DXIL_F64: name = "dx.types.ResRet.f64"; break;
    default:
-      UNREACHABLE("unexpected overload type");
+      unreachable("unexpected overload type");
    }
 
    return dxil_module_get_struct_type(m, name, resret, 5);
@@ -1363,7 +1363,7 @@ emit_attrib_group(struct dxil_module *m, int id, uint32_t slot,
          break;
 
       default:
-         UNREACHABLE("unsupported attrib type");
+         unreachable("unsupported attrib type");
       }
    }
 
@@ -1423,7 +1423,7 @@ emit_float_type(struct dxil_module *m, unsigned bit_size)
    case 32: return emit_record(m, TYPE_CODE_FLOAT, NULL, 0);
    case 64: return emit_record(m, TYPE_CODE_DOUBLE, NULL, 0);
    default:
-      UNREACHABLE("unexpected bit_size for float type");
+      unreachable("unexpected bit_size for float type");
    }
 }
 
@@ -1569,7 +1569,7 @@ emit_type(struct dxil_module *m, struct dxil_type *type)
       return emit_vector_type(m, type);
 
    default:
-      UNREACHABLE("unexpected type->type");
+      unreachable("unexpected type->type");
    }
 }
 
@@ -1711,7 +1711,7 @@ dxil_module_get_int_const(struct dxil_module *m, intmax_t value,
       return dxil_module_get_int64_const(m, value);
 
    default:
-      UNREACHABLE("unsupported bit-width");
+      unreachable("unsupported bit-width");
    }
 }
 
@@ -2015,13 +2015,13 @@ fill_res_props_dwords(uint32_t dwords[2],
       dwords[0] = get_sampler_res_props_dword(get_int_from_mdnode(mdnode, 6) == DXIL_SAMPLER_KIND_COMPARISON);
       break;
    default:
-      UNREACHABLE("Unexpected resource class");
+      unreachable("Unexpected resource class");
    }
 
    switch (kind) {
    case DXIL_RESOURCE_KIND_STRUCTURED_BUFFER:
    case DXIL_RESOURCE_KIND_INVALID:
-      UNREACHABLE("Unimplemented");
+      unreachable("Unimplemented");
    case DXIL_RESOURCE_KIND_RAW_BUFFER:
    case DXIL_RESOURCE_KIND_SAMPLER:
       dwords[1] = 0;
@@ -2075,7 +2075,7 @@ comp_type_from_alu_type(nir_alu_type type)
    case nir_type_int: return DXIL_COMP_TYPE_I32;
    case nir_type_uint: return DXIL_COMP_TYPE_U32;
    case nir_type_float: return DXIL_COMP_TYPE_F32;
-   default: UNREACHABLE("Unexpected component type");
+   default: unreachable("Unexpected component type");
    }
 }
 
@@ -2332,7 +2332,7 @@ static bool attrs_equal(const struct dxil_attrib *a, const struct dxil_attrib *b
       return (a->key.str == b->key.str || !strcmp(a->key.str, b->key.str)) &&
          (a->value.str == b->value.str || !strcmp(a->value.str, b->value.str));
    default:
-      UNREACHABLE("Invalid attr type");
+      unreachable("Invalid attr type");
    }
 }
 
@@ -2690,7 +2690,7 @@ emit_consts(struct dxil_module *m)
                return false;
             break;
          default:
-            UNREACHABLE("unexpected float_bits");
+            unreachable("unexpected float_bits");
          }
          break;
 
@@ -2707,7 +2707,7 @@ emit_consts(struct dxil_module *m)
          break;
 
       default:
-         UNREACHABLE("unsupported constant type");
+         unreachable("unsupported constant type");
       }
    }
 
@@ -3049,7 +3049,7 @@ emit_mdnode(struct dxil_module *m, struct dxil_mdnode *n)
       return emit_metadata_node(m, n->node.subnodes, n->node.num_subnodes);
 
    default:
-      UNREACHABLE("unexpected n->type");
+      unreachable("unexpected n->type");
    }
 }
 
@@ -3308,7 +3308,7 @@ create_call_instr(struct dxil_module *m,
       instr->call.func = func;
       instr->call.args = ralloc_array(instr, struct dxil_value *, num_args);
       if (!args)
-         return NULL;
+         return false;
       memcpy(instr->call.args, args, sizeof(struct dxil_value *) * num_args);
       instr->call.num_args = num_args;
    }
@@ -3411,7 +3411,7 @@ get_deref_type(const struct dxil_type *type)
    switch (type->type) {
    case TYPE_POINTER: return type->ptr_target_type;
    case TYPE_ARRAY: return type->array_or_vector_def.elem_type;
-   default: UNREACHABLE("unexpected type");
+   default: unreachable("unexpected type");
    }
 }
 
@@ -3466,7 +3466,7 @@ dxil_emit_load(struct dxil_module *m, const struct dxil_value *ptr,
 
    struct dxil_instr *instr = create_instr(m, INSTR_LOAD, type);
    if (!instr)
-      return NULL;
+      return false;
 
    instr->load.ptr = ptr;
    instr->load.type = type;
@@ -3508,7 +3508,7 @@ dxil_emit_cmpxchg(struct dxil_module *m, const struct dxil_value *cmpval,
    struct dxil_instr *instr = create_instr(m, INSTR_CMPXCHG,
                                            ptr->type->ptr_target_type);
    if (!instr)
-      return NULL;
+      return false;
 
    instr->cmpxchg.cmpval = cmpval;
    instr->cmpxchg.newval = newval;
@@ -3532,7 +3532,7 @@ dxil_emit_atomicrmw(struct dxil_module *m, const struct dxil_value *value,
    struct dxil_instr *instr = create_instr(m, INSTR_ATOMICRMW,
                                            ptr->type->ptr_target_type);
    if (!instr)
-      return NULL;
+      return false;
 
    instr->atomicrmw.value = value;
    instr->atomicrmw.ptr = ptr;
@@ -3880,7 +3880,7 @@ emit_instr(struct dxil_module *m, struct dxil_func_def *func, struct dxil_instr 
       return emit_cmpxchg(m, instr);
 
    default:
-      UNREACHABLE("unexpected instruction type");
+      unreachable("unexpected instruction type");
    }
 }
 

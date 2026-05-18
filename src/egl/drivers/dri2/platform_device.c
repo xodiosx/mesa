@@ -202,17 +202,25 @@ static const __DRIimageLoaderExtension image_loader_extension = {
    .getCapability = device_get_capability,
 };
 
+static const __DRIkopperLoaderExtension kopper_loader_extension = {
+   .base = {__DRI_KOPPER_LOADER, 1},
+
+   .SetSurfaceCreateInfo = NULL,
+};
+
 static const __DRIextension *image_loader_extensions[] = {
    &image_loader_extension.base,
    &image_lookup_extension.base,
-   &kopper_pbuffer_loader_extension.base,
+   &use_invalidate.base,
+   &kopper_loader_extension.base,
    NULL,
 };
 
 static const __DRIextension *swrast_loader_extensions[] = {
    &swrast_pbuffer_loader_extension.base,
    &image_lookup_extension.base,
-   &kopper_pbuffer_loader_extension.base,
+   &use_invalidate.base,
+   &kopper_loader_extension.base,
    NULL,
 };
 
@@ -276,27 +284,27 @@ device_probe_device(_EGLDisplay *disp)
    if (!dri2_dpy->driver_name)
       goto err_name;
 
-   /* this is software fallback */
-   if (disp->Options.ForceSoftware && !request_software) {
-      /* When doing software rendering, some times user still want to explicitly
-      * choose the render node device since cross node import doesn't work between
-      * vgem/virtio_gpu yet. It would be nice to have a new EXTENSION for this.
-      * For now, just fallback to kms_swrast. */
-      if (strcmp(dri2_dpy->driver_name, "vgem") == 0 ||
-          strcmp(dri2_dpy->driver_name, "virtio_gpu") == 0) {
-         free(dri2_dpy->driver_name);
-         _eglLog(_EGL_WARNING, "NEEDS EXTENSION: falling back to kms_swrast");
-         dri2_dpy->driver_name = strdup("kms_swrast");
-      } else if (strcmp(dri2_dpy->driver_name, "vmwgfx")) {
-         /* this is software fallback; deny progress since a hardware device was requested */
-         return false;
-      }
+   /* When doing software rendering, some times user still want to explicitly
+    * choose the render node device since cross node import doesn't work between
+    * vgem/virtio_gpu yet. It would be nice to have a new EXTENSION for this.
+    * For now, just fallback to kms_swrast. */
+   if (disp->Options.ForceSoftware && !request_software &&
+       (strcmp(dri2_dpy->driver_name, "vgem") == 0 ||
+        strcmp(dri2_dpy->driver_name, "virtio_gpu") == 0)) {
+      free(dri2_dpy->driver_name);
+      _eglLog(_EGL_WARNING, "NEEDS EXTENSION: falling back to kms_swrast");
+      dri2_dpy->driver_name = strdup("kms_swrast");
    }
 
-   dri2_detect_swrast_kopper(disp);
+   if (!dri2_load_driver(disp))
+      goto err_load;
 
    dri2_dpy->loader_extensions = image_loader_extensions;
    return true;
+
+err_load:
+   free(dri2_dpy->driver_name);
+   dri2_dpy->driver_name = NULL;
 
 err_name:
    close(dri2_dpy->fd_render_gpu);
@@ -316,7 +324,11 @@ device_probe_device_sw(_EGLDisplay *disp)
       return false;
 
    /* HACK: should be driver_swrast_null */
-   dri2_detect_swrast_kopper(disp);
+   if (!dri2_load_driver(disp)) {
+      free(dri2_dpy->driver_name);
+      dri2_dpy->driver_name = NULL;
+      return false;
+   }
 
    dri2_dpy->loader_extensions = swrast_loader_extensions;
    return true;
@@ -326,11 +338,14 @@ EGLBoolean
 dri2_initialize_device(_EGLDisplay *disp)
 {
    const char *err;
-   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   struct dri2_egl_display *dri2_dpy = dri2_display_create();
+   if (!dri2_dpy)
+      return EGL_FALSE;
 
    /* Extension requires a PlatformDisplay - the EGLDevice. */
    disp->Device = disp->PlatformDisplay;
 
+   disp->DriverData = (void *)dri2_dpy;
    err = "DRI2: failed to load driver";
    if (_eglDeviceSupports(disp->Device, _EGL_DEVICE_DRM)) {
       if (!device_probe_device(disp))
@@ -366,5 +381,6 @@ dri2_initialize_device(_EGLDisplay *disp)
    return EGL_TRUE;
 
 cleanup:
+   dri2_display_destroy(disp);
    return _eglError(EGL_NOT_INITIALIZED, err);
 }

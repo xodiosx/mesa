@@ -25,8 +25,7 @@ panvk_per_arch(CreateEvent)(VkDevice _device,
       .flags = 0,
    };
 
-   int ret = pan_kmod_ioctl(device->drm_fd, DRM_IOCTL_SYNCOBJ_CREATE,
-                            &create);
+   int ret = drmIoctl(device->vk.drm_fd, DRM_IOCTL_SYNCOBJ_CREATE, &create);
    if (ret)
       return panvk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -47,7 +46,7 @@ panvk_per_arch(DestroyEvent)(VkDevice _device, VkEvent _event,
       return;
 
    struct drm_syncobj_destroy destroy = {.handle = event->syncobj};
-   pan_kmod_ioctl(device->drm_fd, DRM_IOCTL_SYNCOBJ_DESTROY, &destroy);
+   drmIoctl(device->vk.drm_fd, DRM_IOCTL_SYNCOBJ_DESTROY, &destroy);
 
    vk_object_free(&device->vk, pAllocator, event);
 }
@@ -66,7 +65,7 @@ panvk_per_arch(GetEventStatus)(VkDevice _device, VkEvent _event)
       .flags = DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT,
    };
 
-   int ret = pan_kmod_ioctl(device->drm_fd, DRM_IOCTL_SYNCOBJ_WAIT, &wait);
+   int ret = drmIoctl(device->vk.drm_fd, DRM_IOCTL_SYNCOBJ_WAIT, &wait);
    if (ret) {
       if (errno == ETIME)
          signaled = false;
@@ -94,9 +93,9 @@ panvk_per_arch(SetEvent)(VkDevice _device, VkEvent _event)
     * is already in signaled state. This won't be a problem because the spec
     * mandates that the event will have been set before the vkCmdWaitEvents
     * command executes.
-    * https://docs.vulkan.org/spec/latest/chapters/cmdbuffers.html#commandbuffers-submission-progress
+    * https://www.khronos.org/registry/vulkan/specs/1.2/html/chap6.html#commandbuffers-submission-progress
     */
-   if (pan_kmod_ioctl(device->drm_fd, DRM_IOCTL_SYNCOBJ_SIGNAL, &objs))
+   if (drmIoctl(device->vk.drm_fd, DRM_IOCTL_SYNCOBJ_SIGNAL, &objs))
       return VK_ERROR_DEVICE_LOST;
 
    return VK_SUCCESS;
@@ -112,7 +111,7 @@ panvk_per_arch(ResetEvent)(VkDevice _device, VkEvent _event)
       .handles = (uint64_t)(uintptr_t)&event->syncobj,
       .count_handles = 1};
 
-   if (pan_kmod_ioctl(device->drm_fd, DRM_IOCTL_SYNCOBJ_RESET, &objs))
+   if (drmIoctl(device->vk.drm_fd, DRM_IOCTL_SYNCOBJ_RESET, &objs))
       return VK_ERROR_DEVICE_LOST;
 
    return VK_SUCCESS;

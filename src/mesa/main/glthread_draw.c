@@ -31,7 +31,7 @@
 
 #include "api_exec_decl.h"
 #include "main/glthread_marshal.h"
-#include "dispatch.h"
+#include "main/dispatch.h"
 #include "main/varray.h"
 
 static inline unsigned
@@ -1868,7 +1868,7 @@ uint32_t
 _mesa_unmarshal_DrawArrays(struct gl_context *ctx,
                            const struct marshal_cmd_DrawArrays *restrict cmd)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
    return 0;
 }
 
@@ -1876,7 +1876,7 @@ uint32_t
 _mesa_unmarshal_DrawArraysInstancedBaseInstance(struct gl_context *ctx,
                                                 const struct marshal_cmd_DrawArraysInstancedBaseInstance *restrict cmd)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
    return 0;
 }
 
@@ -1884,7 +1884,7 @@ uint32_t
 _mesa_unmarshal_MultiDrawArrays(struct gl_context *ctx,
                                 const struct marshal_cmd_MultiDrawArrays *restrict cmd)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
    return 0;
 }
 
@@ -1892,7 +1892,7 @@ uint32_t
 _mesa_unmarshal_DrawRangeElements(struct gl_context *ctx,
                                   const struct marshal_cmd_DrawRangeElements *restrict cmd)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
    return 0;
 }
 
@@ -1900,7 +1900,7 @@ uint32_t
 _mesa_unmarshal_DrawRangeElementsBaseVertex(struct gl_context *ctx,
                                             const struct marshal_cmd_DrawRangeElementsBaseVertex *cmd)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
    return 0;
 }
 
@@ -1908,7 +1908,7 @@ uint32_t
 _mesa_unmarshal_DrawElementsInstanced(struct gl_context *ctx,
                                       const struct marshal_cmd_DrawElementsInstanced *restrict cmd)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
    return 0;
 }
 
@@ -1916,7 +1916,7 @@ uint32_t
 _mesa_unmarshal_DrawElementsBaseVertex(struct gl_context *ctx,
                                        const struct marshal_cmd_DrawElementsBaseVertex *restrict cmd)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
    return 0;
 }
 
@@ -1924,7 +1924,7 @@ uint32_t
 _mesa_unmarshal_DrawElementsInstancedBaseVertexBaseInstance(struct gl_context *ctx,
                                                             const struct marshal_cmd_DrawElementsInstancedBaseVertexBaseInstance *restrict cmd)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
    return 0;
 }
 
@@ -1932,7 +1932,7 @@ uint32_t
 _mesa_unmarshal_MultiDrawElements(struct gl_context *ctx,
                                   const struct marshal_cmd_MultiDrawElements *restrict cmd)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
    return 0;
 }
 
@@ -1940,7 +1940,7 @@ uint32_t
 _mesa_unmarshal_MultiDrawElementsBaseVertex(struct gl_context *ctx,
                                             const struct marshal_cmd_MultiDrawElementsBaseVertex *restrict cmd)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
    return 0;
 }
 
@@ -1948,7 +1948,7 @@ uint32_t
 _mesa_unmarshal_MultiModeDrawArraysIBM(struct gl_context *ctx,
                                        const struct marshal_cmd_MultiModeDrawArraysIBM *cmd)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
    return 0;
 }
 
@@ -1956,32 +1956,32 @@ uint32_t
 _mesa_unmarshal_MultiModeDrawElementsIBM(struct gl_context *ctx,
                                          const struct marshal_cmd_MultiModeDrawElementsIBM *cmd)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
    return 0;
 }
 
 void GLAPIENTRY
 _mesa_marshal_DrawArraysUserBuf(void)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
 }
 
 void GLAPIENTRY
 _mesa_marshal_DrawElementsUserBuf(const GLvoid *cmd)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
 }
 
 void GLAPIENTRY
 _mesa_marshal_DrawElementsUserBufPacked(const GLvoid *cmd)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
 }
 
 void GLAPIENTRY
 _mesa_marshal_MultiDrawArraysUserBuf(void)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
 }
 
 void GLAPIENTRY
@@ -1991,19 +1991,19 @@ _mesa_marshal_MultiDrawElementsUserBuf(GLintptr indexBuf, GLenum mode,
                                        GLsizei primcount,
                                        const GLint *basevertex)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
 }
 
 void GLAPIENTRY
 _mesa_marshal_DrawArraysInstancedBaseInstanceDrawID(void)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
 }
 
 void GLAPIENTRY _mesa_marshal_DrawElementsPacked(GLenum mode, GLenum type,
                                                  GLushort count, GLushort indices)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
 }
 
 void GLAPIENTRY
@@ -2012,31 +2012,31 @@ _mesa_marshal_DrawElementsInstancedBaseVertexBaseInstanceDrawID(GLenum mode, GLs
                                                                 GLsizei instance_count, GLint basevertex,
                                                                 GLuint baseinstance, GLuint drawid)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
 }
 
 void GLAPIENTRY
 _mesa_DrawArraysUserBuf(void)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
 }
 
 void GLAPIENTRY
 _mesa_MultiDrawArraysUserBuf(void)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
 }
 
 void GLAPIENTRY
 _mesa_DrawArraysInstancedBaseInstanceDrawID(void)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
 }
 
 void GLAPIENTRY _mesa_DrawElementsPacked(GLenum mode, GLenum type,
                                          GLushort count, GLushort indices)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
 }
 
 void GLAPIENTRY
@@ -2045,7 +2045,7 @@ _mesa_DrawElementsInstancedBaseVertexBaseInstanceDrawID(GLenum mode, GLsizei cou
                                                         GLsizei instance_count, GLint basevertex,
                                                         GLuint baseinstance, GLuint drawid)
 {
-   UNREACHABLE("should never end up here");
+   unreachable("should never end up here");
 }
 
 uint32_t

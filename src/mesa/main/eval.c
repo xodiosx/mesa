@@ -42,7 +42,7 @@
 #include "eval.h"
 #include "macros.h"
 #include "mtypes.h"
-#include "dispatch.h"
+#include "main/dispatch.h"
 #include "api_exec_decl.h"
 
 

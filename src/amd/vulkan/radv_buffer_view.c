@@ -20,18 +20,20 @@
 #include "vk_log.h"
 
 void
-radv_make_texel_buffer_descriptor(struct radv_device *device, uint64_t va, VkFormat vk_format, unsigned range,
-                                  uint32_t *state)
+radv_make_texel_buffer_descriptor(struct radv_device *device, uint64_t va, VkFormat vk_format, unsigned offset,
+                                  unsigned range, uint32_t *state)
 {
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const struct util_format_description *desc;
    unsigned stride;
    enum pipe_swizzle swizzle[4];
 
-   desc = radv_format_description(vk_format);
+   desc = vk_format_description(vk_format);
    stride = desc->block.bits / 8;
 
    radv_compose_swizzle(desc, NULL, swizzle);
+
+   va += offset;
 
    if (pdev->info.gfx_level != GFX8 && stride) {
       range /= stride;
@@ -55,11 +57,30 @@ radv_make_texel_buffer_descriptor(struct radv_device *device, uint64_t va, VkFor
    ac_build_buffer_descriptor(pdev->info.gfx_level, &ac_state, state);
 }
 
+void
+radv_buffer_view_init(struct radv_buffer_view *view, struct radv_device *device,
+                      const VkBufferViewCreateInfo *pCreateInfo)
+{
+   VK_FROM_HANDLE(radv_buffer, buffer, pCreateInfo->buffer);
+   uint64_t va = radv_buffer_get_va(buffer->bo) + buffer->offset;
+
+   vk_buffer_view_init(&device->vk, &view->vk, pCreateInfo);
+
+   view->bo = buffer->bo;
+
+   radv_make_texel_buffer_descriptor(device, va, view->vk.format, view->vk.offset, view->vk.range, view->state);
+}
+
+void
+radv_buffer_view_finish(struct radv_buffer_view *view)
+{
+   vk_buffer_view_finish(&view->vk);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 radv_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
                       const VkAllocationCallbacks *pAllocator, VkBufferView *pView)
 {
-   VK_FROM_HANDLE(radv_buffer, buffer, pCreateInfo->buffer);
    VK_FROM_HANDLE(radv_device, device, _device);
    struct radv_buffer_view *view;
 
@@ -67,12 +88,7 @@ radv_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInf
    if (!view)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   vk_buffer_view_init(&device->vk, &view->vk, pCreateInfo);
-
-   view->bo = buffer->bo;
-
-   radv_make_texel_buffer_descriptor(device, buffer->vk.device_address + view->vk.offset, view->vk.format,
-                                     view->vk.range, view->state);
+   radv_buffer_view_init(view, device, pCreateInfo);
 
    *pView = radv_buffer_view_to_handle(view);
 
@@ -88,6 +104,6 @@ radv_DestroyBufferView(VkDevice _device, VkBufferView bufferView, const VkAlloca
    if (!view)
       return;
 
-   vk_buffer_view_finish(&view->vk);
+   radv_buffer_view_finish(view);
    vk_free2(&device->vk.alloc, pAllocator, view);
 }

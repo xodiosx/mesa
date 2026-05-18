@@ -73,8 +73,16 @@ ENCODER_CUSTOM_RESOURCE_POSTPROCESS = [
     "vkCreateDevice",
     "vkMapMemoryIntoAddressSpaceGOOGLE",
     "vkGetPhysicalDeviceFeatures2",
+    "vkGetPhysicalDeviceFeatures2KHR",
+    "vkGetPhysicalDeviceProperties",
+    "vkGetPhysicalDeviceProperties2",
+    "vkGetPhysicalDeviceProperties2KHR",
     "vkCreateDescriptorUpdateTemplate",
+    "vkCreateDescriptorUpdateTemplateKHR",
     "vkGetPhysicalDeviceExternalSemaphoreProperties",
+    "vkGetPhysicalDeviceExternalSemaphorePropertiesKHR",
+    "vkGetDeviceQueue",
+    "vkGetDeviceQueue2",
 ]
 
 ENCODER_EXPLICIT_FLUSHED_APIS = [
@@ -359,6 +367,7 @@ def emit_parameter_encode_write_packet_info(typeInfo, api, cgen):
         cgen.stmt("if (queueSubmitWithCommandsEnabled) packetSize_%s -= 8" % api.name)
 
     cgen.stmt("uint8_t* streamPtr = %s->reserve(packetSize_%s)" % (STREAM, api.name))
+    cgen.stmt("uint8_t* packetBeginPtr = streamPtr")
     cgen.stmt("uint8_t** streamPtrPtr = &streamPtr")
     cgen.stmt("uint32_t opcode_%s = OP_%s" % (api.name, api.name))
 
@@ -546,9 +555,9 @@ def encode_vkFlushMappedMemoryRanges(typeInfo, api, cgen):
         cgen.beginIf("!sResourceTracker->usingDirectMapping()")
         cgen.beginFor("uint32_t i = 0", "i < memoryRangeCount", "++i")
         cgen.stmt("auto range = pMemoryRanges[i]")
-        cgen.stmt("auto memory = range.memory")
-        cgen.stmt("auto size = range.size")
-        cgen.stmt("auto offset = range.offset")
+        cgen.stmt("auto memory = pMemoryRanges[i].memory")
+        cgen.stmt("auto size = pMemoryRanges[i].size")
+        cgen.stmt("auto offset = pMemoryRanges[i].offset")
         cgen.stmt("uint64_t streamSize = 0")
         cgen.stmt("if (!memory) { %s->write(&streamSize, sizeof(uint64_t)); continue; }" % streamVar)
         cgen.stmt("auto hostPtr = sResourceTracker->getMappedPointer(memory)")
@@ -585,9 +594,9 @@ def encode_vkInvalidateMappedMemoryRanges(typeInfo, api, cgen):
         cgen.beginIf("!sResourceTracker->usingDirectMapping()")
         cgen.beginFor("uint32_t i = 0", "i < memoryRangeCount", "++i")
         cgen.stmt("auto range = pMemoryRanges[i]")
-        cgen.stmt("auto memory = range.memory")
-        cgen.stmt("auto size = range.size")
-        cgen.stmt("auto offset = range.offset")
+        cgen.stmt("auto memory = pMemoryRanges[i].memory")
+        cgen.stmt("auto size = pMemoryRanges[i].size")
+        cgen.stmt("auto offset = pMemoryRanges[i].offset")
         cgen.stmt("uint64_t streamSize = 0")
         cgen.stmt("if (!memory) { %s->read(&streamSize, sizeof(uint64_t)); continue; }" % streamVar)
         cgen.stmt("auto hostPtr = sResourceTracker->getMappedPointer(memory)")

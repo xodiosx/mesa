@@ -56,9 +56,9 @@ a4xx_assemble(struct backend *b, FILE *in)
 }
 
 static void
-a4xx_disassemble(struct kernel *kernel, struct ir3_disasm_options *options)
+a4xx_disassemble(struct kernel *kernel, FILE *out)
 {
-   ir3_asm_disassemble(to_ir3_kernel(kernel), options);
+   ir3_asm_disassemble(to_ir3_kernel(kernel), out);
 }
 
 static void
@@ -207,9 +207,8 @@ cs_const_emit(struct fd_ringbuffer *ring, struct kernel *kernel,
    struct ir3_shader_variant *v = ir3_kernel->v;
 
    const struct ir3_const_state *const_state = ir3_const_state(v);
-   uint32_t base = const_state->allocs.max_const_offset_vec4;
-   const struct ir3_imm_const_state *imm_state = &v->imm_state;
-   int size = DIV_ROUND_UP(imm_state->count, 4);
+   uint32_t base = const_state->offsets.immediate;
+   int size = DIV_ROUND_UP(const_state->immediates_count, 4);
 
    /* truncate size to avoid writing constants that shader
     * does not use:
@@ -221,7 +220,7 @@ cs_const_emit(struct fd_ringbuffer *ring, struct kernel *kernel,
    size *= 4;
 
    if (size > 0) {
-      emit_const(ring, kernel, base, size, imm_state->values);
+      emit_const(ring, kernel, base, size, const_state->immediates);
    }
 }
 
@@ -345,9 +344,7 @@ a4xx_init(struct fd_device *dev, const struct fd_dev_id *dev_id)
       .emit_grid = a4xx_emit_grid,
    };
 
-   struct ir3_compiler_options compiler_options = {
-      .disable_cache = true,
-   };
+   struct ir3_compiler_options compiler_options = {};
    a4xx_backend->compiler =
       ir3_compiler_create(dev, dev_id, fd_dev_info_raw(dev_id), &compiler_options);
    a4xx_backend->dev = dev;

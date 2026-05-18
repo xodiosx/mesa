@@ -25,6 +25,7 @@
 #define NIR_DEREF_H
 
 #include "nir.h"
+#include "nir_builder.h"
 
 #ifdef __cplusplus
 extern "C" {

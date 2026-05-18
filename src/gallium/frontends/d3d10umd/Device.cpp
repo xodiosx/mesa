@@ -45,7 +45,6 @@
 #include "Debug.h"
 
 #include "util/u_sampler.h"
-#include "util/u_framebuffer.h"
 
 
 static void APIENTRY DestroyDevice(D3D10DDI_HDEVICE hDevice);
@@ -135,14 +134,14 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
    pDevice->pipe = pipe;
    pDevice->cso = cso_create_context(pipe, CSO_NO_VBUF);
 
-   pDevice->empty_vs = CreateEmptyShader(pDevice, MESA_SHADER_VERTEX);
-   pDevice->empty_fs = CreateEmptyShader(pDevice, MESA_SHADER_FRAGMENT);
+   pDevice->empty_vs = CreateEmptyShader(pDevice, PIPE_SHADER_VERTEX);
+   pDevice->empty_fs = CreateEmptyShader(pDevice, PIPE_SHADER_FRAGMENT);
 
    pipe->bind_vs_state(pipe, pDevice->empty_vs);
    pipe->bind_fs_state(pipe, pDevice->empty_fs);
 
    pDevice->max_dual_source_render_targets =
-         screen->caps.max_dual_source_render_targets;
+         screen->get_param(screen, PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS);
 
    pDevice->hRTCoreLayer = pCreateData->hRTCoreLayer;
    pDevice->hDevice = (HANDLE)pCreateData->hRTDevice.handle;
@@ -338,10 +337,13 @@ DestroyDevice(D3D10DDI_HDEVICE hDevice)   // IN
    pipe->bind_vs_state(pipe, NULL);
    cso_destroy_context(pDevice->cso);
 
-   DeleteEmptyShader(pDevice, MESA_SHADER_FRAGMENT, pDevice->empty_fs);
-   DeleteEmptyShader(pDevice, MESA_SHADER_VERTEX, pDevice->empty_vs);
+   DeleteEmptyShader(pDevice, PIPE_SHADER_FRAGMENT, pDevice->empty_fs);
+   DeleteEmptyShader(pDevice, PIPE_SHADER_VERTEX, pDevice->empty_vs);
 
-   util_unreference_framebuffer_state(&pDevice->fb);
+   pipe_surface_reference(&pDevice->fb.zsbuf, NULL);
+   for (i = 0; i < PIPE_MAX_COLOR_BUFS; ++i) {
+      pipe_surface_reference(&pDevice->fb.cbufs[i], NULL);
+   }
 
    for (i = 0; i < PIPE_MAX_ATTRIBS; ++i) {
       if (!pDevice->vertex_buffers[i].is_user_buffer) {
@@ -353,12 +355,12 @@ DestroyDevice(D3D10DDI_HDEVICE hDevice)   // IN
 
    static struct pipe_sampler_view * sampler_views[PIPE_MAX_SHADER_SAMPLER_VIEWS];
    memset(sampler_views, 0, sizeof sampler_views);
-   pipe->set_sampler_views(pipe, MESA_SHADER_FRAGMENT, 0,
-                           PIPE_MAX_SHADER_SAMPLER_VIEWS, 0, sampler_views);
-   pipe->set_sampler_views(pipe, MESA_SHADER_VERTEX, 0,
-                           PIPE_MAX_SHADER_SAMPLER_VIEWS, 0, sampler_views);
-   pipe->set_sampler_views(pipe, MESA_SHADER_GEOMETRY, 0,
-                           PIPE_MAX_SHADER_SAMPLER_VIEWS, 0, sampler_views);
+   pipe->set_sampler_views(pipe, PIPE_SHADER_FRAGMENT, 0,
+                           PIPE_MAX_SHADER_SAMPLER_VIEWS, 0, false, sampler_views);
+   pipe->set_sampler_views(pipe, PIPE_SHADER_VERTEX, 0,
+                           PIPE_MAX_SHADER_SAMPLER_VIEWS, 0, false, sampler_views);
+   pipe->set_sampler_views(pipe, PIPE_SHADER_GEOMETRY, 0,
+                           PIPE_MAX_SHADER_SAMPLER_VIEWS, 0, false, sampler_views);
 
    pipe->destroy(pipe);
 }

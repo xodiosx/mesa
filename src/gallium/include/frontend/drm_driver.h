@@ -44,4 +44,6 @@ struct drm_driver_descriptor
    bool (*probe_nctx)(int drm_fd, const struct virgl_renderer_capset_drm *caps);
 };
 
+extern const struct drm_driver_descriptor driver_descriptor;
+
 #endif

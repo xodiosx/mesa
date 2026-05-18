@@ -170,7 +170,7 @@ compare_components(ir_constant *a, ir_constant *b)
             foundequal = true;
          break;
       default:
-         UNREACHABLE("not reached");
+         unreachable("not reached");
       }
    }
 
@@ -195,7 +195,8 @@ compare_components(ir_constant *a, ir_constant *b)
 static ir_constant *
 combine_constant(bool ismin, ir_constant *a, ir_constant *b)
 {
-   ir_constant *c = a->clone(a->node_linalloc, NULL);
+   void *mem_ctx = ralloc_parent(a);
+   ir_constant *c = a->clone(mem_ctx, NULL);
    for (unsigned i = 0; i < glsl_get_components(c->type); i++) {
       switch (c->type->base_type) {
       case GLSL_TYPE_UINT16:
@@ -522,7 +523,7 @@ ir_minmax_visitor::handle_rvalue(ir_rvalue **rvalue)
 }
 
 bool
-do_minmax_prune(ir_exec_list *instructions)
+do_minmax_prune(exec_list *instructions)
 {
    ir_minmax_visitor v;
 

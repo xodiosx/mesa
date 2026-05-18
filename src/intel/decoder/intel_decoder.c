@@ -147,8 +147,6 @@ static void
 get_array_offset_count(const char **atts, uint32_t *offset, uint32_t *count,
                        uint32_t *size, bool *variable)
 {
-   *offset = 0;
-
    for (int i = 0; atts[i]; i += 2) {
       char *p;
 
@@ -156,14 +154,13 @@ get_array_offset_count(const char **atts, uint32_t *offset, uint32_t *count,
          *count = strtoul(atts[i + 1], &p, 0);
          if (*count == 0)
             *variable = true;
-      } else if (strcmp(atts[i], "dword") == 0) {
-         *offset += 32 * strtoul(atts[i + 1], &p, 0);
-      } else if (strcmp(atts[i], "offset_bits") == 0) {
-         *offset += strtoul(atts[i + 1], &p, 0);
+      } else if (strcmp(atts[i], "start") == 0) {
+         *offset = strtoul(atts[i + 1], &p, 0);
       } else if (strcmp(atts[i], "size") == 0) {
          *size = strtoul(atts[i + 1], &p, 0);
       }
    }
+   return;
 }
 
 static struct intel_group *
@@ -339,13 +336,6 @@ create_field(struct parser_context *ctx, const char **atts)
    field = rzalloc(ctx->group, struct intel_field);
    field->parent = ctx->group;
 
-   uint32_t dword = 0;
-   uint32_t bits_start = 0;
-   uint32_t bits_end = 0;
-
-   bool has_default = false;
-   uint32_t default_value = 0;
-
    for (int i = 0; atts[i]; i += 2) {
       char *p;
 
@@ -354,28 +344,17 @@ create_field(struct parser_context *ctx, const char **atts)
          if (strcmp(field->name, "DWord Length") == 0) {
             field->parent->dword_length_field = field;
          }
-      } else if (strcmp(atts[i], "dword") == 0) {
-         dword = strtoul(atts[i + 1], &p, 10);
-      } else if (strcmp(atts[i], "bits") == 0) {
-         const char *bits_str = atts[i + 1];
-         const char *colon = strchr(bits_str, ':');
-         assert(colon);
-         bits_end = strtoul(bits_str, NULL, 10);
-         bits_start = strtoul(colon+1, NULL, 10);
+      } else if (strcmp(atts[i], "start") == 0) {
+         field->start = strtoul(atts[i + 1], &p, 0);
+      } else if (strcmp(atts[i], "end") == 0) {
+         field->end = strtoul(atts[i + 1], &p, 0);
       } else if (strcmp(atts[i], "type") == 0) {
          field->type = string_to_type(ctx, atts[i + 1]);
-      } else if (strcmp(atts[i], "default") == 0) {
-         has_default = true;
-         default_value = strtoul(atts[i + 1], &p, 0);
+      } else if (strcmp(atts[i], "default") == 0 &&
+               field->start >= 16 && field->end <= 31) {
+         field->has_default = true;
+         field->default_value = strtoul(atts[i + 1], &p, 0);
       }
-   }
-
-   field->start = dword * 32 + bits_start;
-   field->end = dword * 32 + bits_end;
-
-   if (has_default && field->start >= 16 && field->end <= 31) {
-      field->has_default = true;
-      field->default_value = default_value;
    }
 
    return field;
@@ -751,7 +730,6 @@ static uint32_t zlib_inflate(const void *compressed_data,
       case Z_OK:
          break;
       default:
-         free(out);
          inflateEnd(&zstream);
          return 0;
       }

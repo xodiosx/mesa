@@ -88,10 +88,8 @@ readline(char **p)
    static size_t n;
 
    ssize_t ret = getline(&buf, &n, stdin);
-   if (ret < 0) {
-      *p = NULL;
+   if (ret < 0)
       return ret;
-   }
 
    *p = buf;
    return 0;

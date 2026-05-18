@@ -520,15 +520,12 @@ ir3_lower_copies(struct ir3_shader_variant *v)
             unsigned flags = dst->flags & (IR3_REG_HALF | IR3_REG_SHARED);
             for (unsigned i = 0; i < instr->srcs_count; i++) {
                struct ir3_register *src = instr->srcs[i];
-               if ((src->flags & (IR3_REG_CONST | IR3_REG_IMMED)) ||
-                   src->num != INVALID_REG) {
-                  array_insert(NULL, copies,
-                               (struct copy_entry){
-                                  .dst = ra_num_to_physreg(dst->num + i, flags),
-                                  .src = get_copy_src(src, 0),
-                                  .flags = flags,
-                               });
-               }
+               array_insert(NULL, copies,
+                            (struct copy_entry){
+                               .dst = ra_num_to_physreg(dst->num + i, flags),
+                               .src = get_copy_src(src, 0),
+                               .flags = flags,
+                            });
             }
             handle_copies(v, instr, copies, copies_count);
             list_del(&instr->node);
@@ -557,8 +554,7 @@ ir3_lower_copies(struct ir3_shader_variant *v)
              * components of the normal src and its even neighbor and then
              * unswap afterwords to make it work for everything.
              */
-            if (v->compiler->mov_half_shared_quirk &&
-                (instr->dsts[0]->flags & IR3_REG_SHARED) &&
+            if ((instr->dsts[0]->flags & IR3_REG_SHARED) &&
                 (instr->dsts[0]->flags & IR3_REG_HALF) &&
                 !(instr->srcs[0]->flags & (IR3_REG_SHARED | IR3_REG_IMMED |
                                            IR3_REG_CONST)) &&
@@ -608,5 +604,6 @@ ir3_lower_copies(struct ir3_shader_variant *v)
       }
    }
 
-   ralloc_free(copies);
+   if (copies)
+      ralloc_free(copies);
 }

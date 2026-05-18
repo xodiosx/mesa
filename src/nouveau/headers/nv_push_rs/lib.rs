@@ -14,7 +14,6 @@ fn class_to_subc(class: u16) -> u8 {
         0x39 => 2,
         0x2d => 3,
         0xb5 => 4,
-        0xb0 => 4,
         _ => panic!("Invalid class: {class}"),
     }
 }
@@ -60,7 +59,7 @@ impl MthdHeader {
         unsafe { &mut *(bits as *mut u32 as *mut MthdHeader) }
     }
 
-    fn into_bits(self) -> u32 {
+    fn to_bits(self) -> u32 {
         self.0
     }
 
@@ -91,7 +90,7 @@ impl MthdHeader {
     }
 
     fn subc(&self) -> u8 {
-        ((self.0 >> 13) & 0x7) as u8
+        (self.0 >> 13 & 0x7) as u8
     }
 
     fn addr(&self) -> u16 {
@@ -100,7 +99,7 @@ impl MthdHeader {
 
     fn len(&self) -> u16 {
         debug_assert!(!matches!(self.mthd_type(), MthdType::Immd));
-        ((self.0 >> 16) & 0x1fff) as u16
+        (self.0 >> 16 & 0x1fff) as u16
     }
 
     fn set_len(&mut self, len: u16) {
@@ -184,42 +183,17 @@ impl Push {
         if bits <= 0x1fff {
             self.last_inc = usize::MAX;
             let header = MthdHeader::new_immd(bits as u16, subc, addr);
-            self.mem.push(header.into_bits());
+            self.mem.push(header.to_bits());
         } else {
             self.last_inc = self.mem.len();
             let header = MthdHeader::new(MthdType::NInc, subc, addr, 1);
-            self.mem.push(header.into_bits());
+            self.mem.push(header.to_bits());
             self.mem.push(bits);
         }
     }
 
     pub fn push_method<M: Mthd>(&mut self, mthd: M) {
         self.push_mthd_bits(class_to_subc(M::CLASS), M::ADDR, mthd.to_bits());
-    }
-
-    pub fn push_mthd_0inc<M: Mthd>(&mut self, mthd: M) {
-        assert!(mthd.to_bits() == 0);
-
-        self.last_inc = self.mem.len();
-        let header = MthdHeader::new(
-            MthdType::ZeroInc,
-            class_to_subc(M::CLASS),
-            M::ADDR,
-            0,
-        );
-        self.mem.push(header.into_bits());
-    }
-
-    pub fn push_mthd_1inc<M: Mthd>(&mut self, mthd: M) {
-        self.last_inc = self.mem.len();
-        let header = MthdHeader::new(
-            MthdType::OneInc,
-            class_to_subc(M::CLASS),
-            M::ADDR,
-            0,
-        );
-        self.mem.push(header.into_bits());
-        self.mem.push(mthd.to_bits());
     }
 
     pub fn push_array_method<M: ArrayMthd>(&mut self, i: usize, mthd: M) {
@@ -230,46 +204,12 @@ impl Push {
         );
     }
 
-    pub fn push_array_mthd_0inc<M: ArrayMthd>(&mut self, i: usize, mthd: M) {
-        assert!(mthd.to_bits() == 0);
-
-        self.last_inc = self.mem.len();
-        let header = MthdHeader::new(
-            MthdType::ZeroInc,
-            class_to_subc(M::CLASS),
-            M::addr(i),
-            0,
-        );
-        self.mem.push(header.into_bits());
-    }
-
-    pub fn push_array_mthd_1inc<M: ArrayMthd>(&mut self, i: usize, mthd: M) {
-        self.last_inc = self.mem.len();
-        let header = MthdHeader::new(
-            MthdType::OneInc,
-            class_to_subc(M::CLASS),
-            M::addr(i),
-            1,
-        );
-        self.mem.push(header.into_bits());
-        self.mem.push(mthd.to_bits());
-    }
-
     /// Push an array of dwords into the push buffer
     pub fn push_inline_data(&mut self, data: &[u32]) {
-        if let Some(last) = self.mem.get_mut(self.last_inc) {
-            let last = MthdHeader::from_bits_mut(last);
-            last.add_len(data.len().try_into().unwrap());
-        } else {
+        if self.last_inc != usize::MAX {
             panic!("Inline data must only be placed after a method header");
         }
         self.mem.extend_from_slice(data);
-    }
-}
-
-impl Default for Push {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

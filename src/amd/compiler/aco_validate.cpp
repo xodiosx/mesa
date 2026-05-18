@@ -134,76 +134,53 @@ validate_ir(Program* program)
    for (Block& block : program->blocks) {
       for (aco_ptr<Instruction>& instr : block.instructions) {
 
-         /* Check that register assignment and register class are consistent. */
-         for (const Operand& op : instr->operands) {
-            if (program->progress < CompilationProgress::after_lower_to_hw)
+         if (program->progress < CompilationProgress::after_lower_to_hw) {
+            for (const Operand& op : instr->operands)
                check(!op.isTemp() || op.regClass() == program->temp_rc[op.tempId()],
                      "Operand RC not consistent.", instr.get());
 
-            if (program->progress >= CompilationProgress::after_ra)
-               check(op.isFixed(), "Operand without register assignment.", instr.get());
-
-            check(!op.hasRegClass() || op.isUndefined() || !op.isFixed() ||
-                     (op.physReg().reg() >= 256
-                         ? op.isOfType(RegType::vgpr)
-                         : (op.isOfType(RegType::sgpr) && op.physReg().byte() == 0)),
-                  "Operand RC and assignment not consistent.", instr.get());
-         }
-
-         for (const Definition& def : instr->definitions) {
-            if (program->progress < CompilationProgress::after_lower_to_hw)
+            for (const Definition& def : instr->definitions)
                check(!def.isTemp() || def.regClass() == program->temp_rc[def.tempId()],
                      "Definition RC not consistent.", instr.get());
-
-            if (program->progress >= CompilationProgress::after_ra)
-               check(def.isFixed(), "Definition without register assignment.", instr.get());
-
-            check(!def.isFixed() ||
-                     (def.physReg().reg() >= 256
-                         ? def.regClass().type() == RegType::vgpr
-                         : (def.regClass().type() == RegType::sgpr && def.physReg().byte() == 0)),
-                  "Definition RC and assignment not consistent.", instr.get());
          }
 
-         const aco_alu_opcode_info& opcode_info = instr_info.alu_opcode_infos[(int)instr->opcode];
+         unsigned pck_defs = instr_info.definitions[(int)instr->opcode];
+         unsigned pck_ops = instr_info.operands[(int)instr->opcode];
 
-         if (opcode_info.num_defs) {
-            unsigned num_defs = opcode_info.num_defs;
+         if (pck_defs != 0) {
             /* Before GFX10 v_cmpx also writes VCC. */
-            if (instr->isVOPC() && program->gfx_level < GFX10 &&
-                opcode_info.def_fixed_reg[0] == fixed_exec)
-               num_defs = 2;
+            if (instr->isVOPC() && program->gfx_level < GFX10 && pck_defs == exec_hi)
+               pck_defs = vcc | (exec_hi << 8);
 
-            check(num_defs >= instr->definitions.size(), "Too many definitions", instr.get());
-            check(num_defs <= instr->definitions.size(), "Too few definitions", instr.get());
-            num_defs = MIN2(num_defs, instr->definitions.size());
-
-            for (unsigned i = 0; i < num_defs; i++) {
-               aco_type type;
-               fixed_reg fixed_reg;
-               if (instr->isVOPC() && program->gfx_level < GFX10 &&
-                   opcode_info.def_fixed_reg[0] == fixed_exec) {
-                  type = opcode_info.def_types[0];
-                  fixed_reg = i == 0 ? not_fixed : fixed_exec;
+            for (unsigned i = 0; i < 4; i++) {
+               uint32_t def = (pck_defs >> (i * 8)) & 0xff;
+               if (def == 0) {
+                  check(i == instr->definitions.size(), "Too many definitions", instr.get());
+                  break;
                } else {
-                  type = opcode_info.def_types[i];
-                  fixed_reg = opcode_info.def_fixed_reg[i];
+                  check(i < instr->definitions.size(), "Too few definitions", instr.get());
+                  if (i >= instr->definitions.size())
+                     break;
                }
 
-               if (fixed_reg == fixed_m0) {
+               if (def == m0) {
                   check(instr->definitions[i].isFixed() && instr->definitions[i].physReg() == m0,
                         "Definition needs m0", instr.get());
-               } else if (fixed_reg == fixed_scc) {
+               } else if (def == scc) {
                   check(instr->definitions[i].isFixed() && instr->definitions[i].physReg() == scc,
                         "Definition needs scc", instr.get());
-               } else if (fixed_reg == fixed_exec) {
-                  RegClass rc = type.bit_size == 1 ? program->lane_mask
-                                                   : RegClass::get(RegType::sgpr, type.bytes());
+               } else if (def == exec_hi) {
+                  RegClass rc = instr->isSALU() ? s2 : program->lane_mask;
                   check(instr->definitions[i].isFixed() &&
                            instr->definitions[i].physReg() == exec &&
                            instr->definitions[i].regClass() == rc,
                         "Definition needs exec", instr.get());
-               } else if (type.bit_size == 1) {
+               } else if (def == exec_lo) {
+                  check(instr->definitions[i].isFixed() &&
+                           instr->definitions[i].physReg() == exec_lo &&
+                           instr->definitions[i].regClass() == s1,
+                        "Definition needs exec_lo", instr.get());
+               } else if (def == vcc) {
                   check(instr->definitions[i].regClass() == program->lane_mask,
                         "Definition has to be lane mask", instr.get());
                   check(!instr->definitions[i].isFixed() ||
@@ -211,45 +188,48 @@ validate_ir(Program* program)
                            instr->isSDWA(),
                         "Definition has to be vcc", instr.get());
                } else {
-                  check(instr->definitions[i].size() == type.dwords(), "Definition has wrong size",
+                  check(instr->definitions[i].size() == def, "Definition has wrong size",
                         instr.get());
                }
             }
          }
 
-         if (opcode_info.num_operands) {
-            unsigned num_ops = opcode_info.num_operands;
-            check(num_ops >= instr->operands.size(), "Too many operands", instr.get());
-            check(num_ops <= instr->operands.size(), "Too few operands", instr.get());
-            num_ops = MIN2(num_ops, instr->operands.size());
+         if (pck_ops != 0) {
+            for (unsigned i = 0; i < 4; i++) {
+               uint32_t op = (pck_ops >> (i * 8)) & 0xff;
+               if (op == 0) {
+                  check(i == instr->operands.size(), "Too many operands", instr.get());
+                  break;
+               } else {
+                  check(i < instr->operands.size(), "Too few operands", instr.get());
+                  if (i >= instr->operands.size())
+                     break;
+               }
 
-            for (unsigned i = 0; i < num_ops; i++) {
-               aco_type type = opcode_info.op_types[i];
-               fixed_reg fixed_reg = opcode_info.op_fixed_reg[i];
-
-               if (fixed_reg == fixed_m0) {
+               if (op == m0) {
                   check(instr->operands[i].isFixed() && instr->operands[i].physReg() == m0,
                         "Operand needs m0", instr.get());
-               } else if (fixed_reg == fixed_scc) {
+               } else if (op == scc) {
                   check(instr->operands[i].isFixed() && instr->operands[i].physReg() == scc,
                         "Operand needs scc", instr.get());
-               } else if (fixed_reg == fixed_exec) {
-                  RegClass rc = type.bit_size == 1 ? program->lane_mask
-                                                   : RegClass::get(RegType::sgpr, type.bytes());
+               } else if (op == exec_hi) {
+                  RegClass rc = instr->isSALU() ? s2 : program->lane_mask;
                   check(instr->operands[i].isFixed() && instr->operands[i].physReg() == exec &&
                            instr->operands[i].hasRegClass() && instr->operands[i].regClass() == rc,
                         "Operand needs exec", instr.get());
-               } else if (type.bit_size == 1) {
+               } else if (op == exec_lo) {
+                  check(instr->operands[i].isFixed() && instr->operands[i].physReg() == exec_lo &&
+                           instr->operands[i].hasRegClass() && instr->operands[i].regClass() == s1,
+                        "Operand needs exec_lo", instr.get());
+               } else if (op == vcc) {
                   check(instr->operands[i].hasRegClass() &&
                            instr->operands[i].regClass() == program->lane_mask,
                         "Operand has to be lane mask", instr.get());
                   check(!instr->operands[i].isFixed() || instr->operands[i].physReg() == vcc ||
                            instr->isVOP3(),
                         "Operand has to be vcc", instr.get());
-               } else if (fixed_reg == fixed_imm) {
-                  check(instr->operands[i].isLiteral(), "Operand has to be literal", instr.get());
                } else {
-                  check(instr->operands[i].size() == type.dwords() ||
+                  check(instr->operands[i].size() == op ||
                            (instr->operands[i].isFixed() && instr->operands[i].physReg() >= 128 &&
                             instr->operands[i].physReg() < 256),
                         "Operand has wrong size", instr.get());
@@ -425,20 +405,18 @@ validate_ir(Program* program)
          for (unsigned i = 0; i < instr->operands.size(); i++) {
             if (instr->operands[i].isUndefined()) {
                bool flat = instr->isFlatLike();
-               bool can_be_undef =
-                  is_phi(instr) || instr->isEXP() || instr->isReduction() ||
-                  instr->opcode == aco_opcode::p_create_vector ||
-                  instr->opcode == aco_opcode::p_start_linear_vgpr ||
-                  instr->opcode == aco_opcode::p_jump_to_epilog ||
-                  instr->opcode == aco_opcode::p_dual_src_export_gfx11 ||
-                  instr->opcode == aco_opcode::p_end_with_regs ||
-                  (instr->opcode == aco_opcode::p_interp_gfx11 && i == 0) ||
-                  (instr->opcode == aco_opcode::p_bpermute_permlane && i == 0) ||
-                  (flat && i == 1) || (instr->isMIMG() && (i == 1 || i == 2)) ||
-                  ((instr->isMUBUF() || instr->isMTBUF()) && i == 1) ||
-                  (instr->isScratch() && i == 0) || (instr->isDS() && i == 0) ||
-                  (instr->opcode == aco_opcode::p_init_scratch && i == 0) ||
-                  (instr_disables_wqm(instr.get()) && i + 2 >= instr->operands.size());
+               bool can_be_undef = is_phi(instr) || instr->isEXP() || instr->isReduction() ||
+                                   instr->opcode == aco_opcode::p_create_vector ||
+                                   instr->opcode == aco_opcode::p_start_linear_vgpr ||
+                                   instr->opcode == aco_opcode::p_jump_to_epilog ||
+                                   instr->opcode == aco_opcode::p_dual_src_export_gfx11 ||
+                                   instr->opcode == aco_opcode::p_end_with_regs ||
+                                   (instr->opcode == aco_opcode::p_interp_gfx11 && i == 0) ||
+                                   (instr->opcode == aco_opcode::p_bpermute_permlane && i == 0) ||
+                                   (flat && i == 1) || (instr->isMIMG() && (i == 1 || i == 2)) ||
+                                   ((instr->isMUBUF() || instr->isMTBUF()) && i == 1) ||
+                                   (instr->isScratch() && i == 0) || (instr->isDS() && i == 0) ||
+                                   (instr->opcode == aco_opcode::p_init_scratch && i == 0);
                check(can_be_undef, "Undefs can only be used in certain operands", instr.get());
             } else {
                check(instr->operands[i].isFixed() || instr->operands[i].isTemp() ||
@@ -502,21 +480,18 @@ validate_ir(Program* program)
                   const_bus_limit = 2;
 
                uint32_t scalar_mask;
-               if (instr->isVOP3() || instr->isVOP3P())
+               if (instr->isVOP3() || instr->isVOP3P() || instr->isVINTERP_INREG())
                   scalar_mask = 0x7;
                else if (instr->isSDWA())
                   scalar_mask = program->gfx_level >= GFX9 ? 0x7 : 0x4;
+               else if (instr->isDPP())
+                  scalar_mask = 0x4;
                else if (instr->opcode == aco_opcode::v_movrels_b32 ||
                         instr->opcode == aco_opcode::v_movrelsd_b32 ||
                         instr->opcode == aco_opcode::v_movrelsd_2_b32)
                   scalar_mask = 0x2;
-               else if (instr->isVINTERP_INREG())
-                  scalar_mask = 0x0;
                else
                   scalar_mask = 0x5;
-
-               if (instr->isDPP())
-                  scalar_mask &= 0x4; /* TODO 0x6 for GFX11.5+ */
 
                if (instr->isVOPC() || instr->opcode == aco_opcode::v_readfirstlane_b32 ||
                    instr->opcode == aco_opcode::v_readlane_b32 ||
@@ -532,7 +507,7 @@ validate_ir(Program* program)
                }
 
                unsigned num_sgprs = 0;
-               Operand sgpr_ops[] = {Operand(), Operand()};
+               unsigned sgpr[] = {0, 0};
                for (unsigned i = 0; i < instr->operands.size(); i++) {
                   Operand op = instr->operands[i];
                   if (instr->opcode == aco_opcode::v_readfirstlane_b32 ||
@@ -566,16 +541,9 @@ validate_ir(Program* program)
                      check(scalar_mask & (1 << i), "Wrong source position for SGPR argument",
                            instr.get());
 
-                     /* Ignore flags and SSA when register was assigned. */
-                     Operand current_sgpr =
-                        op.isFixed() ? Operand(op.physReg(), op.regClass()) : Operand(op.getTemp());
-                     bool same = false;
-                     for (unsigned j = 0; j < MIN2(2, num_sgprs); j++)
-                        same |= current_sgpr == sgpr_ops[j];
-                     if (!same) {
+                     if (op.tempId() != sgpr[0] && op.tempId() != sgpr[1]) {
                         if (num_sgprs < 2)
-                           sgpr_ops[num_sgprs] = current_sgpr;
-                        num_sgprs++;
+                           sgpr[num_sgprs++] = op.tempId();
                      }
                   }
 
@@ -781,22 +749,12 @@ validate_ir(Program* program)
                      "Fifth definition of p_dual_src_export_gfx11 must be vcc", instr.get());
                check(instr->definitions[5].physReg() == scc,
                      "Sixth definition of p_dual_src_export_gfx11 must be scc", instr.get());
-               check(instr->operands.size() == 8 || instr->operands.size() == 10,
-                     "p_dual_src_export_gfx11 must have 8 or 10 operands", instr.get());
+               check(instr->operands.size() == 8, "p_dual_src_export_gfx11 must have 8 operands",
+                     instr.get());
                for (unsigned i = 0; i < instr->operands.size(); i++) {
-                  if (i < 8) {
-                     check(instr->operands[i].isOfType(RegType::vgpr) ||
-                              instr->operands[i].isUndefined(),
-                           "Operands of p_dual_src_export_gfx11 must be VGPRs or undef",
-                           instr.get());
-                  } else {
-                     check(instr->operands[i].isUndefined() ||
-                              (instr->operands[i].hasRegClass() &&
-                               instr->operands[i].regClass() == program->lane_mask),
-                           "WQM/exact mask operands of p_dual_src_export_gfx11 must be undef or "
-                           "lane mask",
-                           instr.get());
-                  }
+                  check(
+                     instr->operands[i].isOfType(RegType::vgpr) || instr->operands[i].isUndefined(),
+                     "Operands of p_dual_src_export_gfx11 must be VGPRs or undef", instr.get());
                }
             }
             break;
@@ -812,6 +770,11 @@ validate_ir(Program* program)
                check(instr->definitions[0].regClass().type() == RegType::sgpr ||
                         program->wave_size == 32,
                      "The result of unclustered reductions must go into an SGPR.", instr.get());
+            else
+               check(instr->definitions[0].regClass().type() == RegType::vgpr,
+                     "The result of scans and clustered reductions must go into a VGPR.",
+                     instr.get());
+
             break;
          }
          case Format::SMEM: {
@@ -828,16 +791,15 @@ validate_ir(Program* program)
          }
          case Format::MTBUF:
          case Format::MUBUF: {
-            unsigned non_mask_ops = instr->operands.size() - (instr_disables_wqm(instr.get()) * 2);
-            check(non_mask_ops > 1, "VMEM instructions must have at least one operand",
+            check(instr->operands.size() > 1, "VMEM instructions must have at least one operand",
                   instr.get());
             check(instr->operands[1].isOfType(RegType::vgpr),
                   "VADDR must be in vgpr for VMEM instructions", instr.get());
             check(instr->operands[0].isOfType(RegType::sgpr), "VMEM resource constant must be sgpr",
                   instr.get());
-            check(non_mask_ops < 4 || instr->operands[3].isOfType(RegType::vgpr),
+            check(instr->operands.size() < 4 || instr->operands[3].isOfType(RegType::vgpr),
                   "VMEM write data must be vgpr", instr.get());
-            if (non_mask_ops >= 3 && instr->operands[2].isConstant())
+            if (instr->operands.size() >= 3 && instr->operands[2].isConstant())
                check(program->gfx_level < GFX12 || instr->operands[2].constantValue() == 0,
                      "VMEM SOFFSET must not be non-zero constant on GFX12+", instr.get());
 
@@ -893,15 +855,13 @@ validate_ir(Program* program)
                      instr.get());
             }
 
-            unsigned non_mask_ops = instr->operands.size() - (instr->mimg().disable_wqm * 2);
-
             if (instr->mimg().strict_wqm) {
                check(instr->operands[3].hasRegClass() &&
                         instr->operands[3].regClass().is_linear_vgpr(),
                      "MIMG operands[3] must be temp linear VGPR.", instr.get());
 
                unsigned total_size = 0;
-               for (unsigned i = 4; i < non_mask_ops; i++) {
+               for (unsigned i = 4; i < instr->operands.size(); i++) {
                   check(instr->operands[i].hasRegClass() && instr->operands[i].regClass() == v1,
                         "MIMG operands[4+] (VADDR) must be v1", instr.get());
                   total_size += instr->operands[i].bytes();
@@ -909,22 +869,21 @@ validate_ir(Program* program)
                check(total_size <= instr->operands[3].bytes(),
                      "MIMG operands[4+] must fit within operands[3].", instr.get());
             } else {
-               check(non_mask_ops == 4 || program->gfx_level >= GFX10,
+               check(instr->operands.size() == 4 || program->gfx_level >= GFX10,
                      "NSA is only supported on GFX10+", instr.get());
-               for (unsigned i = 3; i < non_mask_ops; i++) {
+               for (unsigned i = 3; i < instr->operands.size(); i++) {
                   check(instr->operands[i].hasRegClass() &&
                            instr->operands[i].regClass().type() == RegType::vgpr,
                         "MIMG operands[3+] (VADDR) must be VGPR", instr.get());
-                  if (non_mask_ops > 4) {
+                  if (instr->operands.size() > 4) {
                      if (program->gfx_level < GFX11) {
                         check(instr->operands[i].regClass() == v1,
                               "GFX10 MIMG VADDR must be v1 if NSA is used", instr.get());
                      } else {
-                        unsigned num_scalar = program->gfx_level >= GFX12 ? (non_mask_ops - 4) : 4;
+                        unsigned num_scalar =
+                           program->gfx_level >= GFX12 ? (instr->operands.size() - 4) : 4;
                         if (instr->opcode != aco_opcode::image_bvh_intersect_ray &&
                             instr->opcode != aco_opcode::image_bvh64_intersect_ray &&
-                            instr->opcode != aco_opcode::image_bvh_dual_intersect_ray &&
-                            instr->opcode != aco_opcode::image_bvh8_intersect_ray &&
                             i < 3 + num_scalar) {
                            check(instr->operands[i].regClass() == v1,
                                  "first 4 GFX11 MIMG VADDR must be v1 if NSA is used", instr.get());
@@ -949,10 +908,9 @@ validate_ir(Program* program)
                check(op.isOfType(RegType::vgpr) || op.physReg() == m0 || op.isUndefined(),
                      "Only VGPRs are valid DS instruction operands", instr.get());
             }
-            for (const Definition& def : instr->definitions) {
-               check(def.regClass().type() == RegType::vgpr, "DS instruction must return VGPR",
-                     instr.get());
-            }
+            if (!instr->definitions.empty())
+               check(instr->definitions[0].regClass().type() == RegType::vgpr,
+                     "DS instruction must return VGPR", instr.get());
             break;
          }
          case Format::EXP: {
@@ -997,97 +955,8 @@ validate_ir(Program* program)
             }
             break;
          }
-         case Format::PSEUDO_CALL: {
-            /* Call instructions need one definition for the return address and at least four
-             * operands:
-             * 1. Stack pointer
-             * 2. Parameter stack size (constant)
-             * 3. Divergent callee address (future s_setpc targets for divergent lanes)
-             * 4. Uniform callee address (s_setpc target)
-             */
-            check(!instr->definitions.empty() && instr->operands.size() >= 4,
-                  "Call instructions must have a definition and at least four operands",
-                  instr.get());
-            if (instr->definitions.empty() || instr->operands.size() < 4)
-               break;
-
-            check(instr->definitions[0].regClass() == RegClass::s2,
-                  "The first definition of a call instruction must be the return address",
-                  instr.get());
-
-            /* On gfx6-8 the stack pointer is part of the scratch resource descriptor */
-            if (program->gfx_level >= GFX9) {
-               check(instr->operands[0].regClass() == s1,
-                     "The first operand of a call instruction must be the stack pointer",
-                     instr.get());
-            } else {
-               check(instr->operands[0].regClass() == s4,
-                     "The first operand of a call instruction must be the stack pointer",
-                     instr.get());
-            }
-
-            check(instr->operands[1].isConstant(),
-                  "The second operand of a call instruction must be a constant", instr.get());
-            check(instr->operands[2].regClass() == v2,
-                  "The third operand of a call instruction must be a VGPR call target address",
-                  instr.get());
-            check(instr->operands[3].regClass() == s2,
-                  "The fourth operand of a call instruction must be a uniform call target address",
-                  instr.get());
-
-            unsigned first_discardable_def = 1;
-            if (instr->definitions.size() > 1 && instr->definitions[1].physReg() == vcc)
-               first_discardable_def = 2;
-
-            check(instr->operands.size() - 2u >= instr->definitions.size() - first_discardable_def,
-                  "There must be an operand for each parameter definition in a call instruction",
-                  instr.get());
-
-            for (unsigned def_idx = 0; def_idx < instr->definitions.size(); ++def_idx) {
-               check(instr->definitions[def_idx].isPrecolored(),
-                     "Call instruction definitions must be precolored", instr.get());
-            }
-            for (unsigned op_idx = 2; op_idx < instr->operands.size(); ++op_idx) {
-               check(instr->operands[op_idx].isPrecolored(),
-                     "Call parameter operands must be precolored", instr.get());
-            }
-            break;
-         }
          default: break;
          }
-      }
-   }
-
-   auto check_edge = [&program, &is_valid](const char* msg, const Block::edge_vec& vec,
-                                           Block* block, Block* other, bool other_is_pred) -> void
-   {
-      if (std::find(vec.begin(), vec.end(), block->index) == vec.end()) {
-         Block* pred = other_is_pred ? other : block;
-         Block* succ = other_is_pred ? block : other;
-         aco_err(program, "%s: BB%u->BB%u", msg, pred->index, succ->index);
-         is_valid = false;
-      }
-   };
-
-   for (Block& block : program->blocks) {
-      for (unsigned pred_idx : block.linear_preds) {
-         Block* pred = &program->blocks[pred_idx];
-         check_edge("Block is missing in linear_succs", pred->linear_succs, &block, pred, true);
-      }
-
-      for (unsigned pred_idx : block.logical_preds) {
-         Block* pred = &program->blocks[pred_idx];
-         check_edge("Block is missing in logical_succs", pred->logical_succs, &block, pred, true);
-      }
-
-      for (unsigned succ_idx : block.linear_succs) {
-         Block* succ = &program->blocks[succ_idx];
-         check_edge("Block is missing in linear_preds", succ->linear_preds, &block, succ, false);
-      }
-
-      for (unsigned succ_idx : block.logical_succs) {
-         Block* succ = &program->blocks[succ_idx];
-         check_edge("Block is missing in logical_preds", succ->logical_preds, &block, succ, false);
       }
    }
 
@@ -1157,23 +1026,18 @@ validate_live_vars(Program* program)
    std::vector<RegisterDemand> block_demands(program->blocks.size());
    std::vector<RegisterDemand> live_in_demands(program->blocks.size());
    std::vector<std::vector<RegisterDemand>> register_demands(program->blocks.size());
-   std::vector<RegisterDemand> call_preserved_demands;
 
    for (unsigned i = 0; i < program->blocks.size(); i++) {
       Block& b = program->blocks[i];
       block_demands[i] = b.register_demand;
       live_in_demands[i] = b.live_in_demand;
       register_demands[i].reserve(b.instructions.size());
-      for (unsigned j = 0; j < b.instructions.size(); j++) {
+      for (unsigned j = 0; j < b.instructions.size(); j++)
          register_demands[i].emplace_back(b.instructions[j]->register_demand);
-         if (b.instructions[j]->isCall())
-            call_preserved_demands.push_back(b.instructions[j]->call().caller_preserved_demand);
-      }
    }
 
    aco::live_var_analysis(program);
 
-   unsigned call_instr_idx = 0;
    /* Validate RegisterDemand calculation */
    for (unsigned i = 0; i < program->blocks.size(); i++) {
       Block& b = program->blocks[i];
@@ -1196,9 +1060,7 @@ validate_live_vars(Program* program)
       }
 
       for (unsigned j = 0; j < b.instructions.size(); j++) {
-         if (b.instructions[j]->register_demand == register_demands[i][j] &&
-             (!b.instructions[j]->isCall() || b.instructions[j]->call().caller_preserved_demand ==
-                                                 call_preserved_demands[call_instr_idx++]))
+         if (b.instructions[j]->register_demand == register_demands[i][j])
             continue;
 
          char* out;
@@ -1207,23 +1069,11 @@ validate_live_vars(Program* program)
          u_memstream_open(&mem, &out, &outsize);
          FILE* const memf = u_memstream_get(&mem);
 
-         if (b.instructions[j]->register_demand == register_demands[i][j]) {
-            fprintf(memf,
-                    "Caller-Preserved Register Demand not updated correctly: got (%3u vgpr, %3u "
-                    "sgpr), but should be "
-                    "(%3u vgpr, %3u sgpr): \n\t",
-                    call_preserved_demands[call_instr_idx - 1].vgpr,
-                    call_preserved_demands[call_instr_idx - 1].sgpr,
-                    b.instructions[j]->call().caller_preserved_demand.vgpr,
-                    b.instructions[j]->call().caller_preserved_demand.sgpr);
-         } else {
-            fprintf(
-               memf,
-               "Register Demand not updated correctly: got (%3u vgpr, %3u sgpr), but should be "
-               "(%3u vgpr, %3u sgpr): \n\t",
-               register_demands[i][j].vgpr, register_demands[i][j].sgpr,
-               b.instructions[j]->register_demand.vgpr, b.instructions[j]->register_demand.sgpr);
-         }
+         fprintf(memf,
+                 "Register Demand not updated correctly: got (%3u vgpr, %3u sgpr), but should be "
+                 "(%3u vgpr, %3u sgpr): \n\t",
+                 register_demands[i][j].vgpr, register_demands[i][j].sgpr,
+                 b.instructions[j]->register_demand.vgpr, b.instructions[j]->register_demand.sgpr);
          aco_print_instr(program->gfx_level, b.instructions[j].get(), memf, print_kill);
          u_memstream_close(&mem);
 
@@ -1409,17 +1259,14 @@ validate_subdword_definition(amd_gfx_level gfx_level, const aco_ptr<Instruction>
    case aco_opcode::buffer_load_short_d16_hi:
    case aco_opcode::buffer_load_format_d16_hi_x:
    case aco_opcode::flat_load_ubyte_d16_hi:
-   case aco_opcode::flat_load_sbyte_d16_hi:
    case aco_opcode::flat_load_short_d16_hi:
    case aco_opcode::scratch_load_ubyte_d16_hi:
-   case aco_opcode::scratch_load_sbyte_d16_hi:
    case aco_opcode::scratch_load_short_d16_hi:
    case aco_opcode::global_load_ubyte_d16_hi:
-   case aco_opcode::global_load_sbyte_d16_hi:
    case aco_opcode::global_load_short_d16_hi:
    case aco_opcode::ds_read_u8_d16_hi:
-   case aco_opcode::ds_read_i8_d16_hi:
    case aco_opcode::ds_read_u16_d16_hi: return byte == 2;
+   case aco_opcode::p_v_cvt_pk_u8_f32: return true;
    default: break;
    }
 
@@ -1434,8 +1281,11 @@ get_subdword_bytes_written(Program* program, const aco_ptr<Instruction>& instr, 
 
    if (instr->isPseudo())
       return gfx_level >= GFX8 ? def.bytes() : def.size() * 4u;
-
    if (instr->isVALU() || instr->isVINTRP()) {
+      assert(def.bytes() <= 2);
+      if (instr->opcode == aco_opcode::p_v_cvt_pk_u8_f32)
+         return 1;
+
       if (instr->isSDWA())
          return instr->sdwa().dst_sel.size();
 
@@ -1457,32 +1307,24 @@ get_subdword_bytes_written(Program* program, const aco_ptr<Instruction>& instr, 
    case aco_opcode::buffer_load_format_d16_x:
    case aco_opcode::tbuffer_load_format_d16_x:
    case aco_opcode::flat_load_ubyte_d16:
-   case aco_opcode::flat_load_sbyte_d16:
    case aco_opcode::flat_load_short_d16:
    case aco_opcode::scratch_load_ubyte_d16:
-   case aco_opcode::scratch_load_sbyte_d16:
    case aco_opcode::scratch_load_short_d16:
    case aco_opcode::global_load_ubyte_d16:
-   case aco_opcode::global_load_sbyte_d16:
    case aco_opcode::global_load_short_d16:
    case aco_opcode::ds_read_u8_d16:
-   case aco_opcode::ds_read_i8_d16:
    case aco_opcode::ds_read_u16_d16:
    case aco_opcode::buffer_load_ubyte_d16_hi:
    case aco_opcode::buffer_load_sbyte_d16_hi:
    case aco_opcode::buffer_load_short_d16_hi:
    case aco_opcode::buffer_load_format_d16_hi_x:
    case aco_opcode::flat_load_ubyte_d16_hi:
-   case aco_opcode::flat_load_sbyte_d16_hi:
    case aco_opcode::flat_load_short_d16_hi:
    case aco_opcode::scratch_load_ubyte_d16_hi:
-   case aco_opcode::scratch_load_sbyte_d16_hi:
    case aco_opcode::scratch_load_short_d16_hi:
    case aco_opcode::global_load_ubyte_d16_hi:
-   case aco_opcode::global_load_sbyte_d16_hi:
    case aco_opcode::global_load_short_d16_hi:
    case aco_opcode::ds_read_u8_d16_hi:
-   case aco_opcode::ds_read_i8_d16_hi:
    case aco_opcode::ds_read_u16_d16_hi: return program->dev.sram_ecc_enabled ? 4 : 2;
    case aco_opcode::buffer_load_format_d16_xyz:
    case aco_opcode::tbuffer_load_format_d16_xyz: return program->dev.sram_ecc_enabled ? 8 : 6;
@@ -1549,7 +1391,7 @@ validate_ra(Program* program)
    bool err = false;
    aco::live_var_analysis(program);
    std::vector<std::vector<Temp>> phi_sgpr_ops(program->blocks.size());
-   uint16_t sgpr_limit = get_addr_regs_from_waves(program, program->num_waves).sgpr;
+   uint16_t sgpr_limit = get_addr_sgpr_from_waves(program, program->num_waves);
 
    std::vector<Assignment> assignments(program->peekAllocationId());
    for (Block& block : program->blocks) {
@@ -1589,12 +1431,6 @@ validate_ra(Program* program)
             if (op.regClass().is_subdword() &&
                 !validate_subdword_operand(program->gfx_level, instr, i))
                err |= ra_fail(program, loc, Location(), "Operand %d not aligned correctly", i);
-            if (op.isVectorAligned() &&
-                op.physReg().advance(op.bytes()) != instr->operands[i + 1].physReg())
-               err |= ra_fail(
-                  program, loc, assignments[instr->operands[i + 1].tempId()].firstloc,
-                  "Operand %d forms part of a vector but has misaligned register assignment.",
-                  i + 1);
             if (!assignments[op.tempId()].firstloc.block)
                assignments[op.tempId()].firstloc = loc;
             if (!assignments[op.tempId()].defloc.block) {
@@ -1631,15 +1467,6 @@ validate_ra(Program* program)
             assignments[def.tempId()].defloc = loc;
             assignments[def.tempId()].reg = def.physReg();
             assignments[def.tempId()].valid = true;
-         }
-
-         unsigned fixed_def_idx = 0;
-         for (auto op_idx : get_tied_defs(instr.get())) {
-            if (instr->definitions[fixed_def_idx++].physReg() !=
-                instr->operands[op_idx].physReg()) {
-               err |= ra_fail(program, loc, Location(),
-                              "Operand %d must have the same register as definition", op_idx);
-            }
          }
       }
    }

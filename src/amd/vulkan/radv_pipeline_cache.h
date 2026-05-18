@@ -13,11 +13,14 @@
 
 #include "util/mesa-blake3.h"
 
+#include "nir.h"
+
 #include "vk_pipeline_cache.h"
 
 struct radv_device;
 struct radv_graphics_state_key;
 struct radv_pipeline;
+struct radv_pipeline_layout;
 struct radv_ray_tracing_group;
 struct radv_ray_tracing_pipeline;
 struct radv_graphics_pipeline;
@@ -27,8 +30,6 @@ struct radv_shader_binary;
 struct radv_shader_stage;
 struct radv_spirv_to_nir_options;
 struct util_dynarray;
-struct nir_shader;
-typedef struct nir_shader nir_shader;
 
 void radv_hash_graphics_spirv_to_nir(blake3_hash hash, const struct radv_shader_stage *stage,
                                      const struct radv_spirv_to_nir_options *options);
@@ -53,7 +54,7 @@ void radv_ray_tracing_pipeline_cache_insert(struct radv_device *device, struct v
                                             struct radv_ray_tracing_pipeline *pipeline, unsigned num_stages);
 
 nir_shader *radv_pipeline_cache_lookup_nir(struct radv_device *device, struct vk_pipeline_cache *cache,
-                                           mesa_shader_stage stage, const blake3_hash key);
+                                           gl_shader_stage stage, const blake3_hash key);
 
 void radv_pipeline_cache_insert_nir(struct radv_device *device, struct vk_pipeline_cache *cache, const blake3_hash key,
                                     const nir_shader *nir);

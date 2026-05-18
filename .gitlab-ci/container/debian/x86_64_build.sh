@@ -12,7 +12,7 @@ set -e
 set -o xtrace
 
 export DEBIAN_FRONTEND=noninteractive
-: "${LLVM_VERSION:?llvm version not set!}"
+export LLVM_VERSION="${LLVM_VERSION:=15}"
 
 # Ephemeral packages (installed for this script and removed again at the end)
 EPHEMERAL=(
@@ -31,7 +31,6 @@ DEPS=(
     libarchive-dev
     libdrm-dev
     "libclang-cpp${LLVM_VERSION}-dev"
-    "libclang-rt-${LLVM_VERSION}-dev"
     libgbm-dev
     libglvnd-dev
     liblua5.3-dev
@@ -48,10 +47,13 @@ DEPS=(
     "llvm-${LLVM_VERSION}-dev"
     ocl-icd-opencl-dev
     python3-pip
+    python3-venv
     procps
     spirv-tools
+    shellcheck
     strace
     time
+    yamllint
     zstd
 )
 
@@ -83,6 +85,8 @@ rm -rf $XORGMACROS_VERSION
 . .gitlab-ci/container/build-directx-headers.sh
 
 . .gitlab-ci/container/build-bindgen.sh
+
+python3 -m pip install --break-system-packages -r bin/ci/requirements.txt
 
 ############### Uninstall the build software
 

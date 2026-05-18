@@ -141,10 +141,10 @@ pack_channel(uint32_t value, enum pipe_format format, unsigned channel)
       return chan.size == 32 ? value : _mesa_float_to_half(uif(value));
 
    case UTIL_FORMAT_TYPE_FIXED:
-      UNREACHABLE("no FIXED textures");
+      unreachable("no FIXED textures");
    }
 
-   UNREACHABLE("invalid format type");
+   unreachable("invalid format type");
 }
 
 void

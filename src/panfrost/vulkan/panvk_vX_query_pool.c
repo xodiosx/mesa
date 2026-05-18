@@ -1,10 +1,8 @@
 /*
  * Copyright © 2024 Collabora Ltd.
- * Copyright © 2025 Arm Ltd.
  * SPDX-License-Identifier: MIT
  */
 
-#include "util/macros.h"
 #include "vk_log.h"
 
 #include "pan_props.h"
@@ -12,24 +10,7 @@
 #include "panvk_entrypoints.h"
 #include "panvk_query_pool.h"
 
-#include "panvk_cmd_ts.h"
-
-#if PAN_ARCH >= 10
-#include "panvk_queue.h"
-#endif
-
 #define PANVK_QUERY_TIMEOUT 2000000000ull
-
-static void
-reset_query_pool(struct panvk_query_pool *pool, uint32_t firstQuery,
-                 uint32_t queryCount)
-{
-   panvk_priv_mem_write_array(pool->available_mem,
-                              panvk_query_available_offset(pool, firstQuery),
-                              struct panvk_query_available_obj, queryCount,
-                              available)
-      memset(available, 0, queryCount * sizeof(*available));
-}
 
 VKAPI_ATTR VkResult VKAPI_CALL
 panvk_per_arch(CreateQueryPool)(VkDevice _device,
@@ -54,53 +35,47 @@ panvk_per_arch(CreateQueryPool)(VkDevice _device,
       const struct panvk_physical_device *phys_dev =
          to_panvk_physical_device(device->vk.physical);
 
-      pan_query_core_count(&phys_dev->kmod.dev->props, &reports_per_query);
+      panfrost_query_core_count(&phys_dev->kmod.props, &reports_per_query);
 #else
       reports_per_query = 1;
 #endif
       break;
    }
-#if PAN_ARCH >= 10
-   case VK_QUERY_TYPE_TIMESTAMP: {
-      /* One value per subqueue + 1 value for metadata. */
-      reports_per_query = PANVK_SUBQUEUE_COUNT + 1;
-      break;
-   }
-#endif
    default:
-      UNREACHABLE("Unsupported query type");
+      unreachable("Unsupported query type");
    }
 
    pool->reports_per_query = reports_per_query;
    pool->query_stride = reports_per_query * sizeof(struct panvk_query_report);
 
-   assert(pool->vk.query_count > 0);
+   if (pool->vk.query_count > 0) {
+      struct panvk_pool_alloc_info alloc_info = {
+         .size = pool->reports_per_query * sizeof(struct panvk_query_report) *
+                 pool->vk.query_count,
+         .alignment = sizeof(struct panvk_query_report),
+      };
+      pool->mem = panvk_pool_alloc_mem(&device->mempools.rw, alloc_info);
+      if (!pool->mem.bo) {
+         vk_query_pool_destroy(&device->vk, pAllocator, &pool->vk);
+         return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      }
 
-   struct panvk_pool_alloc_info alloc_info = {
-      .size = pool->reports_per_query * sizeof(struct panvk_query_report) *
-              pool->vk.query_count,
-      .alignment = sizeof(struct panvk_query_report),
-   };
-   pool->mem = panvk_pool_alloc_mem(&device->mempools.rw, alloc_info);
-   if (!pool->mem.bo) {
-      vk_query_pool_destroy(&device->vk, pAllocator, &pool->vk);
-      return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      struct panvk_pool_alloc_info syncobjs_alloc_info = {
+         .size =
+            sizeof(struct panvk_query_available_obj) * pool->vk.query_count,
+         .alignment = 64,
+      };
+      pool->available_mem =
+         panvk_pool_alloc_mem(&device->mempools.rw_nc, syncobjs_alloc_info);
+      if (!pool->available_mem.bo) {
+         panvk_pool_free_mem(&pool->mem);
+         vk_query_pool_destroy(&device->vk, pAllocator, &pool->vk);
+         return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      }
+
+      memset(panvk_priv_mem_host_addr(pool->available_mem), 0,
+             sizeof(struct panvk_query_available_obj));
    }
-
-   struct panvk_pool_alloc_info syncobjs_alloc_info = {
-      .size = sizeof(struct panvk_query_available_obj) * pool->vk.query_count,
-      .alignment = 64,
-   };
-   pool->available_mem =
-      panvk_pool_alloc_mem(&device->mempools.rw_nc, syncobjs_alloc_info);
-   if (!pool->available_mem.bo) {
-      panvk_pool_free_mem(&pool->mem);
-      vk_query_pool_destroy(&device->vk, pAllocator, &pool->vk);
-      return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
-   }
-
-   if (pCreateInfo->flags & VK_QUERY_POOL_CREATE_RESET_BIT_KHR)
-      reset_query_pool(pool, 0, pool->vk.query_count);
 
    *pQueryPool = panvk_query_pool_to_handle(pool);
 
@@ -127,25 +102,27 @@ panvk_per_arch(ResetQueryPool)(VkDevice device, VkQueryPool queryPool,
                                uint32_t firstQuery, uint32_t queryCount)
 {
    VK_FROM_HANDLE(panvk_query_pool, pool, queryPool);
-   reset_query_pool(pool, firstQuery, queryCount);
+
+   struct panvk_query_available_obj *available =
+      panvk_query_available_host_addr(pool, firstQuery);
+   memset(available, 0, queryCount * sizeof(*available));
+
+   struct panvk_query_report *reports =
+      panvk_query_report_host_addr(pool, firstQuery);
+   memset(reports, 0, queryCount * pool->reports_per_query * sizeof(*reports));
 }
 
 static bool
 panvk_query_is_available(struct panvk_query_pool *pool, uint32_t query)
 {
-   bool res = false;
+   struct panvk_query_available_obj *available =
+      panvk_query_available_host_addr(pool, query);
 
-   panvk_priv_mem_readback(pool->available_mem,
-                           panvk_query_available_offset(pool, query),
-                           struct panvk_query_available_obj, available) {
 #if PAN_ARCH >= 10
-      res = p_atomic_read(&available->sync_obj.seqno) != 0;
+   return p_atomic_read(&available->sync_obj.seqno) != 0;
 #else
-      res = p_atomic_read(&available->value) != 0;
+   return p_atomic_read(&available->value) != 0;
 #endif
-   }
-
-   return res;
 }
 
 static VkResult
@@ -193,39 +170,6 @@ cpu_write_occlusion_query_result(void *dst, uint32_t idx,
    cpu_write_query_result(dst, idx, flags, result);
 }
 
-#if PAN_ARCH >= 10
-static void
-cpu_write_timestamp_query_result(void *dst, uint32_t idx,
-                                 VkQueryResultFlags flags,
-                                 const struct panvk_query_report *src,
-                                 unsigned input_value_count)
-{
-   enum panvk_query_ts_op op =
-      panvk_timestamp_info_get_op(src[input_value_count - 1].value);
-   uint32_t sq_mask =
-      panvk_timestamp_info_get_sq_mask(src[input_value_count - 1].value);
-
-   uint64_t result = op == PANVK_QUERY_TS_OP_MIN ? UINT64_MAX : 0;
-
-   for (uint32_t idx = 0; idx < input_value_count - 1; ++idx) {
-      if ((sq_mask & BITFIELD_BIT(idx)) == 0)
-         continue;
-      if (src[idx].value == 0)
-         continue;
-
-      if (op == PANVK_QUERY_TS_OP_MIN)
-         result = MIN2(result, src[idx].value);
-      else
-         result = MAX2(result, src[idx].value);
-   }
-
-   if (op == PANVK_QUERY_TS_OP_MIN && result == UINT64_MAX)
-      result = 0;
-
-   cpu_write_query_result(dst, idx, flags, result);
-}
-#endif
-
 VKAPI_ATTR VkResult VKAPI_CALL
 panvk_per_arch(GetQueryPoolResults)(VkDevice _device, VkQueryPool queryPool,
                                     uint32_t firstQuery, uint32_t queryCount,
@@ -255,29 +199,20 @@ panvk_per_arch(GetQueryPoolResults)(VkDevice _device, VkQueryPool queryPool,
 
       bool write_results = available || (flags & VK_QUERY_RESULT_PARTIAL_BIT);
 
+      const struct panvk_query_report *src =
+         panvk_query_report_host_addr(pool, query);
       assert(i * stride < dataSize);
       void *dst = (char *)pData + i * stride;
 
-      panvk_priv_mem_readback(pool->mem, panvk_query_offset(pool, query),
-                              struct panvk_query_report, src) {
-         switch (pool->vk.query_type) {
-         case VK_QUERY_TYPE_OCCLUSION: {
-            if (write_results)
-               cpu_write_occlusion_query_result(dst, 0, flags, src,
-                                                pool->reports_per_query);
-            break;
-         }
-#if PAN_ARCH >= 10
-         case VK_QUERY_TYPE_TIMESTAMP: {
-            if (write_results)
-               cpu_write_timestamp_query_result(dst, 0, flags, src,
-                                                pool->reports_per_query);
-            break;
-         }
-#endif
-         default:
-            UNREACHABLE("Unsupported query type");
-         }
+      switch (pool->vk.query_type) {
+      case VK_QUERY_TYPE_OCCLUSION: {
+         if (write_results)
+            cpu_write_occlusion_query_result(dst, 0, flags, src,
+                                             pool->reports_per_query);
+         break;
+      }
+      default:
+         unreachable("Unsupported query type");
       }
 
       if (!write_results)

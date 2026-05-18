@@ -37,12 +37,11 @@
 #define LP_BLD_SWIZZLE_H
 
 
-#include <llvm-c/Core.h>
-
+#include "gallivm/lp_bld.h"
+#include "pipe/p_defines.h"
 #include "util/format/u_formats.h"
 
 
-struct gallivm_state;
 struct lp_type;
 struct lp_build_context;
 

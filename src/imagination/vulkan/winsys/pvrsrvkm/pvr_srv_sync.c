@@ -28,12 +28,11 @@
 #include <poll.h>
 #include <vulkan/vulkan.h>
 
-#include "pvr_device.h"
+#include "pvr_private.h"
 #include "pvr_srv.h"
 #include "pvr_srv_sync.h"
 #include "util/libsync.h"
 #include "util/macros.h"
-#include "util/os_file.h"
 #include "util/timespec.h"
 #include "vk_alloc.h"
 #include "vk_log.h"
@@ -224,7 +223,7 @@ static VkResult pvr_srv_sync_move(struct vk_device *device,
       return VK_SUCCESS;
    }
 
-   UNREACHABLE("srv_sync doesn't support move for shared sync objects.");
+   unreachable("srv_sync doesn't support move for shared sync objects.");
    return VK_ERROR_UNKNOWN;
 }
 
@@ -236,7 +235,7 @@ static VkResult pvr_srv_sync_import_sync_file(struct vk_device *device,
    int fd = -1;
 
    if (sync_file >= 0) {
-      fd = os_dupfd_cloexec(sync_file);
+      fd = dup(sync_file);
       if (fd < 0)
          return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
@@ -265,7 +264,7 @@ static VkResult pvr_srv_sync_export_sync_file(struct vk_device *device,
 
    assert(srv_sync->fd >= 0);
 
-   fd = os_dupfd_cloexec(srv_sync->fd);
+   fd = dup(srv_sync->fd);
    if (fd < 0)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 

@@ -217,47 +217,31 @@ async def search_job_log_for_errors(session, project_id, job):
     # The entries are case insensitive. Keep them in alphabetical order and don't
     # forget to add a comma after each entry
     ignore_list = [
-        "403: b",
         "aborting",
-        "building c",
-        "continuing",
         "error_msg      : None",
-        "error_type",
-        "error generated",
-        "errors generated",
+        "error_type     : None",
         "exit code",
         "exit status",
         "exiting now",
         "job failed",
-        "no_error",
         "no files to upload",
-        "performing test",
         "ret code",
         "retry",
         "retry-all-errors",
-        "strerror_",
-        "success",
         "unknown-section",
     ]
     job_log = await get_job_log(session, project_id, job["id"])
 
     for line in reversed(job_log.splitlines()):
-        if "fatal" in line.lower():
-            # remove date and formatting before fatal message
-            log_error_message = line[line.lower().find("fatal") :]
-            break
-
         if "error" in line.lower():
             if any(ignore.lower() in line.lower() for ignore in ignore_list):
                 continue
-
             # remove date and formatting before error message
-            log_error_message = line[line.lower().find("error") :].strip()
-
+            log_error_message = line[line.lower().find("error") :]
             # if there is no further info after the word error then it's not helpful
-            # so reset the message and try again.
-            if log_error_message.lower() in {"error", "errors", "error:", "errors:"}:
-                log_error_message = ""
+            if log_error_message.lower() == "error":
+                continue
+            if log_error_message.lower() == "errors":
                 continue
             break
 
@@ -297,7 +281,7 @@ async def process_single_job(session, project_id, job):
     if log_error_message:
         return f"{message}: {log_error_message}<br>"
 
-    return f"{message}<br>"
+    return message
 
 
 async def process_job_with_limit(session, project_id, job):
@@ -336,11 +320,10 @@ async def process_problem_jobs(session, project_id, problem_jobs):
 async def main(pipeline_id: str, project_id: str = "176") -> str:
 
     message = ""
+    timeout = aiohttp.ClientTimeout(total=120)
+    logging.basicConfig(level=logging.INFO)
 
     try:
-        timeout = aiohttp.ClientTimeout(total=120)
-        logging.basicConfig(level=logging.INFO)
-
         async with aiohttp.ClientSession(timeout=timeout) as session:
             pipeline_status = await get_pipeline_status(
                 session, project_id, pipeline_id

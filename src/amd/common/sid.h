@@ -45,17 +45,11 @@
 #define PKT3_DISPATCH_INDIRECT                     0x16
 #define PKT3_ATOMIC_MEM                            0x1E
 #define   ATOMIC_OP(x)                                ((unsigned)((x)&0x7f) << 0)
-#define     TC_OP_ATOMIC_SUB_RTN_32                   16
-#define     TC_OP_ATOMIC_SUB_RTN_64                   48
-#define     TC_OP_ATOMIC_CMPSWAP_32                   72
-#define     TC_OP_ATOMIC_SUB_64                       112
-#define     TC_OP_ATOMIC_XOR_64                       119
+#define     TC_OP_ATOMIC_SUB_32                       0x10
+#define     TC_OP_ATOMIC_CMPSWAP_32                   0x48
 #define   ATOMIC_COMMAND(x)                           ((unsigned)((x)&0x3) << 8)
-#define   ATOMIC_COMMAND_SEND_RTN                     0x0 /* only RTN opcodes */
-#define   ATOMIC_COMMAND_LOOP                         0x1 /* only RTN opcodes */
-#define   ATOMIC_COMMAND_WR_CONFIRM                   0x2 /* only non-RTN opcodes */
-#define   ATOMIC_COMMAND_SEND_NO_RTN                  0x3 /* only non-RTN opcodes */
-#define   ATOMIC_ENGINE_PFP                           (1 << 30)
+#define   ATOMIC_COMMAND_SINGLE_PASS                  0x0
+#define   ATOMIC_COMMAND_LOOP                         0x1
 #define PKT3_OCCLUSION_QUERY                       0x1F /* GFX7+ */
 #define PKT3_SET_PREDICATION                       0x20
 #define   PREDICATION_DRAW_NOT_VISIBLE                (0 << 8)
@@ -70,7 +64,6 @@
 #define     PREDICATION_OP_BOOL32                     0x4
 #define   PREDICATION_CONTINUE                        (1 << 31)
 #define PKT3_COND_EXEC                             0x22
-#define   COND_EXEC_USERQ_OVERRULE_CMD                (1 << 31)
 #define PKT3_PRED_EXEC                             0x23
 #define PKT3_DRAW_INDIRECT                         0x24
 #define PKT3_DRAW_INDEX_INDIRECT                   0x25
@@ -112,9 +105,6 @@
 #define   STRMOUT_SELECT_BUFFER(x)                    (((unsigned)(x)&0x3) << 8)
 #define PKT3_DRAW_INDEX_OFFSET_2                   0x35
 #define PKT3_WRITE_DATA                            0x37
-#define   WRITE_DATA_DST_SEL(x)                       (((unsigned)(x)&0xf) << 8)
-#define   WRITE_DATA_WR_CONFIRM                       (1 << 20)
-#define   WRITE_DATA_CACHE_POLICY(x)                  (x << 25)
 #define PKT3_DRAW_INDEX_INDIRECT_MULTI             0x38
 #define PKT3_MEM_SEMAPHORE                         0x39
 #define PKT3_MPEG_INDEX                            0x3A /* GFX6 only */
@@ -206,6 +196,10 @@
 #define     EOS_DATA_SEL_APPEND_COUNT                 0
 #define     EOS_DATA_SEL_GDS                          1
 #define     EOS_DATA_SEL_VALUE_32BIT                  2
+/* CP DMA bug: Any use of CP_DMA.DST_SEL=TC must be avoided when EOS packets
+ * are used. Use DST_SEL=MC instead. For prefetch, use SRC_SEL=TC and
+ * DST_SEL=MC. Only GFX7 chips are affected.
+ */
 #define PKT3_EVENT_WRITE_EOS                       0x48 /* GFX6-8, breaks CP DMA */
 #define PKT3_RELEASE_MEM                           0x49 /* GFX9+ [any ring] or GFX8 [compute ring only] */
 /* 1. header
@@ -254,8 +248,6 @@
 #define PKT3_INCREMENT_CE_COUNTER                  0x84
 #define PKT3_INCREMENT_DE_COUNTER                  0x85
 #define PKT3_WAIT_ON_CE_COUNTER                    0x86
-#define PKT3_FRAME_CONTROL                         0x90
-#define   S_FRAME_CONTROL_CMD(x)                      ((x) << 28)
 #define PKT3_HDP_FLUSH                             0x95
 #define PKT3_SET_SH_REG_INDEX                      0x9B
 #define PKT3_LOAD_CONTEXT_REG_INDEX                0x9F /* GFX8+ */
@@ -326,9 +318,6 @@
 #define   S_D10_CACHE_POLICY(x)                       ((x & 3) << 2)
 #define   S_D10_POLL_INTERVAL(x)                      ((x & 0xFFFF) << 16)
 
-#define PKT3_UPDATE_DB_SUMMARIZER_TIMEOUT    0xEF /* GFX12+ */
-#define   S_EF1_SUMM_CNTL_EVICT_TIMEOUT(x)   ((x & 0xFFF) << 0)
-
 #define PKT2_NOP_PAD PKT_TYPE_S(2)
 #define PKT3_NOP_PAD PKT3(PKT3_NOP, 0x3fff, 0) /* header-only version */
 
@@ -394,26 +383,6 @@
 
 #define SDMA_NOP_PAD SDMA_PACKET(SDMA_OPCODE_NOP, 0, 0) /* header-only version */
 
-/* SDMA DCC settings for GFX10+ */
-#define SDMA5_DCC_DATA_FORMAT(x)       ((x) & 0x7f)
-#define SDMA5_DCC_ALPHA_IS_ON_MSB(x)   (((x) & 0x1) << 8)
-#define SDMA5_DCC_NUM_TYPE(x)          (((x) & 0x7) << 9)
-#define SDMA5_DCC_SURF_TYPE(x)         (((x) & 0x3) << 12) /* 0: color, 1: Z, 2: stencil, 3: FMASK */
-#define SDMA5_DCC_LLC_NOALLOC(x)       (((x) & 0x1) << 14) /* don't cache in MALL */
-#define SDMA5_DCC_MAX_COM(x)           (((x) & 0x3) << 24) /* max compressed block size, 0: 64B, 1: 128B, 2: 256B */
-#define SDMA5_DCC_MAX_UCOM(x)          (((x) & 0x3) << 26) /* max uncompressed block size, 0: 64B, 1: 128B, 2: 256B */
-#define SDMA5_DCC_WRITE_COMPRESS(x)    (((x) & 0x1) << 28) /* DCC write compression enabled, dst must be tiled */
-#define SDMA5_DCC_TMZ(x)               (((x) & 0x1) << 29) /* metadata is TMZ */
-#define SDMA5_DCC_PIPE_ALIGNED(x)      (((x) & 0x1) << 31)
-
-/* SDMA DCC settings for GFX12+ */
-#define SDMA7_DCC_DATA_FORMAT(x)       ((x) & 0x3f)
-#define SDMA7_DCC_NUM_TYPE(x)          (((x) & 0x7) << 9)
-#define SDMA7_DCC_READ_CM(x)           (((x) & 0x3) << 16) /* 0: bypass DCC, 2: decompress reads if PTE.D */
-#define SDMA7_DCC_WRITE_CM(x)          (((x) & 0x3) << 18) /* 0: bypass DCC, 1: write compressed if PTE.D, 2: write uncompressed if PTE.D */
-#define SDMA7_DCC_MAX_COM(x)           (((x) & 0x3) << 24)
-#define SDMA7_DCC_MAX_UCOM(x)          (((x) & 0x1) << 26) /* 1: max uncompressed block size 256B */
-
 enum amd_cmp_class_flags
 {
    S_NAN = 1 << 0,       // Signaling NaN
@@ -427,10 +396,5 @@ enum amd_cmp_class_flags
    P_NORMAL = 1 << 8,    // Positive normal
    P_INFINITY = 1 << 9   // Positive infinity
 };
-
-/* Use the last bit of AMDGPU_GEM_CREATE_* flag as a virtio-only
- * flag.
- */
-#define AMDGPU_GEM_CREATE_VIRTIO_SHARED 1u << 31
 
 #endif /* _SID_H */

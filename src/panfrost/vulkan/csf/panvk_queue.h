@@ -30,7 +30,7 @@ struct panvk_tiler_heap {
    struct panvk_priv_mem desc;
    struct {
       uint32_t handle;
-      uint64_t dev_addr;
+      mali_ptr dev_addr;
    } context;
 };
 
@@ -38,26 +38,9 @@ struct panvk_subqueue {
    struct panvk_priv_mem context;
    uint32_t *reg_file;
 
-   /* Memory to save/restore CS registers in functions/exception handlers.
-    * Because registers are dumped to a fixed address rather than a moving
-    * stack pointer, nested function/exception handler calls are not supported.
-    */
-   struct panvk_priv_mem regs_save;
-
-
-   struct {
-      /* Mask of resources requested by this subqueue. */
-      uint32_t mask;
-      /* Address and size of the linear buffer containing REQ_RESOURCE. */
-      uint32_t cs_buffer_size;
-      uint64_t cs_buffer_addr;
-      /* Allocation */
-      struct panvk_priv_mem buf;
-   } req_resource;
-
    struct {
       struct pan_kmod_bo *bo;
-      uint64_t size;
+      size_t size;
       struct {
          uint64_t dev;
          void *host;
@@ -68,14 +51,14 @@ struct panvk_subqueue {
 struct panvk_desc_ringbuf {
    struct panvk_priv_mem syncobj;
    struct pan_kmod_bo *bo;
-   uint64_t size;
+   size_t size;
    struct {
       uint64_t dev;
       void *host;
    } addr;
 };
 
-struct panvk_gpu_queue {
+struct panvk_queue {
    struct vk_queue vk;
 
    uint32_t group_handle;
@@ -84,39 +67,20 @@ struct panvk_gpu_queue {
    struct panvk_tiler_heap tiler_heap;
    struct panvk_desc_ringbuf render_desc_ringbuf;
    struct panvk_priv_mem syncobjs;
-
-   struct {
-      struct vk_sync *sync;
-      uint64_t next_value;
-   } utrace;
+   struct panvk_priv_mem debug_syncobjs;
+   struct panvk_priv_mem tiler_oom_regs_save;
 
    struct panvk_subqueue subqueues[PANVK_SUBQUEUE_COUNT];
 };
 
-VK_DEFINE_HANDLE_CASTS(panvk_gpu_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
+VK_DEFINE_HANDLE_CASTS(panvk_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
 
-VkResult panvk_per_arch(create_gpu_queue)(
-   struct panvk_device *dev, const VkDeviceQueueCreateInfo *create_info,
-   uint32_t queue_idx, struct vk_queue **out_queue);
-void panvk_per_arch(destroy_gpu_queue)(struct vk_queue *vk_queue);
-VkResult panvk_per_arch(gpu_queue_submit)(struct vk_queue *vk_queue,
-                                          struct vk_queue_submit *vk_submit);
-VkResult panvk_per_arch(gpu_queue_check_status)(struct vk_queue *vk_queue);
+void panvk_per_arch(queue_finish)(struct panvk_queue *queue);
 
-struct panvk_bind_queue {
-   struct vk_queue vk;
+VkResult panvk_per_arch(queue_init)(struct panvk_device *device,
+                                    struct panvk_queue *queue, int idx,
+                                    const VkDeviceQueueCreateInfo *create_info);
 
-   uint32_t syncobj_handle;
-};
-
-VK_DEFINE_HANDLE_CASTS(panvk_bind_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
-
-VkResult panvk_per_arch(create_bind_queue)(
-   struct panvk_device *dev, const VkDeviceQueueCreateInfo *create_info,
-   uint32_t queue_idx,struct vk_queue **out_queue);
-void panvk_per_arch(destroy_bind_queue)(struct vk_queue *vk_queue);
-VkResult panvk_per_arch(bind_queue_submit)(struct vk_queue *vk_queue,
-                                           struct vk_queue_submit *vk_submit);
-VkResult panvk_per_arch(bind_queue_check_status)(struct vk_queue *vk_queue);
+VkResult panvk_per_arch(queue_check_status)(struct panvk_queue *queue);
 
 #endif

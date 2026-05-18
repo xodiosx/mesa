@@ -66,7 +66,7 @@ gm200_validate_sample_locations(struct nvc0_context *nvc0, unsigned ms)
             unsigned ri = (pixel_y * grid_width + pixel_x % grid_width);
             ri = ri * ms + sample;
             sample_locations[wi][0] = locations[ri] & 0xf;
-            sample_locations[wi][1] = locations[ri] >> 4;
+            sample_locations[wi][1] = 16 - (locations[ri] >> 4);
          }
       }
    } else {
@@ -149,7 +149,6 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
    unsigned ms_mode = NVC0_3D_MULTISAMPLE_MODE_MS1;
    unsigned nr_cbufs = fb->nr_cbufs;
    bool serialize = false;
-   bool cbuf_is_linear = false;
 
    nouveau_bufctx_reset(nvc0->bufctx_3d, NVC0_BIND_3D_FB);
 
@@ -162,12 +161,12 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
       struct nv04_resource *res;
       struct nouveau_bo *bo;
 
-      if (!fb->cbufs[i].texture) {
+      if (!fb->cbufs[i]) {
          nvc0_fb_set_null_rt(push, i, 0);
          continue;
       }
 
-      sf = nv50_surface(nvc0->fb_cbufs[i]);
+      sf = nv50_surface(fb->cbufs[i]);
       res = nv04_resource(sf->base.texture);
       bo = res->bo;
 
@@ -183,10 +182,10 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
          PUSH_DATA(push, sf->height);
          PUSH_DATA(push, nvc0_format_table[sf->base.format].rt);
          PUSH_DATA(push, (mt->layout_3d << 16) |
-                          mt->level[sf->base.level].tile_mode);
-         PUSH_DATA(push, sf->base.first_layer + sf->depth);
+                          mt->level[sf->base.u.tex.level].tile_mode);
+         PUSH_DATA(push, sf->base.u.tex.first_layer + sf->depth);
          PUSH_DATA(push, mt->layer_stride >> 2);
-         PUSH_DATA(push, sf->base.first_layer);
+         PUSH_DATA(push, sf->base.u.tex.first_layer);
 
          ms_mode = mt->ms_mode;
       } else {
@@ -205,7 +204,7 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
 
          nvc0_resource_fence(nvc0, res, NOUVEAU_BO_WR);
 
-         cbuf_is_linear = true;
+         assert(!fb->zsbuf);
       }
 
       if (res->status & NOUVEAU_BUFFER_STATUS_GPU_READING)
@@ -217,16 +216,16 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
       BCTX_REFN(nvc0->bufctx_3d, 3D_FB, res, WR);
    }
 
-   if (fb->zsbuf.texture && !cbuf_is_linear) {
-      struct nv50_miptree *mt = nv50_miptree(fb->zsbuf.texture);
-      struct nv50_surface *sf = nv50_surface(nvc0->fb_zsbuf);
+   if (fb->zsbuf) {
+      struct nv50_miptree *mt = nv50_miptree(fb->zsbuf->texture);
+      struct nv50_surface *sf = nv50_surface(fb->zsbuf);
       int unk = mt->base.base.target == PIPE_TEXTURE_2D;
 
       BEGIN_NVC0(push, NVC0_3D(ZETA_ADDRESS_HIGH), 5);
       PUSH_DATAh(push, mt->base.address + sf->offset);
       PUSH_DATA (push, mt->base.address + sf->offset);
-      PUSH_DATA (push, nvc0_format_table[fb->zsbuf.format].rt);
-      PUSH_DATA (push, mt->level[sf->base.level].tile_mode);
+      PUSH_DATA (push, nvc0_format_table[fb->zsbuf->format].rt);
+      PUSH_DATA (push, mt->level[sf->base.u.tex.level].tile_mode);
       PUSH_DATA (push, mt->layer_stride >> 2);
       BEGIN_NVC0(push, NVC0_3D(ZETA_ENABLE), 1);
       PUSH_DATA (push, 1);
@@ -234,9 +233,9 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
       PUSH_DATA (push, sf->width);
       PUSH_DATA (push, sf->height);
       PUSH_DATA (push, (unk << 16) |
-                (sf->base.first_layer + sf->depth));
+                (sf->base.u.tex.first_layer + sf->depth));
       BEGIN_NVC0(push, NVC0_3D(ZETA_BASE_LAYER), 1);
-      PUSH_DATA (push, sf->base.first_layer);
+      PUSH_DATA (push, sf->base.u.tex.first_layer);
 
       ms_mode = mt->ms_mode;
 
@@ -251,7 +250,7 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
       PUSH_DATA (push, 0);
    }
 
-   if (nr_cbufs == 0 && !fb->zsbuf.texture) {
+   if (nr_cbufs == 0 && !fb->zsbuf) {
       assert(util_is_power_of_two_or_zero(fb->samples));
       assert(fb->samples <= 8);
 
@@ -705,13 +704,33 @@ nvc0_validate_zsa_fb(struct nvc0_context *nvc0)
    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
 
    if (nvc0->zsa && nvc0->zsa->pipe.alpha_enabled &&
-       nvc0->framebuffer.zsbuf.texture &&
+       nvc0->framebuffer.zsbuf &&
        nvc0->framebuffer.nr_cbufs == 0) {
       nvc0_fb_set_null_rt(push, 0, 0);
       BEGIN_NVC0(push, NVC0_3D(RT_CONTROL), 1);
       PUSH_DATA (push, (076543210 << 4) | 1);
    }
 }
+
+static void
+nvc0_validate_rast_fb(struct nvc0_context *nvc0)
+{
+   struct nouveau_pushbuf *push = nvc0->base.pushbuf;
+   struct pipe_framebuffer_state *fb = &nvc0->framebuffer;
+   struct pipe_rasterizer_state *rast = &nvc0->rast->pipe;
+
+   if (!rast)
+      return;
+
+   if (rast->offset_units_unscaled) {
+      BEGIN_NVC0(push, NVC0_3D(POLYGON_OFFSET_UNITS), 1);
+      if (fb->zsbuf && fb->zsbuf->format == PIPE_FORMAT_Z16_UNORM)
+         PUSH_DATAf(push, rast->offset_units * (1 << 16));
+      else
+         PUSH_DATAf(push, rast->offset_units * (1 << 24));
+   }
+}
+
 
 static void
 nvc0_validate_tess_state(struct nvc0_context *nvc0)
@@ -740,15 +759,15 @@ nvc0_validate_fbread(struct nvc0_context *nvc0)
    if (nvc0->fragprog &&
        nvc0->fragprog->fp.reads_framebuffer &&
        nvc0->framebuffer.nr_cbufs &&
-       nvc0->framebuffer.cbufs[0].texture) {
+       nvc0->framebuffer.cbufs[0]) {
       struct pipe_sampler_view tmpl = {0};
-      const struct pipe_surface *sf = &nvc0->framebuffer.cbufs[0];
+      struct pipe_surface *sf = nvc0->framebuffer.cbufs[0];
 
       tmpl.target = PIPE_TEXTURE_2D_ARRAY;
       tmpl.format = sf->format;
-      tmpl.u.tex.first_level = tmpl.u.tex.last_level = sf->level;
-      tmpl.u.tex.first_layer = sf->first_layer;
-      tmpl.u.tex.last_layer = sf->last_layer;
+      tmpl.u.tex.first_level = tmpl.u.tex.last_level = sf->u.tex.level;
+      tmpl.u.tex.first_layer = sf->u.tex.first_layer;
+      tmpl.u.tex.last_layer = sf->u.tex.last_layer;
       tmpl.swizzle_r = PIPE_SWIZZLE_X;
       tmpl.swizzle_g = PIPE_SWIZZLE_Y;
       tmpl.swizzle_b = PIPE_SWIZZLE_Z;
@@ -757,9 +776,9 @@ nvc0_validate_fbread(struct nvc0_context *nvc0)
       /* Bail if it's the same parameters */
       if (old_view && old_view->texture == sf->texture &&
           old_view->format == sf->format &&
-          old_view->u.tex.first_level == sf->level &&
-          old_view->u.tex.first_layer == sf->first_layer &&
-          old_view->u.tex.last_layer == sf->last_layer)
+          old_view->u.tex.first_level == sf->u.tex.level &&
+          old_view->u.tex.first_layer == sf->u.tex.first_layer &&
+          old_view->u.tex.last_layer == sf->u.tex.last_layer)
          return;
 
       new_view = pipe->create_sampler_view(pipe, sf->texture, &tmpl);
@@ -867,6 +886,7 @@ validate_list_3d[] = {
     { nvc0_validate_fp_zsa_rast,   NVC0_NEW_3D_FRAGPROG | NVC0_NEW_3D_ZSA |
                                    NVC0_NEW_3D_RASTERIZER },
     { nvc0_validate_zsa_fb,        NVC0_NEW_3D_ZSA | NVC0_NEW_3D_FRAMEBUFFER },
+    { nvc0_validate_rast_fb,       NVC0_NEW_3D_RASTERIZER | NVC0_NEW_3D_FRAMEBUFFER },
     { nvc0_validate_clip,          NVC0_NEW_3D_CLIP | NVC0_NEW_3D_RASTERIZER |
                                    NVC0_NEW_3D_VERTPROG |
                                    NVC0_NEW_3D_TEVLPROG |

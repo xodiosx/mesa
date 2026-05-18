@@ -57,12 +57,9 @@
 #include "vk_semaphore.h"
 #include "vulkan/wsi/wsi_common.h"
 
-#define GFXSTREAM_DEFAULT_ALIGN 8
-
 struct gfxstream_vk_instance {
     struct vk_instance vk;
     uint32_t api_version;
-    bool init_failed;
     VkInstance internal_object;
 };
 
@@ -72,7 +69,6 @@ struct gfxstream_vk_physical_device {
     struct wsi_device wsi_device;
     const struct vk_sync_type* sync_types[2];
     struct gfxstream_vk_instance* instance;
-    bool doImageDrmFormatModifierEmulation;
     VkPhysicalDevice internal_object;
 };
 
@@ -81,14 +77,6 @@ struct gfxstream_vk_device {
 
     struct vk_device_dispatch_table cmd_dispatch;
     struct gfxstream_vk_physical_device* physical_device;
-
-    /* unique queue family indices in which to create the device queues */
-    uint32_t* queue_families;
-    uint32_t queue_family_count;
-
-    struct gfxstream_vk_queue* queues;
-    uint32_t queue_count;
-
     VkDevice internal_object;
 };
 
@@ -149,8 +137,5 @@ std::vector<VkFence> transformVkFenceList(const VkFence* pFences, uint32_t fence
 
 std::vector<VkSemaphoreSubmitInfo> transformVkSemaphoreSubmitInfoList(
     const VkSemaphoreSubmitInfo* pSemaphoreSubmitInfos, uint32_t semaphoreSubmitInfoCount);
-
-float linearChannelToSRGB(float cl);
-float srgbFormatNeedsConversionForClearColor(const VkFormat& format);
 
 #endif /* GFXSTREAM_VK_PRIVATE_H */

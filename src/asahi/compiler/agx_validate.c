@@ -166,11 +166,8 @@ agx_write_registers(const agx_instr *I, unsigned d)
    case AGX_OPCODE_IMAGE_LOAD:
    case AGX_OPCODE_TEXTURE_LOAD:
    case AGX_OPCODE_TEXTURE_SAMPLE:
-      /* Even when masked out, these clobber 4 registers.
-       *
-       * TODO: Figure out the sparse interaction.
-       */
-      return (I->sparse ? 8 : 4) * size;
+      /* Even when masked out, these clobber 4 registers */
+      return 4 * size;
 
    case AGX_OPCODE_DEVICE_LOAD:
    case AGX_OPCODE_LOCAL_LOAD:
@@ -218,7 +215,7 @@ agx_dim_info(enum agx_dim dim)
    case AGX_DIM_2D_MS_ARRAY:
       return (struct dim_info){2, true};
    default:
-      UNREACHABLE("invalid dim");
+      unreachable("invalid dim");
    }
 }
 
@@ -228,12 +225,12 @@ agx_dim_info(enum agx_dim dim)
  * lower 16-bits are present. LOD queries do not take a layer.
  */
 static unsigned
-agx_coordinate_registers(const agx_instr *I, enum agx_size size)
+agx_coordinate_registers(const agx_instr *I)
 {
    struct dim_info dim = agx_dim_info(I->dim);
    bool has_array = !I->query_lod;
 
-   return agx_size_align_16(size) * (dim.comps + (has_array && dim.array));
+   return 2 * (dim.comps + (has_array && dim.array));
 }
 
 static unsigned
@@ -292,7 +289,7 @@ agx_read_registers(const agx_instr *I, unsigned s)
       if (s == 0)
          return 4 * size /* data */;
       else if (s == 1)
-         return agx_coordinate_registers(I, I->src[1].size);
+         return agx_coordinate_registers(I);
       else
          return size;
 
@@ -300,7 +297,7 @@ agx_read_registers(const agx_instr *I, unsigned s)
    case AGX_OPCODE_TEXTURE_LOAD:
    case AGX_OPCODE_TEXTURE_SAMPLE:
       if (s == 0) {
-         return agx_coordinate_registers(I, I->src[0].size);
+         return agx_coordinate_registers(I);
       } else if (s == 1) {
          /* LOD */
          if (I->lod_mode == AGX_LOD_MODE_LOD_GRAD ||
@@ -326,7 +323,7 @@ agx_read_registers(const agx_instr *I, unsigned s)
                return (2 * 2 * 3) + min;
             }
 
-            UNREACHABLE("Invalid texture dimension");
+            unreachable("Invalid texture dimension");
          } else if (I->lod_mode == AGX_LOD_MODE_AUTO_LOD_BIAS_MIN) {
             return 2;
          } else {
@@ -341,7 +338,7 @@ agx_read_registers(const agx_instr *I, unsigned s)
 
    case AGX_OPCODE_BLOCK_IMAGE_STORE:
       if (s == 3 && I->explicit_coords)
-         return agx_coordinate_registers(I, I->src[3].size);
+         return agx_coordinate_registers(I);
       else
          return size;
 
@@ -512,7 +509,7 @@ agx_validate(agx_context *ctx, const char *after)
    }
 
    {
-      BITSET_WORD *defs = BITSET_CALLOC(ctx->alloc);
+      BITSET_WORD *defs = calloc(sizeof(BITSET_WORD), BITSET_WORDS(ctx->alloc));
 
       agx_foreach_instr_global(ctx, I) {
          if (!agx_validate_defs(I, defs)) {

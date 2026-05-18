@@ -107,24 +107,23 @@ enum intel_urb_deref_block_size {
 };
 
 struct intel_urb_config {
-   unsigned size[8];
-   unsigned entries[8];
-   unsigned start[8];
-
-   enum intel_urb_deref_block_size deref_block_size;
+   unsigned size[5];
+   unsigned entries[5];
+   unsigned start[5];
 };
 
 void intel_get_urb_config(const struct intel_device_info *devinfo,
                           const struct intel_l3_config *l3_cfg,
                           bool tess_present, bool gs_present,
                           struct intel_urb_config *urb_cfg,
+                          enum intel_urb_deref_block_size *deref_block_size,
                           bool *constrained);
 
 /* Returns if URB changed for given shader stage. */
 static inline bool
 intel_urb_setup_changed(const struct intel_urb_config *a,
                         const struct intel_urb_config *b,
-                        mesa_shader_stage stage)
+                        gl_shader_stage stage)
 {
    if (a->size[stage] != b->size[stage] ||
        a->entries[stage] != b->entries[stage] ||
@@ -134,9 +133,21 @@ intel_urb_setup_changed(const struct intel_urb_config *a,
    return false;
 }
 
-void intel_get_mesh_urb_config(const struct intel_device_info *devinfo,
-                               const struct intel_l3_config *l3_cfg,
-                               unsigned tue_size_dw, unsigned mue_size_dw,
-                               struct intel_urb_config *urb_cfg);
+struct intel_mesh_urb_allocation {
+   unsigned task_entries;
+   unsigned task_entry_size_64b;
+   unsigned task_starting_address_8kb;
+
+   unsigned mesh_entries;
+   unsigned mesh_entry_size_64b;
+   unsigned mesh_starting_address_8kb;
+
+   enum intel_urb_deref_block_size deref_block_size;
+};
+
+struct intel_mesh_urb_allocation
+intel_get_mesh_urb_config(const struct intel_device_info *devinfo,
+                          const struct intel_l3_config *l3_cfg,
+                          unsigned tue_size_dw, unsigned mue_size_dw);
 
 #endif /* INTEL_L3_CONFIG_H */

@@ -23,7 +23,6 @@
 
 #include "intel_decoder.h"
 #include "intel_decoder_private.h"
-#include "intel/common/intel_gem.h"
 
 #include "util/macros.h"
 #include "util/u_debug.h"
@@ -62,7 +61,7 @@ intel_batch_decode_ctx_init(struct intel_batch_decode_ctx *ctx,
    ctx->get_state_size = get_state_size;
    ctx->user_data = user_data;
    ctx->fp = fp;
-   ctx->flags = parse_enable_string(os_get_option("INTEL_DECODE"), flags, debug_control);
+   ctx->flags = parse_enable_string(getenv("INTEL_DECODE"), flags, debug_control);
    ctx->max_vbo_decoded_lines = -1; /* No limit! */
    ctx->engine = INTEL_ENGINE_CLASS_RENDER;
 
@@ -76,7 +75,7 @@ intel_batch_decode_ctx_init(struct intel_batch_decode_ctx *ctx,
    ctx->stats =
       _mesa_hash_table_create(NULL, _mesa_hash_string, _mesa_key_string_equal);
 
-   const char *filters = os_get_option("INTEL_DECODE_FILTERS");
+   const char *filters = getenv("INTEL_DECODE_FILTERS");
    if (filters != NULL) {
       ctx->filters =
          _mesa_hash_table_create(NULL, _mesa_hash_string, _mesa_key_string_equal);
@@ -135,7 +134,7 @@ ctx_get_bo(struct intel_batch_decode_ctx *ctx, bool ppgtt, uint64_t addr)
        * bits. In order to correctly handle those aub dumps, we need to mask
        * off the top 16 bits.
        */
-      addr = intel_48b_address(addr);
+      addr &= (~0ull >> 16);
    }
 
    struct intel_batch_decode_bo bo = ctx->get_bo(ctx->user_data, ppgtt, addr);
@@ -408,6 +407,7 @@ dump_samplers(struct intel_batch_decode_ctx *ctx, uint32_t offset, int count)
 
    if (count * sampler_state_size >= bo.size) {
       fprintf(ctx->fp, "  sampler state ends after bo ends\n");
+      assert(!"sampler state ends after bo ends");
       return;
    }
 
@@ -1498,7 +1498,6 @@ struct custom_decoder state_handlers[] = {
 /* Special printing of instructions */
 struct custom_decoder custom_decoders[] = {
    { "COMPUTE_WALKER", handle_compute_walker },
-   { "EXECUTE_INDIRECT_DISPATCH", handle_compute_walker },
    { "MEDIA_CURBE_LOAD", handle_media_curbe_load },
    { "3DSTATE_VERTEX_BUFFERS", handle_3dstate_vertex_buffers },
    { "3DSTATE_INDEX_BUFFER", handle_3dstate_index_buffer },
@@ -1584,14 +1583,15 @@ compare_inst_ptr(const void *v1, const void *v2)
 static void
 intel_print_accumulated_instrs(struct intel_batch_decode_ctx *ctx)
 {
-   struct util_dynarray arr = UTIL_DYNARRAY_INIT;
+   struct util_dynarray arr;
+   util_dynarray_init(&arr, NULL);
 
    hash_table_foreach(ctx->commands, entry) {
       struct inst_ptr inst = {
          .inst = (struct intel_group *)entry->key,
          .ptr  = entry->data,
       };
-      util_dynarray_append(&arr, inst);
+      util_dynarray_append(&arr, struct inst_ptr, inst);
    }
    qsort(util_dynarray_begin(&arr),
          util_dynarray_num_elements(&arr, struct inst_ptr),
@@ -1885,14 +1885,15 @@ compare_inst_stat(const void *v1, const void *v2)
 void
 intel_batch_print_stats(struct intel_batch_decode_ctx *ctx)
 {
-   struct util_dynarray arr = UTIL_DYNARRAY_INIT;
+   struct util_dynarray arr;
+   util_dynarray_init(&arr, NULL);
 
    hash_table_foreach(ctx->stats, entry) {
       struct inst_stat inst = {
          .name = (const char *)entry->key,
          .count = (uintptr_t)entry->data,
       };
-      util_dynarray_append(&arr, inst);
+      util_dynarray_append(&arr, struct inst_stat, inst);
    }
    qsort(util_dynarray_begin(&arr),
          util_dynarray_num_elements(&arr, struct inst_stat),

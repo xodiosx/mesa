@@ -107,7 +107,7 @@ jump_target_scope_type(nir_jump_type jump_type)
    case nir_jump_break:    return SCOPE_TYPE_LOOP_BREAK;
    case nir_jump_continue: return SCOPE_TYPE_LOOP_CONT;
    default:
-      UNREACHABLE("Unknown jump type");
+      unreachable("Unknown jump type");
    }
 }
 
@@ -223,10 +223,10 @@ parent_scope_will_sync(nir_cf_node *node, struct scope *parent_scope)
       return false;
 
    case SCOPE_TYPE_LOOP_BREAK:
-      UNREACHABLE("Loops must have a continue scope");
+      unreachable("Loops must have a continue scope");
 
    default:
-      UNREACHABLE("Unknown scope type");
+      unreachable("Unknown scope type");
    }
 }
 
@@ -238,7 +238,7 @@ block_is_merge(const nir_block *block)
       return false;
 
    unsigned num_preds = 0;
-   set_foreach(&block->predecessors, entry) {
+   set_foreach(block->predecessors, entry) {
       const nir_block *pred = entry->key;
 
       /* We don't care about unreachable blocks */
@@ -373,7 +373,7 @@ lower_cf_list(nir_builder *b, nir_def *esc_reg, struct scope *parent_scope,
       }
 
       default:
-         UNREACHABLE("Unknown CF node type");
+         unreachable("Unknown CF node type");
       }
    }
 }
@@ -412,7 +412,7 @@ recompute_phi_divergence_impl(nir_function_impl *impl)
                 * don't want to deal with inserting a r2ur somewhere.
                 */
                if (phi_src->pred->divergent || phi_src->src.ssa->divergent ||
-                   nir_def_block(phi_src->src.ssa)->divergent) {
+                   phi_src->src.ssa->parent_instr->block->divergent) {
                   divergent = true;
                   break;
                }
@@ -425,8 +425,6 @@ recompute_phi_divergence_impl(nir_function_impl *impl)
          }
       }
    } while(progress);
-
-   impl->valid_metadata |= nir_metadata_divergence;
 }
 
 static bool
@@ -436,23 +434,20 @@ lower_cf_func(nir_function *func)
       return false;
 
    if (exec_list_is_singular(&func->impl->body)) {
-      return nir_no_progress(func->impl);
+      nir_metadata_preserve(func->impl, nir_metadata_all);
+      return false;
    }
 
    nir_function_impl *old_impl = func->impl;
 
    /* We use this in block_is_merge() */
-   nir_metadata_require(old_impl, nir_metadata_dominance | nir_metadata_divergence);
+   nir_metadata_require(old_impl, nir_metadata_dominance);
 
    /* First, we temporarily get rid of SSA.  This will make all our block
-    * motion way easier.  Ask the pass to place reg writes directly in the
-    * immediate predecessors of the phis instead of trying to be clever.
-    * This will ensure that we never get a write to a uniform register from
-    * non-uniform control flow and makes our divergence reconstruction for
-    * phis more reliable.
+    * motion way easier.
     */
    nir_foreach_block(block, old_impl)
-      nir_lower_phis_to_regs_block(block, true);
+      nir_lower_phis_to_regs_block(block);
 
    /* We create a whole new nir_function_impl and copy the contents over */
    func->impl = NULL;
@@ -476,7 +471,7 @@ lower_cf_func(nir_function *func)
    /* Now sort by reverse PDFS and restore SSA
     *
     * Note: Since we created a new nir_function_impl, there is no metadata,
-    * dirty or otherwise, so we have no need to call nir_progress().
+    * dirty or otherwise, so we have no need to call nir_metadata_preserve().
     */
    nir_sort_unstructured_blocks(new_impl);
    nir_repair_ssa_impl(new_impl);
@@ -497,37 +492,4 @@ nak_nir_lower_cf(nir_shader *nir)
    }
 
    return progress;
-}
-
-bool
-nak_block_is_divergent(const nir_block *block)
-{
-   const nir_cf_node* node = &block->cf_node;
-
-   while (node) {
-      switch (node->type) {
-         case nir_cf_node_if: {
-            nir_if *nif = nir_cf_node_as_if(node);
-            if (nir_src_is_divergent(&nif->condition))
-               return true;
-            break;
-         }
-         case nir_cf_node_loop: {
-            nir_loop *loop = nir_cf_node_as_loop(node);
-            if (nir_loop_is_divergent(loop))
-               return true;
-            break;
-         }
-         case nir_cf_node_block: {
-            nir_block *block = nir_cf_node_as_block(node);
-            if (block->divergent)
-               return true;
-            break;
-         }
-         case nir_cf_node_function:
-            break;
-      }
-      node = node->parent;
-   }
-   return false;
 }

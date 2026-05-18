@@ -269,7 +269,7 @@ vec4_tcs_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
       break;
    }
    case nir_intrinsic_load_input:
-      UNREACHABLE("nir_lower_io should use load_per_vertex_input intrinsics");
+      unreachable("nir_lower_io should use load_per_vertex_input intrinsics");
       break;
    case nir_intrinsic_load_output:
    case nir_intrinsic_load_per_vertex_output: {
@@ -373,9 +373,7 @@ elk_compile_tcs(const struct elk_compiler *compiler,
 
    struct intel_vue_map input_vue_map;
    elk_compute_vue_map(devinfo, &input_vue_map, nir->info.inputs_read,
-                       nir->info.separate_shader ?
-                       INTEL_VUE_LAYOUT_SEPARATE :
-                       INTEL_VUE_LAYOUT_FIXED, 1);
+                       nir->info.separate_shader, 1);
    elk_compute_tess_vue_map(&vue_prog_data->vue_map,
                             nir->info.outputs_written,
                             nir->info.patch_outputs_written);
@@ -386,7 +384,8 @@ elk_compile_tcs(const struct elk_compiler *compiler,
                              key->_tes_primitive_mode);
    if (key->quads_workaround)
       intel_nir_apply_tcs_quads_workaround(nir);
-   intel_nir_lower_patch_vertices_in(nir, key->input_vertices);
+   if (key->input_vertices > 0)
+      intel_nir_lower_patch_vertices_in(nir, key->input_vertices);
 
    elk_postprocess_nir(nir, compiler, debug_enabled,
                        key->base.robust_flags);
@@ -423,7 +422,7 @@ elk_compile_tcs(const struct elk_compiler *compiler,
       return NULL;
 
    /* URB entry sizes are stored as a multiple of 64 bytes. */
-   vue_prog_data->urb_entry_size = align(output_size_bytes, 64) / 64;
+   vue_prog_data->urb_entry_size = ALIGN(output_size_bytes, 64) / 64;
 
    /* HS does not use the usual payload pushing from URB to GRFs,
     * because we don't have enough registers for a full-size payload, and

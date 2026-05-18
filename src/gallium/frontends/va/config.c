@@ -175,9 +175,6 @@ static unsigned int get_screen_supported_va_rt_formats(struct pipe_screen *pscre
                                           entrypoint) ||
        pscreen->is_video_format_supported(pscreen, PIPE_FORMAT_B8G8R8X8_UNORM,
                                           profile,
-                                          entrypoint) ||
-       pscreen->is_video_format_supported(pscreen, PIPE_FORMAT_A8R8G8B8_UNORM,
-                                          profile,
                                           entrypoint))
       supported_rt_formats |= VA_RT_FORMAT_RGB32;
 
@@ -261,9 +258,6 @@ vlVaGetConfigAttributes(VADriverContextP ctx, VAProfile profile, VAEntrypoint en
             }
          } break;
 #endif
-         case VAConfigAttribDecProcessing:
-            value = 1;
-            break;
          default:
             value = VA_ATTRIB_NOT_SUPPORTED;
             break;
@@ -574,20 +568,13 @@ vlVaGetConfigAttributes(VADriverContextP ctx, VAProfile profile, VAEntrypoint en
 
          case VAConfigAttribEncROI:
          {
-            union pipe_enc_cap_roi roi_pipe_caps = { 0 };
-            roi_pipe_caps.value = pscreen->get_video_param(pscreen, ProfileToPipe(profile),
+            int roi_support = pscreen->get_video_param(pscreen, ProfileToPipe(profile),
                                              PIPE_VIDEO_ENTRYPOINT_ENCODE,
                                              PIPE_VIDEO_CAP_ENC_ROI);
-            if (roi_pipe_caps.value <= 0)
+            if (roi_support <= 0)
                value = VA_ATTRIB_NOT_SUPPORTED;
             else
-            {
-               VAConfigAttribValEncROI roi_va_caps = { 0 };
-               roi_va_caps.bits.num_roi_regions = roi_pipe_caps.bits.num_roi_regions;
-               roi_va_caps.bits.roi_rc_priority_support = roi_pipe_caps.bits.roi_rc_priority_support;
-               roi_va_caps.bits.roi_rc_qp_delta_support = roi_pipe_caps.bits.roi_rc_qp_delta_support;
-               value = roi_va_caps.value;
-            }
+               value = roi_support;
          } break;
 
          default:
@@ -650,7 +637,9 @@ vlVaCreateConfig(VADriverContextP ctx, VAProfile profile, VAEntrypoint entrypoin
                                                                 config->entrypoint);
       for (int i = 0; i < num_attribs; i++) {
          if (attrib_list[i].type == VAConfigAttribRTFormat) {
-            if (!(attrib_list[i].value & supported_rt_formats)) {
+            if (attrib_list[i].value & supported_rt_formats) {
+               config->rt_format = attrib_list[i].value;
+            } else {
                FREE(config);
                return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
             }
@@ -660,6 +649,10 @@ vlVaCreateConfig(VADriverContextP ctx, VAProfile profile, VAEntrypoint entrypoin
             return VA_STATUS_ERROR_INVALID_VALUE;
          }
       }
+
+      /* Default value if not specified in the input attributes. */
+      if (!config->rt_format)
+         config->rt_format = supported_rt_formats;
 
       mtx_lock(&drv->mutex);
       *config_id = handle_table_add(drv->htab, config);
@@ -737,7 +730,9 @@ vlVaCreateConfig(VADriverContextP ctx, VAProfile profile, VAEntrypoint entrypoin
          }
       }
       if (attrib_list[i].type == VAConfigAttribRTFormat) {
-         if (!(attrib_list[i].value & supported_rt_formats)) {
+         if (attrib_list[i].value & supported_rt_formats) {
+            config->rt_format = attrib_list[i].value;
+         } else {
             FREE(config);
             return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
          }
@@ -757,6 +752,10 @@ vlVaCreateConfig(VADriverContextP ctx, VAProfile profile, VAEntrypoint entrypoin
          }
       }
    }
+
+   /* Default value if not specified in the input attributes. */
+   if (!config->rt_format)
+      config->rt_format = supported_rt_formats;
 
    mtx_lock(&drv->mutex);
    *config_id = handle_table_add(drv->htab, config);
@@ -834,9 +833,7 @@ vlVaQueryConfigAttributes(VADriverContextP ctx, VAConfigID config_id, VAProfile 
 
    *num_attribs = 1;
    attrib_list[0].type = VAConfigAttribRTFormat;
-   attrib_list[0].value = get_screen_supported_va_rt_formats(drv->pipe->screen,
-                                                             config->profile,
-                                                             config->entrypoint);
+   attrib_list[0].value = config->rt_format;
 
    return VA_STATUS_SUCCESS;
 }

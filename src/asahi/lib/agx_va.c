@@ -50,14 +50,10 @@ agx_va_alloc(struct agx_device *dev, uint64_t size_B, uint64_t align_B,
 }
 
 void
-agx_va_free(struct agx_device *dev, struct agx_va *va, bool unbind)
+agx_va_free(struct agx_device *dev, struct agx_va *va)
 {
    if (!va)
       return;
-
-   if (unbind) {
-      agx_bo_bind(dev, NULL, va->addr, va->size_B, 0, DRM_ASAHI_BIND_UNBIND);
-   }
 
    struct util_vma_heap *heap = agx_vma_heap(dev, va->flags);
 

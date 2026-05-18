@@ -52,16 +52,9 @@ setup_slices(struct fd_resource *rsc, uint32_t alignment,
 }
 
 uint32_t
-fd3_layout_resource(struct fd_resource *rsc, enum fd_layout_type type)
+fd3_setup_slices(struct fd_resource *rsc)
 {
    uint32_t alignment;
-
-   fd_resource_layout_init(&rsc->b.b);
-
-   if (type >= FD_LAYOUT_TILED)
-      rsc->layout.tile_mode = fd3_tile_mode(&rsc->b.b);
-   if (type == FD_LAYOUT_UBWC)
-      rsc->layout.ubwc = true;
 
    switch (rsc->b.b.target) {
    case PIPE_TEXTURE_3D:

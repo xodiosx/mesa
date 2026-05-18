@@ -75,7 +75,7 @@ __gen_combine_address(struct crocus_batch *batch, void *location,
 static inline struct crocus_address
 __gen_get_batch_address(struct crocus_batch *batch, void *location)
 {
-   UNREACHABLE("Not supported by crocus");
+   unreachable("Not supported by crocus");
 }
 
 #define __gen_address_type struct crocus_address

@@ -9,19 +9,14 @@
 #include "vdrm.h"
 
 struct vdrm_device * vdrm_virtgpu_connect(int fd, uint32_t context_type);
-struct vdrm_device * vdrm_vpipe_connect(uint32_t context_type);
 
 struct vdrm_device *
 vdrm_device_connect(int fd, uint32_t context_type)
 {
    struct vdrm_device *vdev;
 
-   if (fd >= 0) {
-      vdev = vdrm_virtgpu_connect(fd, context_type);
-   } else {
-      vdev = vdrm_vpipe_connect(context_type);
-   }
-
+   // TODO vtest vs virtio..
+   vdev = vdrm_virtgpu_connect(fd, context_type);
    if (!vdev)
       return NULL;
 

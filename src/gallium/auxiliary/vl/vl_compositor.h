@@ -68,13 +68,6 @@ enum vl_compositor_rotation
    VL_COMPOSITOR_ROTATE_270
 };
 
-enum vl_compositor_mirror
-{
-   VL_COMPOSITOR_MIRROR_NONE,
-   VL_COMPOSITOR_MIRROR_HORIZONTAL,
-   VL_COMPOSITOR_MIRROR_VERTICAL
-};
-
 /* chroma sample location */
 enum vl_compositor_chroma_location
 {
@@ -114,7 +107,6 @@ struct vl_compositor_layer
    struct vertex2f zw;
    struct vertex4f colors[4];
    enum vl_compositor_rotation rotate;
-   enum vl_compositor_mirror mirror;
 };
 
 struct vl_compositor_state
@@ -131,13 +123,9 @@ struct vl_compositor_state
    struct vl_compositor_layer layers[VL_COMPOSITOR_MAX_LAYERS];
    bool interlaced;
    unsigned chroma_location;
-   enum pipe_video_vpp_transfer_characteristic in_transfer_characteristic;
-   enum pipe_video_vpp_transfer_characteristic out_transfer_characteristic;
-   vl_csc_matrix yuv2rgb;
-   vl_csc_matrix rgb2yuv;
-   vl_csc_matrix primaries;
 
-   vl_csc_matrix csc_matrix; /* gfx compositor only */
+   vl_csc_matrix csc_matrix;
+   float luma_min, luma_max;
 };
 
 struct vl_compositor
@@ -215,13 +203,21 @@ struct vl_compositor
  * initialize this compositor
  */
 bool
-vl_compositor_init(struct vl_compositor *compositor, struct pipe_context *pipe, bool compute_only);
+vl_compositor_init(struct vl_compositor *compositor, struct pipe_context *pipe);
 
 /**
  * init state bag
  */
 bool
 vl_compositor_init_state(struct vl_compositor_state *state, struct pipe_context *pipe);
+
+/**
+ * set yuv -> rgba conversion matrix
+ */
+bool
+vl_compositor_set_csc_matrix(struct vl_compositor_state *settings,
+                             const vl_csc_matrix *matrix,
+                             float luma_min, float luma_max);
 
 /**
  * reset dirty area, so it's cleared with the clear colour
@@ -316,14 +312,6 @@ void
 vl_compositor_set_layer_rotation(struct vl_compositor_state *state,
                                  unsigned layer,
                                  enum vl_compositor_rotation rotate);
-
-/**
- * set the layer mirror
- */
-void
-vl_compositor_set_layer_mirror(struct vl_compositor_state *state,
-                               unsigned layer,
-                               enum vl_compositor_mirror mirror);
 
 /**
  * deinterlace yuv buffer with full abilities

@@ -19,6 +19,9 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Authors (Collabora):
+ *   Alyssa Rosenzweig <alyssa.rosenzweig@collabora.com>
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -35,7 +38,6 @@
 
 #include "util/u_inlines.h"
 #include "util/u_math.h"
-#include "util/perf/cpu_trace.h"
 
 /* This file implements a userspace BO cache. Allocating and freeing
  * GPU-visible buffers is very expensive, and even the extra kernel roundtrips
@@ -109,8 +111,8 @@ panfrost_bo_alloc(struct panfrost_device *dev, size_t size, uint32_t flags,
    bo->ptr.gpu = vm_op.va.start;
    bo->flags = flags;
    bo->dev = dev;
+   bo->label = label;
    return bo;
-
 err_bind:
    pan_kmod_bo_put(kmod_bo);
    /* BO will be freed with the sparse array, but zero to indicate free */
@@ -122,8 +124,6 @@ err_alloc:
 static void
 panfrost_bo_free(struct panfrost_bo *bo)
 {
-   MESA_TRACE_FUNC();
-
    struct pan_kmod_bo *kmod_bo = bo->kmod_bo;
    struct pan_kmod_vm *vm = bo->dev->kmod.vm;
    uint64_t gpu_va = bo->ptr.gpu;
@@ -155,8 +155,6 @@ panfrost_bo_free(struct panfrost_bo *bo)
 bool
 panfrost_bo_wait(struct panfrost_bo *bo, int64_t timeout_ns, bool wait_readers)
 {
-   MESA_TRACE_FUNC();
-
    /* If the BO has been exported or imported we can't rely on the cached
     * state, we need to call the WAIT_BO ioctl.
     */
@@ -240,6 +238,7 @@ panfrost_bo_cache_fetch(struct panfrost_device *dev, size_t size,
       }
       /* Let's go! */
       bo = entry;
+      bo->label = label;
       break;
    }
    pthread_mutex_unlock(&dev->bo_cache.lock);
@@ -305,7 +304,7 @@ panfrost_bo_cache_put(struct panfrost_bo *bo)
    panfrost_bo_cache_evict_stale_bos(dev);
 
    /* Update the label to help debug BO cache memory usage issues */
-   panfrost_bo_set_label(bo, "Unused (BO cache)");
+   bo->label = "Unused (BO cache)";
 
    /* Must be last */
    pthread_mutex_unlock(&dev->bo_cache.lock);
@@ -334,29 +333,24 @@ panfrost_bo_cache_evict_all(struct panfrost_device *dev)
    pthread_mutex_unlock(&dev->bo_cache.lock);
 }
 
-int
+void
 panfrost_bo_mmap(struct panfrost_bo *bo)
 {
-   MESA_TRACE_FUNC();
-
    if (bo->ptr.cpu)
-      return 0;
+      return;
 
    bo->ptr.cpu = pan_kmod_bo_mmap(bo->kmod_bo, 0, panfrost_bo_size(bo),
                                   PROT_READ | PROT_WRITE, MAP_SHARED, NULL);
    if (bo->ptr.cpu == MAP_FAILED) {
       bo->ptr.cpu = NULL;
-      return -1;
+      mesa_loge("mmap failed: result=%p size=0x%llx\n", bo->ptr.cpu,
+                (long long)panfrost_bo_size(bo));
    }
-
-   return 0;
 }
 
 static void
 panfrost_bo_munmap(struct panfrost_bo *bo)
 {
-   MESA_TRACE_FUNC();
-
    if (!bo->ptr.cpu)
       return;
 
@@ -372,9 +366,6 @@ struct panfrost_bo *
 panfrost_bo_create(struct panfrost_device *dev, size_t size, uint32_t flags,
                    const char *label)
 {
-   assert(label);
-   MESA_TRACE_SCOPE("%s size=%zu label=\"%s\"", __func__, size, label);
-
    struct panfrost_bo *bo;
 
    if (dev->debug & PAN_DBG_DUMP) {
@@ -417,12 +408,8 @@ panfrost_bo_create(struct panfrost_device *dev, size_t size, uint32_t flags,
     * never map since we don't care about their contents; they're purely
     * for GPU-internal use. But we do trace them anyway. */
 
-   if (!(flags & (PAN_BO_INVISIBLE | PAN_BO_DELAY_MMAP))) {
-      if (panfrost_bo_mmap(bo)) {
-         panfrost_bo_free(bo);
-         return NULL;
-      }
-   }
+   if (!(flags & (PAN_BO_INVISIBLE | PAN_BO_DELAY_MMAP)))
+      panfrost_bo_mmap(bo);
 
    p_atomic_set(&bo->refcnt, 1);
 
@@ -434,8 +421,6 @@ panfrost_bo_create(struct panfrost_device *dev, size_t size, uint32_t flags,
          pandecode_inject_mmap(dev->decode_ctx, bo->ptr.gpu, bo->ptr.cpu,
                                panfrost_bo_size(bo), NULL);
    }
-
-   panfrost_bo_set_label(bo, label);
 
    return bo;
 }
@@ -524,8 +509,8 @@ panfrost_bo_import(struct panfrost_device *dev, int fd)
       p_atomic_set(&bo->refcnt, 1);
 
       /* mmap imported BOs when PAN_MESA_DEBUG=dump */
-      if ((dev->debug & PAN_DBG_DUMP) && panfrost_bo_mmap(bo))
-         mesa_loge("failed to mmap");
+      if (dev->debug & PAN_DBG_DUMP)
+         panfrost_bo_mmap(bo);
    } else {
       /* bo->refcnt == 0 can happen if the BO
        * was being released but panfrost_bo_import() acquired the
@@ -568,18 +553,4 @@ panfrost_bo_from_kmod_bo(struct panfrost_device *dev,
    assert(bo->kmod_bo == kmod_bo);
 
    return bo;
-}
-
-const char *
-panfrost_bo_replace_label(struct panfrost_bo *bo, const char *label,
-                          bool set_kernel_label)
-{
-   const char *old_label = bo->label;
-
-   bo->label = label;
-
-   if (set_kernel_label)
-      pan_kmod_set_bo_label(bo->dev->kmod.dev, bo->kmod_bo, label);
-
-   return old_label;
 }

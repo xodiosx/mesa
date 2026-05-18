@@ -8,9 +8,7 @@
 
 #include <stdbool.h>
 
-#include "util/bitscan.h"
 #include "util/hash_table.h"
-#include "util/macros.h"
 #include "util/simple_mtx.h"
 
 #include "pan_blend.h"
@@ -18,9 +16,9 @@
 #include "panvk_macros.h"
 #include "panvk_mempool.h"
 
-#include "vk_graphics_state.h"
-
-struct panvk_cmd_buffer;
+struct vk_color_blend_state;
+struct vk_dynamic_graphics_state;
+struct panvk_device;
 
 #ifdef PAN_ARCH
 
@@ -30,8 +28,12 @@ struct panvk_blend_info {
    bool shader_loads_blend_const;
 };
 
-VkResult panvk_per_arch(blend_emit_descs)(struct panvk_cmd_buffer *cmdbuf,
-                                          struct mali_blend_packed *bds);
+VkResult panvk_per_arch(blend_emit_descs)(
+   struct panvk_device *dev, const struct vk_dynamic_graphics_state *dy,
+   const VkFormat *color_attachment_formats,
+   const uint8_t *color_attachment_samples,
+   const struct pan_shader_info *fs_info, mali_ptr fs_code,
+   struct mali_blend_packed *bds, struct panvk_blend_info *blend_info);
 
 #endif
 

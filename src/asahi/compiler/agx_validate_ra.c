@@ -295,7 +295,7 @@ agx_validate_ra(agx_context *ctx)
 
    if (!succ) {
       agx_print_shader(ctx, stderr);
-      UNREACHABLE("invalid RA");
+      unreachable("invalid RA");
    }
 
    free(blocks);

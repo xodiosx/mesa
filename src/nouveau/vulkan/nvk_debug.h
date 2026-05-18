@@ -20,13 +20,9 @@ enum nvk_debug {
     */
    NVK_DEBUG_ZERO_MEMORY = 1ull << 2,
 
-   /* Write repeating nonzero patterns to client memory allocations
-    */
-   NVK_DEBUG_TRASH_MEMORY = 1ull << 3,
-
    /* Dump VM bind/unbinds
     */
-   NVK_DEBUG_VM = 1ull << 4,
+   NVK_DEBUG_VM = 1ull << 3,
 
    /* Disable most cbufs
     *
@@ -39,9 +35,6 @@ enum nvk_debug {
 
    /* Force all memory allocations to go to GART */
    NVK_DEBUG_FORCE_GART = 1ull << 7,
-
-   /* Force all memory allocations to go to GART */
-   NVK_DEBUG_FORCE_COHERENT = 1ull << 8,
 };
 
 #endif /* NVK_DEBUG_H */

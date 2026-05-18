@@ -181,7 +181,7 @@ static VkLayerDeviceCreateInfo *get_device_chain_info(const VkDeviceCreateInfo *
           ((VkLayerDeviceCreateInfo *) item)->function == func)
          return (VkLayerDeviceCreateInfo *)item;
    }
-   UNREACHABLE("device chain info not found");
+   unreachable("device chain info not found");
    return NULL;
 }
 
@@ -285,7 +285,7 @@ static VkLayerInstanceCreateInfo *get_instance_chain_info(const VkInstanceCreate
           ((VkLayerInstanceCreateInfo *) item)->function == func)
          return (VkLayerInstanceCreateInfo *) item;
    }
-   UNREACHABLE("instance chain info not found");
+   unreachable("instance chain info not found");
    return NULL;
 }
 

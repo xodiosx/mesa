@@ -145,7 +145,7 @@ struct pipe_rasterizer_state
    unsigned rasterizer_discard:1;
 
    /**
-    * Exposed by pipe_caps.tile_raster_order.  When true,
+    * Exposed by PIPE_CAP_TILE_RASTER_ORDER.  When true,
     * tile_raster_order_increasing_* indicate the order that the rasterizer
     * should render tiles, to meet the requirements of
     * GL_MESA_tile_raster_order.
@@ -157,9 +157,9 @@ struct pipe_rasterizer_state
    /**
     * When false, depth clipping is disabled and the depth value will be
     * clamped later at the per-pixel level before depth testing.
-    * This depends on pipe_caps.depth_clip_disable.
+    * This depends on PIPE_CAP_DEPTH_CLIP_DISABLE.
     *
-    * If pipe_caps.depth_clip_disable_separate is unsupported, depth_clip_near
+    * If PIPE_CAP_DEPTH_CLIP_DISABLE_SEPARATE is unsupported, depth_clip_near
     * is equal to depth_clip_far.
     */
    unsigned depth_clip_near:1;
@@ -167,7 +167,7 @@ struct pipe_rasterizer_state
 
    /**
     * When true, depth clamp is enabled.
-    * If pipe_caps.depth_clamp_enable is unsupported, this is always the inverse
+    * If PIPE_CAP_DEPTH_CLAMP_ENABLE is unsupported, this is always the inverse
     * of depth_clip_far.
     */
    unsigned depth_clamp:1;
@@ -182,7 +182,8 @@ struct pipe_rasterizer_state
 
    /**
     * When true do not scale offset_units and use same rules for unorm and
-    * float depth buffers.
+    * float depth buffers (D3D9). When false use GL/D3D1X behaviour.
+    * This depends on PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED.
     */
    unsigned offset_units_unscaled:1;
 
@@ -202,8 +203,6 @@ struct pipe_rasterizer_state
     * but not written by the shader count as disabled.
     */
    unsigned clip_plane_enable:PIPE_MAX_CLIP_PLANES;
-
-   unsigned representative_fragment_test:1;
 
    unsigned line_stipple_factor:8;  /**< [1..256] actually */
    unsigned line_stipple_pattern:16;
@@ -244,10 +243,10 @@ struct pipe_viewport_state
 
 struct pipe_scissor_state
 {
-   unsigned minx;
-   unsigned miny;
-   unsigned maxx;
-   unsigned maxy;
+   unsigned minx:16;
+   unsigned miny:16;
+   unsigned maxx:16;
+   unsigned maxy:16;
 };
 
 
@@ -303,17 +302,10 @@ struct pipe_shader_state
    /* TODO move tokens into union. */
    const struct tgsi_token *tokens;
    union {
+      void *native;
       struct nir_shader *nir;
    } ir;
    struct pipe_stream_output_info stream_output;
-
-   /* If the caller sets report_compile_error=true, the driver can fail
-    * compilation and should allocate a string with the error message and
-    * store it in the pointer below. The caller is responsible for reading
-    * and freeing the error message.
-    */
-   bool report_compile_error;
-   char *error_message;
 };
 
 static inline void
@@ -398,28 +390,6 @@ struct pipe_stencil_ref
    uint8_t ref_value[2];
 };
 
-/**
- * A view into a texture that can be bound to a color render target /
- * depth stencil attachment point.
- */
-struct pipe_surface
-{
-   struct pipe_reference reference;
-   enum pipe_format format:16;
-   /**
-    * Number of samples for the surface.  This will be 0 if rendering
-    * should use the resource's nr_samples, or another value if the resource
-    * is bound using FramebufferTexture2DMultisampleEXT.
-    */
-   unsigned nr_samples:16;
-
-   unsigned first_layer:16;
-   unsigned last_layer:16;
-   unsigned level;
-
-   struct pipe_resource *texture; /**< resource into which this is a view  */
-   struct pipe_context *context; /**< context this surface belongs to */
-};
 
 /**
  * Note that pipe_surfaces are "texture views for rendering"
@@ -429,19 +399,17 @@ struct pipe_surface
  */
 struct pipe_framebuffer_state
 {
-   uint32_t width, height;
+   uint16_t width, height;
    uint16_t layers;  /**< Number of layers  in a no-attachment framebuffer */
    uint8_t samples; /**< Number of samples in a no-attachment framebuffer */
 
    /** multiple color buffers for multiple render targets */
    uint8_t nr_cbufs;
-   /** true if pixel local storage is enabled */
-   bool pls_enabled;
    /** used for multiview */
    uint8_t viewmask;
-   struct pipe_surface cbufs[PIPE_MAX_COLOR_BUFS];
+   struct pipe_surface *cbufs[PIPE_MAX_COLOR_BUFS];
 
-   struct pipe_surface zsbuf;      /**< Z/stencil buffer */
+   struct pipe_surface *zsbuf;      /**< Z/stencil buffer */
 
    struct pipe_resource *resolve;
 };
@@ -472,21 +440,52 @@ struct pipe_sampler_state
    enum pipe_format border_color_format;      /**< only with PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_FREEDRENO, must be last */
 };
 
-struct pipe_tex2d_from_buf {
-   /* Only 32K x 32K textures are supported. */
-   unsigned offset;  /**< offset in pixels */
-   uint16_t row_stride; /**< size of the image row_stride in pixels */
-   uint16_t width;      /**< width of image provided by application */
-   uint16_t height;     /**< height of image provided by application */
+union pipe_surface_desc {
+   struct {
+      unsigned level;
+      unsigned first_layer:16;
+      unsigned last_layer:16;
+   } tex;
+   struct {
+      unsigned first_element;
+      unsigned last_element;
+   } buf;
 };
+
+/**
+ * A view into a texture that can be bound to a color render target /
+ * depth stencil attachment point.
+ */
+struct pipe_surface
+{
+   struct pipe_reference reference;
+   enum pipe_format format:16;
+   unsigned writable:1;          /**< writable shader resource */
+   struct pipe_resource *texture; /**< resource into which this is a view  */
+   struct pipe_context *context; /**< context this surface belongs to */
+
+   /* XXX width/height should be removed */
+   uint16_t width;               /**< logical width in pixels */
+   uint16_t height;              /**< logical height in pixels */
+
+   /**
+    * Number of samples for the surface.  This will be 0 if rendering
+    * should use the resource's nr_samples, or another value if the resource
+    * is bound using FramebufferTexture2DMultisampleEXT.
+    */
+   unsigned nr_samples:8;
+
+   union pipe_surface_desc u;
+};
+
 
 /**
  * A view into a texture that can be bound to a shader stage.
  */
 struct pipe_sampler_view
 {
-   /* this refcount is non-atomic */
-   struct pipe_reference reference;
+   /* Put the refcount on its own cache line to prevent "False sharing". */
+   EXCLUSIVE_CACHELINE(struct pipe_reference reference);
 
    enum pipe_format format:12;      /**< typed PIPE_FORMAT_x */
    unsigned astc_decode_format:2;   /**< intermediate format used for ASTC textures */
@@ -509,7 +508,12 @@ struct pipe_sampler_view
          unsigned offset;   /**< offset in bytes */
          unsigned size;     /**< size of the readable sub-range in bytes */
       } buf;
-      struct pipe_tex2d_from_buf tex2d_from_buf; /**< used in cl extension cl_khr_image2d_from_buffer */
+      struct {
+         unsigned offset;  /**< offset in pixels */
+         uint16_t row_stride; /**< size of the image row_stride in pixels */
+         uint16_t width;      /**< width of image provided by application */
+         uint16_t height;     /**< height of image provided by application */
+      } tex2d_from_buf;      /**< used in cl extension cl_khr_image2d_from_buffer */
    } u;
 };
 
@@ -540,7 +544,12 @@ struct pipe_image_view
          unsigned offset;   /**< offset in bytes */
          unsigned size;     /**< size of the accessible sub-range in bytes */
       } buf;
-      struct pipe_tex2d_from_buf tex2d_from_buf; /**< used in cl extension cl_khr_image2d_from_buffer */
+      struct {
+         unsigned offset;   /**< offset in pixels */
+         uint16_t row_stride;     /**< size of the image row_stride in pixels */
+         uint16_t width;     /**< width of image provided by application */
+         uint16_t height;     /**< height of image provided by application */
+      } tex2d_from_buf;      /**< used in cl extension cl_khr_image2d_from_buffer */
    } u;
 };
 
@@ -554,7 +563,7 @@ struct pipe_resource
    EXCLUSIVE_CACHELINE(struct pipe_reference reference);
 
    uint32_t width0; /**< Used by both buffers and textures. */
-   uint32_t height0;    /* textures >= 64K are possible */
+   uint16_t height0; /* Textures: The maximum height/depth/array_size is 16k. */
    uint16_t depth0;
    uint16_t array_size;
 
@@ -853,9 +862,11 @@ struct pipe_draw_info
    bool index_bounds_valid:1; /**< whether min_index and max_index are valid;
                                    they're always invalid if index_size == 0 */
    bool increment_draw_id:1;  /**< whether drawid increments for direct draws */
+   bool take_index_buffer_ownership:1; /**< callee inherits caller's refcount
+         (no need to reference indexbuf, but still needs to unreference it) */
    bool index_bias_varies:1;   /**< true if index_bias varies between draws */
    bool was_line_loop:1; /**< true if mesa_prim was LINE_LOOP before translation */
-   uint8_t _pad:2;
+   uint8_t _pad:1;
 
    unsigned start_instance; /**< first instance id */
    unsigned instance_count; /**< number of instances */
@@ -931,6 +942,19 @@ struct pipe_blit_info
 struct pipe_grid_info
 {
    /**
+    * For drivers that use PIPE_SHADER_IR_NATIVE as their prefered IR, this
+    * value will be the index of the kernel in the opencl.kernels metadata
+    * list.
+    */
+   uint32_t pc;
+
+   /**
+    * Will be used to initialize the INPUT resource, and it should point to a
+    * buffer of at least pipe_compute_state::req_input_mem bytes.
+    */
+   const void *input;
+
+   /**
     * Variable shared memory used by this invocation.
     *
     * This comes on top of shader declared shared memory.
@@ -996,10 +1020,6 @@ struct pipe_grid_info
    unsigned draw_count;
    unsigned indirect_draw_count_offset;
    struct pipe_resource *indirect_draw_count;
-
-   /* Resources which might be indirectly accessed through global load/store operations */
-   uint32_t num_globals;
-   struct pipe_resource **globals;
 };
 
 /**
@@ -1019,21 +1039,13 @@ struct pipe_tensor {
     */
    unsigned dims[4];
    /**
-    * Scale used to quantize this tensor, per-tensor quantization.
+    * Scale used to quantize this tensor. Only per-tensor quantization is supported.
     */
    float scale;
    /**
-    * Scales used to quantize this tensor, per-axis quantization.
-    */
-   float *scales;
-   /**
-    * Zero-point used to quantize this tensor, per-tensor quantization.
+    * Zero-point used to quantize this tensor.
     */
    int zero_point;
-   /**
-    * Zero-points used to quantize this tensor, per-axis quantization.
-    */
-   int *zero_points;
    /**
     * Whether the tensor contains data in INT8 or UINT8 format.
     */
@@ -1051,19 +1063,6 @@ enum pipe_ml_operation_type {
    PIPE_ML_OPERATION_TYPE_SPLIT,
    PIPE_ML_OPERATION_TYPE_PAD,
    PIPE_ML_OPERATION_TYPE_FULLY_CONNECTED,
-   PIPE_ML_OPERATION_TYPE_RESHAPE,
-   PIPE_ML_OPERATION_TYPE_RELU,
-   PIPE_ML_OPERATION_TYPE_ABSOLUTE,
-   PIPE_ML_OPERATION_TYPE_LOGISTIC,
-   PIPE_ML_OPERATION_TYPE_SUBTRACT,
-   PIPE_ML_OPERATION_TYPE_TRANSPOSE,
-   PIPE_ML_OPERATION_TYPE_STRIDED_SLICE,
-   PIPE_ML_OPERATION_TYPE_RESIZE,
-};
-
-enum pipe_ml_pooling_type {
-   PIPE_ML_POOLING_TYPE_AVG,
-   PIPE_ML_POOLING_TYPE_MAX,
 };
 
 /**
@@ -1129,17 +1128,8 @@ struct pipe_ml_operation
           * Whether this convolution has fused ReLU activation.
           */
          bool relu;
-
-         unsigned dilation_width_factor;
-         unsigned dilation_height_factor;
       } conv;
       struct {
-
-         /**
-          * Type of pooling operation.
-          */
-         enum pipe_ml_pooling_type type;
-
          /**
           * Stride used to access the input tensor on the x axis.
           */
@@ -1180,21 +1170,10 @@ struct pipe_ml_operation
           * Top padding.
           */
          unsigned before_y;
-
          /**
           * Bottom padding.
           */
          unsigned after_y;
-
-         /**
-          * Channel before padding.
-          */
-         unsigned before_z;
-
-         /**
-          * Channel after padding.
-          */
-         unsigned after_z;
       } pad;
 
       struct {
@@ -1212,37 +1191,6 @@ struct pipe_ml_operation
           */
          bool relu;
       } fcon;
-
-      struct {
-         /**
-          * Dimension along which the tensors are concatenated.
-          */
-         int axis;
-      } conc;
-
-      struct {
-         /**
-          * Dimension along which the tensors are split.
-          */
-         int axis;
-      } split;
-
-      struct {
-         /**
-          * Shape of the output tensor.
-          */
-         unsigned shape[4];
-      } reshape;
-
-      struct {
-         unsigned perm[4];
-      } transpose;
-
-      struct {
-         int begin[4];
-         int end[4];
-         int strides[4];
-      } slice;
    };
 };
 
@@ -1258,11 +1206,21 @@ struct pipe_ml_subgraph
    struct pipe_context *context;
 };
 
+/**
+ * Structure used as a header for serialized compute programs.
+ */
+struct pipe_binary_program_header
+{
+   uint32_t num_bytes; /**< Number of bytes in the LLVM bytecode program. */
+   char blob[];
+};
+
 struct pipe_compute_state
 {
    enum pipe_shader_ir ir_type; /**< IR type contained in prog. */
    const void *prog; /**< Compute program to be executed. */
    unsigned static_shared_mem; /**< equal to info.shared_size, used for shaders passed as TGSI */
+   unsigned req_input_mem; /**< Required size of the INPUT resource. */
 };
 
 struct pipe_compute_state_object_info
@@ -1329,15 +1287,6 @@ struct pipe_memory_info
 struct pipe_memory_object
 {
    bool dedicated;
-};
-
-/**
- * Structure that contains information about a vm allocation
- */
-struct pipe_vm_allocation
-{
-   uint64_t start;
-   uint64_t size;
 };
 
 #ifdef __cplusplus

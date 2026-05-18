@@ -5,8 +5,6 @@ _compiler_rs_sources = [
   'as_slice.rs',
   'bitset.rs',
   'cfg.rs',
-  'dataflow.rs',
-  'depth_first_search.rs',
   'memstream.rs',
   'nir_instr_printer.rs',
   'nir.rs',
@@ -21,44 +19,25 @@ _compiler_binding_types = [
   'gl_access_qualifier',
   'gl_frag_result',
   'gl_interp_mode',
-  'mesa_shader_stage',
+  'gl_shader_stage',
   'gl_subgroup_size',
   'gl_system_value',
   'gl_tess_spacing',
   'gl_varying_slot',
   'gl_vert_attrib',
   'glsl_type',
-  'glsl_matrix_layout',
   'nir_.*',
   'mesa_scope',
   'mesa_prim',
-  'mesa_shader_stage',
+  'pipe_shader_type',
   'shader_info',
   'tess_primitive_mode',
-  'u_printf_info',
-]
-
-_compiler_rust_args = [
-  rust_global_args,
-  rust_2024_lint_args,
-  '-Aclippy::identity_op',
-  '-Aclippy::len_zero',
-  '-Aclippy::manual_range_contains',
-  # normally this is a good one, but we use it where the "better" code is worse
-  '-Aclippy::needless_range_loop',
-  '-Aclippy::redundant_field_names',
-  '-Aclippy::upper_case_acronyms',
-  '-Aclippy::vec_box',
-  '-Aclippy::write_with_newline',
-  # warns about public function might dereference a raw pointer, but nothing is
-  # actually public here
-  '-Aclippy::not_unsafe_ptr_arg_deref',
-  '-Anon_snake_case',
 ]
 
 _compiler_bindgen_args = [
-  bindgen_output_args,
-  '--allowlist-var', 'NIR_.*',
+  '--raw-line', '#![allow(non_camel_case_types)]',
+  '--raw-line', '#![allow(non_snake_case)]',
+  '--raw-line', '#![allow(non_upper_case_globals)]',
   '--allowlist-var', 'nir_.*_infos',
   '--allowlist-var', 'rust_.*',
   '--allowlist-function', 'glsl_.*',
@@ -68,7 +47,6 @@ _compiler_bindgen_args = [
   '--allowlist-function', 'u_memstream.*',
   '--allowlist-type', 'u_memstream',
   '--no-prepend-enum-name',
-  '--with-derive-default',
 ]
 
 foreach type : _compiler_binding_types
@@ -121,7 +99,6 @@ _libcompiler_rs = static_library(
   gnu_symbol_visibility : 'hidden',
   rust_abi : 'rust',
   dependencies: [_idep_libcompiler_c],
-  rust_args: _compiler_rust_args,
 )
 
 # TODO: Linking Rust executables (such as unit tests) doesn't play nicely
@@ -129,7 +106,7 @@ _libcompiler_rs = static_library(
 # Rust linker.  See also https://github.com/mesonbuild/meson/issues/11741
 if with_tests and get_option('b_sanitize') == 'none'
   rust.test(
-    'compiler_test',
+    'compiler',
     _libcompiler_rs,
     suite : ['compiler', 'rs'],
     dependencies : [
@@ -137,10 +114,7 @@ if with_tests and get_option('b_sanitize') == 'none'
     ],
     # This is needed to ensure we link against glibc
     # See also https://gitlab.freedesktop.org/mesa/mesa/-/issues/11632
-    rust_args: [
-      _compiler_rust_args,
-      '-C', 'default-linker-libraries',
-    ],
+    rust_args: ['-C', 'default-linker-libraries'],
   )
 endif
 
@@ -150,7 +124,7 @@ idep_compiler_rs = declare_dependency(
 
 dep_syn = dependency('syn',
   version : '>= 2.0.15',
-  fallback : ['syn-2-rs', 'dep_syn'],
+  fallback : ['syn', 'dep_syn'],
   required : true,
 )
 
@@ -160,7 +134,6 @@ _libcompiler_proc_rs = static_library(
   gnu_symbol_visibility : 'hidden',
   dependencies : [dep_syn],
   rust_abi : 'rust',
-  rust_args : rust_global_args,
   native : true,
 )
 

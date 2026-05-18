@@ -224,7 +224,8 @@ set_pair_instruction(struct r300_fragment_program_compiler *c, struct rc_pair_in
          source = rc_pair_alloc_source(pair, srcrgb, srcalpha, inst->SrcReg[i].File,
                                        inst->SrcReg[i].Index);
          if (source < 0) {
-            rc_error(&c->Base, "Failed to translate rgb instruction");
+            rc_error(&c->Base, "Failed to translate "
+                               "rgb instruction.\n");
             return;
          }
          pair->RGB.Arg[i].Source = source;
@@ -250,7 +251,8 @@ set_pair_instruction(struct r300_fragment_program_compiler *c, struct rc_pair_in
          source = rc_pair_alloc_source(pair, srcrgb, srcalpha, inst->SrcReg[i].File,
                                        inst->SrcReg[i].Index);
          if (source < 0) {
-            rc_error(&c->Base, "Failed to translate alpha instruction");
+            rc_error(&c->Base, "Failed to translate "
+                               "alpha instruction.\n");
             return;
          }
          pair->Alpha.Arg[i].Source = source;
@@ -314,7 +316,7 @@ check_opcode_support(struct r300_fragment_program_compiler *c, struct rc_sub_ins
 
    if (opcode->HasDstReg) {
       if (inst->SaturateMode == RC_SATURATE_MINUS_PLUS_ONE) {
-         rc_error(&c->Base, "Fragment program does not support signed Saturate");
+         rc_error(&c->Base, "Fragment program does not support signed Saturate.\n");
          return;
       }
    }
@@ -322,7 +324,7 @@ check_opcode_support(struct r300_fragment_program_compiler *c, struct rc_sub_ins
    for (unsigned i = 0; i < opcode->NumSrcRegs; i++) {
       if (inst->SrcReg[i].RelAddr) {
          rc_error(&c->Base, "Fragment program does not support relative addressing "
-                            " of source operands.");
+                            " of source operands.\n");
          return;
       }
    }

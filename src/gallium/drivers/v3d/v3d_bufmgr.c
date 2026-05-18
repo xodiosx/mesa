@@ -150,27 +150,29 @@ v3d_bo_alloc(struct v3d_screen *screen, uint32_t size, const char *name)
         bo->name = name;
         bo->private = true;
 
+ retry:
+        ;
+
+        bool cleared_and_retried = false;
         struct drm_v3d_create_bo create = {
                 .size = size
         };
 
- retry:
         ret = v3d_ioctl(screen->fd, DRM_IOCTL_V3D_CREATE_BO, &create);
-        MESA_TRACE_SCOPE("%s size=%u name=\"%s\"", __func__, size, name);
+        bo->handle = create.handle;
+        bo->offset = create.offset;
 
         if (ret != 0) {
-                if (!list_is_empty(&screen->bo_cache.time_list)) {
+                if (!list_is_empty(&screen->bo_cache.time_list) &&
+                    !cleared_and_retried) {
+                        cleared_and_retried = true;
                         v3d_bo_cache_free_all(&screen->bo_cache);
                         goto retry;
                 }
 
-                mesa_loge("Failed to allocate device memory for BO\n");
                 free(bo);
                 return NULL;
         }
-
-        bo->handle = create.handle;
-        bo->offset = create.offset;
 
         screen->bo_count++;
         screen->bo_size += bo->size;
@@ -264,7 +266,6 @@ free_stale_bos(struct v3d_screen *screen, time_t time)
 static void
 v3d_bo_cache_free_all(struct v3d_bo_cache *cache)
 {
-        MESA_TRACE_FUNC();
         mtx_lock(&cache->lock);
         list_for_each_entry_safe(struct v3d_bo, bo, &cache->time_list,
                                  time_list) {
@@ -430,7 +431,7 @@ v3d_bo_get_dmabuf(struct v3d_bo *bo)
 {
         int fd;
         int ret = drmPrimeHandleToFD(bo->screen->fd, bo->handle,
-                                     DRM_CLOEXEC | DRM_RDWR, &fd);
+                                     O_CLOEXEC, &fd);
         if (ret != 0) {
                 fprintf(stderr, "Failed to export gem bo %d to dmabuf\n",
                         bo->handle);
@@ -484,7 +485,7 @@ v3d_bo_wait(struct v3d_bo *bo, uint64_t timeout_ns, const char *reason)
 {
         struct v3d_screen *screen = bo->screen;
 
-        MESA_TRACE_SCOPE("%s reason=\"%s\"", __func__, reason);
+        MESA_TRACE_FUNC();
 
         if (V3D_DBG(PERF) && timeout_ns && reason) {
                 if (v3d_wait_bo_ioctl(screen->fd, bo->handle, 0) == -ETIME) {

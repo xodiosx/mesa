@@ -11,18 +11,16 @@
 #include "r600_pipe_common.h"
 #include "r600_cs.h"
 #include "r600_public.h"
-#include "r600_atomics.h"
 #include "pipe/p_defines.h"
 
 #include "util/u_suballoc.h"
 #include "util/list.h"
 #include "util/u_transfer.h"
 #include "util/u_memory.h"
-#include "util/u_framebuffer.h"
 
 #include "tgsi/tgsi_scan.h"
 
-#define R600_NUM_ATOMS 57
+#define R600_NUM_ATOMS 56
 
 #define R600_MAX_IMAGES 8
 /*
@@ -53,6 +51,8 @@
 #define R600_MAX_FLUSH_CS_DWORDS	18
 #define R600_MAX_DRAW_CS_DWORDS		58
 #define R600_MAX_PFP_SYNC_ME_DWORDS	16
+
+#define EG_MAX_ATOMIC_BUFFERS 8
 
 #define R600_MAX_USER_CONST_BUFFERS 15
 #define R600_MAX_DRIVER_CONST_BUFFERS 3
@@ -111,7 +111,7 @@ struct r600_command_buffer {
 
 struct r600_db_state {
 	struct r600_atom		atom;
-	struct pipe_surface		*rsurf;
+	struct r600_surface		*rsurf;
 };
 
 struct r600_db_misc_state {
@@ -188,11 +188,8 @@ struct r600_cs_shader_state {
 };
 
 struct r600_framebuffer {
-	struct pipe_framebuffer_state state;
-};
-
-struct r600_cb_state {
 	struct r600_atom atom;
+	struct pipe_framebuffer_state state;
 	unsigned compressed_cb_mask;
 	unsigned nr_samples;
 	bool export_16bpc;
@@ -277,9 +274,8 @@ struct r600_rasterizer_state {
 	unsigned			pa_su_sc_mode_cntl;
 	float				offset_units;
 	float				offset_scale;
-	float				line_width;
-	float				max_point_size;
 	bool				offset_enable;
+	bool				offset_units_unscaled;
 	bool				scissor_enable;
 	bool				multisample_enable;
 	bool				clip_halfz;
@@ -291,6 +287,7 @@ struct r600_poly_offset_state {
 	enum pipe_format		zs_format;
 	float				offset_units;
 	float				offset_scale;
+	bool				offset_units_unscaled;
 };
 
 struct r600_blend_state {
@@ -328,7 +325,7 @@ struct r600_pipe_shader_selector {
 
 	unsigned	num_shaders;
 
-	mesa_shader_stage	type;
+	enum pipe_shader_type	type;
         enum pipe_shader_ir ir_type;
 
 	/* geometry shader properties */
@@ -455,7 +452,6 @@ struct r600_image_state {
 	uint32_t                        dirty_mask;
 	uint32_t			compressed_depthtex_mask;
 	uint32_t			compressed_colortex_mask;
-	uint32_t			incomplete_mask;
 	bool				dirty_buffer_constants;
 	struct r600_image_view views[R600_MAX_IMAGES];
 };
@@ -468,32 +464,11 @@ struct r600_scratch_buffer {
 	unsigned				item_size;
 };
 
-struct r600_lds_constant_buffer {
-	uint32_t input_patch_size;
-	uint32_t input_vertex_size;
-	uint32_t num_tcs_input_cp;
-	uint32_t num_tcs_output_cp;
-	uint32_t output_patch_size;
-	uint32_t output_vertex_size;
-	uint32_t output_patch0_offset;
-	uint32_t perpatch_output_offset;
-
-	/* Processed by the vertex shader */
-	uint32_t vertexid_base;
-	uint32_t instance_base;
-	uint32_t vertex_base;
-	uint32_t draw_id;
-};
-
 struct r600_context {
 	struct r600_common_context	b;
 	struct r600_screen		*screen;
 	struct blitter_context		*blitter;
 	struct u_suballocator		allocator_fetch_shader;
-
-	/* blitter state */
-	void *vs_pos_only[4];
-	void *velem_state_readbuf[4]; /**< X, XY, XYZ, XYZW */
 
 	/* Hardware info. */
 	bool				has_vertex_cache;
@@ -536,7 +511,6 @@ struct r600_context {
 	struct r600_db_state		db_state;
 	struct r600_cso_state		dsa_state;
 	struct r600_framebuffer		framebuffer;
-	struct r600_cb_state            cb_state;
 	struct r600_poly_offset_state	poly_offset_state;
 	struct r600_cso_state		rasterizer_state;
 	struct r600_sample_mask		sample_mask;
@@ -556,10 +530,10 @@ struct r600_context {
 	struct r600_cs_shader_state	cs_shader_state;
 	struct r600_shader_stages_state shader_stages;
 	struct r600_gs_rings_state	gs_rings;
-	struct r600_constbuf_state	constbuf_state[MESA_SHADER_STAGES];
-	struct r600_textures_info	samplers[MESA_SHADER_STAGES];
+	struct r600_constbuf_state	constbuf_state[PIPE_SHADER_TYPES];
+	struct r600_textures_info	samplers[PIPE_SHADER_TYPES];
 
-	struct r600_shader_driver_constants_info driver_consts[MESA_SHADER_STAGES];
+	struct r600_shader_driver_constants_info driver_consts[PIPE_SHADER_TYPES];
 
 	/** Vertex buffers for fetch shaders */
 	struct r600_vertexbuf_state	vertex_buffer_state;
@@ -604,8 +578,6 @@ struct r600_context {
 	struct r600_pipe_shader_selector *last_tcs;
 	unsigned last_num_tcs_input_cp;
 	unsigned lds_alloc;
-	struct r600_lds_constant_buffer lds_constant_buffer;
-	struct pipe_constant_buffer lds_constbuf_pipe;
 
 	struct r600_scratch_buffer scratch_buffers[MAX2(R600_NUM_HW_STAGES, EG_NUM_HW_STAGES)];
 
@@ -620,12 +592,6 @@ struct r600_context {
 	bool cmd_buf_is_compute;
 	struct pipe_resource *append_fence;
 	uint32_t append_fence_id;
-	bool cayman_dealloc_state;
-
-	/* Debug */
-#ifndef NDEBUG
-	unsigned cdw_saved;
-#endif
 };
 
 static inline void r600_emit_command_buffer(struct radeon_cmdbuf *cs,
@@ -721,20 +687,14 @@ bool evergreen_is_format_supported(struct pipe_screen *screen,
 				   unsigned storage_sample_count,
 				   unsigned usage);
 void evergreen_init_color_surface(struct r600_context *rctx,
-                                  struct r600_cb_surface *surf,
-				  const struct pipe_surface *cbuf);
+				  struct r600_surface *surf);
 void evergreen_init_color_surface_rat(struct r600_context *rctx,
-				      struct r600_cb_surface *surf,
-				      const struct pipe_surface *cbuf);
+					struct r600_surface *surf);
 void evergreen_update_db_shader_control(struct r600_context * rctx);
 bool evergreen_adjust_gprs(struct r600_context *rctx);
 void evergreen_setup_scratch_buffers(struct r600_context *rctx);
 uint32_t evergreen_construct_rat_mask(struct r600_context *rctx, struct r600_cb_misc_state *a,
 				      unsigned nr_cbufs);
-void evergreen_convert_border_color(const union pipe_color_union *in,
-				    union pipe_color_union *out,
-				    const struct pipe_sampler_view *view);
-
 /* r600_blit.c */
 void r600_init_blit_functions(struct r600_context *rctx);
 void r600_decompress_depth_textures(struct r600_context *rctx,
@@ -819,8 +779,7 @@ void evergreen_dma_copy_buffer(struct r600_context *rctx,
 			       uint64_t size);
 void evergreen_setup_tess_constants(struct r600_context *rctx,
 				    const struct pipe_draw_info *info,
-				    unsigned *num_patches,
-				    const bool vertexid);
+				    unsigned *num_patches);
 uint32_t evergreen_get_ls_hs_config(struct r600_context *rctx,
 				    const struct pipe_draw_info *info,
 				    unsigned num_patches);
@@ -858,8 +817,7 @@ uint32_t r600_translate_stencil_op(int s_op);
 uint32_t r600_translate_fill(uint32_t func);
 unsigned r600_tex_wrap(unsigned wrap);
 unsigned r600_tex_mipfilter(unsigned filter);
-unsigned r600_tex_compare(const unsigned mode,
-			  const unsigned compare);
+unsigned r600_tex_compare(unsigned compare);
 bool sampler_state_needs_border_color(const struct pipe_sampler_state *state);
 unsigned r600_get_swizzle_combined(const unsigned char *swizzle_format,
 				   const unsigned char *swizzle_view,
@@ -1038,18 +996,6 @@ static inline void radeon_set_ctl_const(struct radeon_cmdbuf *cs, unsigned reg, 
 	radeon_emit(cs, value);
 }
 
-#ifndef NDEBUG
-static inline unsigned
-radeon_check_cs(struct r600_context *const rctx,
-		const struct radeon_cmdbuf *const rcs)
-{
-	const unsigned count = rcs->current.cdw - rctx->cdw_saved;
-	assert(rcs->current.cdw < rcs->current.max_dw);
-	rctx->cdw_saved = rcs->current.cdw;
-	return count;
-}
-#endif
-
 /*
  * common helpers
  */
@@ -1091,7 +1037,7 @@ void eg_dump_debug_state(struct pipe_context *ctx, FILE *f,
 struct r600_pipe_shader_selector *r600_create_shader_state_tokens(struct pipe_context *ctx,
 								  const void *tokens,
 								  enum pipe_shader_ir,
-								  unsigned mesa_shader_stage);
+								  unsigned pipe_shader_type);
 int r600_shader_select(struct pipe_context *ctx,
 		       struct r600_pipe_shader_selector* sel,
 		       bool *dirty, bool precompile);
@@ -1100,22 +1046,18 @@ void r600_delete_shader_selector(struct pipe_context *ctx,
 				 struct r600_pipe_shader_selector *sel);
 
 struct r600_shader_atomic;
-unsigned evergreen_emit_atomic_buffer_setup_count(struct r600_context *rctx,
-						  struct r600_pipe_shader *cs_shader,
-						  struct r600_shader_atomic *combined_atomics,
-						  unsigned global_atomic_count);
-unsigned cayman_emit_atomic_buffer_setup_count(struct r600_context *rctx,
-					       struct r600_pipe_shader *cs_shader,
-					       struct r600_shader_atomic *combined_atomics,
-					       unsigned global_atomic_count);
+void evergreen_emit_atomic_buffer_setup_count(struct r600_context *rctx,
+					      struct r600_pipe_shader *cs_shader,
+					      struct r600_shader_atomic *combined_atomics,
+					      uint8_t *atomic_used_mask_p);
 void evergreen_emit_atomic_buffer_setup(struct r600_context *rctx,
-					const bool is_compute,
-					const struct r600_shader_atomic *combined_atomics,
-					const unsigned global_atomic_count);
+					bool is_compute,
+					struct r600_shader_atomic *combined_atomics,
+					uint8_t atomic_used_mask);
 void evergreen_emit_atomic_buffer_save(struct r600_context *rctx,
-				       const bool is_compute,
-				       const struct r600_shader_atomic *combined_atomics,
-				       const unsigned global_atomic_count);
+				       bool is_compute,
+				       struct r600_shader_atomic *combined_atomics,
+				       uint8_t *atomic_used_mask_p);
 void r600_update_compressed_resource_state(struct r600_context *rctx, bool compute_only);
 
 void eg_setup_buffer_constants(struct r600_context *rctx, int shader_type);

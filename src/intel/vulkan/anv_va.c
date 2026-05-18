@@ -44,9 +44,9 @@ va_at(struct anv_va_range *range, uint64_t addr, uint64_t size)
 static void
 anv_device_print_vas(struct anv_physical_device *device)
 {
-   mesa_logi("Driver heaps:\n");
+   fprintf(stderr, "Driver heaps:\n");
 #define PRINT_HEAP(name) \
-   mesa_logi("   0x%016"PRIx64"-0x%016"PRIx64": %s\n", \
+   fprintf(stderr, "   0x%016"PRIx64"-0x%016"PRIx64": %s\n", \
            device->va.name.addr, \
            device->va.name.addr + device->va.name.size, \
            #name);
@@ -97,18 +97,17 @@ anv_physical_device_init_va_ranges(struct anv_physical_device *device)
    uint64_t _1Gb = 1ull * 1024 * 1024 * 1024;
    uint64_t _4Gb = 4ull * 1024 * 1024 * 1024;
 
-   uint64_t address = 0;
-
-   address = va_add(&device->va.first_2mb, address, 2 * _1Mb);
+   uint64_t address = 0x000000200000ULL; /* 2MiB */
 
    address = va_add(&device->va.general_state_pool, address,
-                    2 * _1Gb - address);
+                    _1Gb - address);
 
    address = va_add(&device->va.low_heap, address, _1Gb);
 
    /* The binding table pool has to be located directly in front of the
     * surface states.
     */
+   address += _1Gb;
    address = va_add(&device->va.binding_table_pool, address, _1Gb);
    address = va_add(&device->va.internal_surface_state_pool, address, 1 * _1Gb);
    assert(device->va.internal_surface_state_pool.addr ==

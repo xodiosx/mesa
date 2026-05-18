@@ -37,10 +37,10 @@ lower_tex_src_to_offset(nir_builder *b,
    bool is_sampler = src->src_type == nir_tex_src_sampler_deref;
 
    /* We compute first the offsets */
-   nir_deref_instr *deref = nir_def_as_deref(src->src.ssa);
+   nir_deref_instr *deref = nir_instr_as_deref(src->src.ssa->parent_instr);
    while (deref->deref_type != nir_deref_type_var) {
       nir_deref_instr *parent =
-         nir_def_as_deref(deref->parent.ssa);
+         nir_instr_as_deref(deref->parent.ssa->parent_instr);
 
       assert(deref->deref_type == nir_deref_type_array);
 

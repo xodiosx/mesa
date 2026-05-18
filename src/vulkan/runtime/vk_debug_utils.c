@@ -121,31 +121,6 @@ vk_address_binding_report(struct vk_instance *instance,
                     &cb_data);
 }
 
-void
-vk_emit_device_memory_report(struct vk_device* device,
-                             VkDeviceMemoryReportEventTypeEXT type,
-                             uint64_t mem_obj_id,
-                             VkDeviceSize size,
-                             VkObjectType obj_type,
-                             uint64_t obj_handle,
-                             uint32_t heap_index)
-{
-   assert(device->memory_reports);
-
-   const VkDeviceMemoryReportCallbackDataEXT report = {
-      .sType = VK_STRUCTURE_TYPE_DEVICE_MEMORY_REPORT_CALLBACK_DATA_EXT,
-      .type = type,
-      .memoryObjectId = mem_obj_id,
-      .size = size,
-      .objectType = obj_type,
-      .objectHandle = obj_handle,
-      .heapIndex = heap_index,
-   };
-
-   for (uint32_t i = 0; i < device->memory_report_count; i++)
-      device->memory_reports[i].callback(&report, device->memory_reports[i].data);
-}
-
 VKAPI_ATTR VkResult VKAPI_CALL
 vk_common_CreateDebugUtilsMessengerEXT(
    VkInstance _instance,
@@ -305,7 +280,7 @@ vk_common_SetDebugUtilsObjectNameEXT(
 {
    VK_FROM_HANDLE(vk_device, device, _device);
 
-#ifdef VK_USE_PLATFORM_ANDROID_KHR
+#if DETECT_OS_ANDROID
    if (pNameInfo->objectType == VK_OBJECT_TYPE_SWAPCHAIN_KHR ||
        pNameInfo->objectType == VK_OBJECT_TYPE_SURFACE_KHR) {
 #else
@@ -352,7 +327,7 @@ vk_common_append_debug_label(struct vk_device *device,
                              struct util_dynarray *labels,
                              const VkDebugUtilsLabelEXT *pLabelInfo)
 {
-   util_dynarray_append(labels, *pLabelInfo);
+   util_dynarray_append(labels, VkDebugUtilsLabelEXT, *pLabelInfo);
    VkDebugUtilsLabelEXT *current_label =
       util_dynarray_top_ptr(labels, VkDebugUtilsLabelEXT);
    current_label->pLabelName =
@@ -487,9 +462,10 @@ vk_common_QueueInsertDebugUtilsLabelEXT(
 }
 
 VkResult
-vk_check_printf_status(struct vk_device *dev, struct u_printf_ctx *ctx)
+vk_check_printf_status(struct vk_device *dev, struct u_printf_ctx *ctx,
+                       struct u_printf_info *info, uint32_t count)
 {
-   if (u_printf_check_abort(stdout, ctx)) {
+   if (u_printf_check_abort(stdout, ctx, info, count)) {
       vk_device_set_lost(dev, "GPU abort.");
       return VK_ERROR_DEVICE_LOST;
    } else {

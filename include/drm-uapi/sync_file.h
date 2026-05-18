@@ -1,6 +1,12 @@
+/* SPDX-License-Identifier: GPL-1.0+ WITH Linux-syscall-note */
 /*
- * SPDX-License-Identifier: GPL-1.0-or-later WITH Linux-syscall-note
- * Copyright 2012 Google, Inc.
+ * Copyright (C) 2012 Google, Inc.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef _UAPI_LINUX_SYNC_H

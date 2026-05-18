@@ -6,15 +6,14 @@
 # DEBIAN_TEST_ANDROID_TAG
 # DEBIAN_TEST_GL_TAG
 # DEBIAN_TEST_VK_TAG
+# KERNEL_ROOTFS_TAG
 
-set -ue -o pipefail
+set -uex -o pipefail
 
 # shellcheck disable=SC2153
 deqp_api=${DEQP_API,,}
 
-section_start deqp-$deqp_api "Building dEQP $DEQP_API"
-
-set -x
+uncollapsed_section_start deqp-$deqp_api "Building dEQP $DEQP_API"
 
 # See `deqp_build_targets` below for which release is used to produce which
 # binary. Unless this comment has bitrotten:
@@ -23,10 +22,10 @@ set -x
 # - the GL release produces `glcts`, and
 # - the GLES release produces `deqp-gles*` and `deqp-egl`
 
-DEQP_MAIN_COMMIT=211e452358f5cafd14bdd76d78342b62741e94aa
-DEQP_VK_VERSION=1.4.4.2
-DEQP_GL_VERSION=4.6.7.0
-DEQP_GLES_VERSION=3.2.13.0
+DEQP_MAIN_COMMIT=a9f7069b9a5ba94715a175cb1818ed504add0107
+DEQP_VK_VERSION=1.3.10.0
+DEQP_GL_VERSION=4.6.5.0
+DEQP_GLES_VERSION=3.2.11.0
 
 # Patches to VulkanCTS may come from commits in their repo (listed in
 # cts_commits_to_backport) or patch files stored in our repo (in the patch
@@ -36,8 +35,8 @@ DEQP_GLES_VERSION=3.2.13.0
 
 # shellcheck disable=SC2034
 main_cts_commits_to_backport=(
-  # If you find yourself wanting to add something in here, consider whether
-  # bumping DEQP_MAIN_COMMIT is not a better solution :)
+    # If you find yourself wanting to add something in here, consider whether
+    # bumping DEQP_MAIN_COMMIT is not a better solution :)
 )
 
 # shellcheck disable=SC2034
@@ -46,8 +45,8 @@ main_cts_patch_files=(
 
 # shellcheck disable=SC2034
 vk_cts_commits_to_backport=(
-  # Add an option to print to logcat in Android executable builds
-  fc51668efdfd0dffa30b3eddee34aa26172969fb
+    # Remove multi-line test results in DRM format modifier tests
+    8c95af68a2a85cbdc7e1d9267ab029f73e9427d2
 )
 
 # shellcheck disable=SC2034
@@ -60,22 +59,30 @@ gl_cts_commits_to_backport=(
 
 # shellcheck disable=SC2034
 gl_cts_patch_files=(
-  build-deqp-gl_Build-Don-t-build-Vulkan-utilities-for-GL-builds.patch
 )
+
+if [ "${DEQP_TARGET}" = 'android' ]; then
+  gl_cts_patch_files+=(
+    build-deqp-gl_Allow-running-on-Android-from-the-command-line.patch
+    build-deqp-gl_Android-prints-to-stdout-instead-of-logcat.patch
+  )
+fi
 
 # shellcheck disable=SC2034
 # GLES builds also EGL
 gles_cts_commits_to_backport=(
-  # CMake: Include FindPkgConfig before using pkg_check_modules()
-  e09e0a210b041d0bf7b525620d0068eab3ffa66a
-  # Add an option to print to logcat in Android executable builds
-  fc51668efdfd0dffa30b3eddee34aa26172969fb
 )
 
 # shellcheck disable=SC2034
 gles_cts_patch_files=(
-  build-deqp-gl_Build-Don-t-build-Vulkan-utilities-for-GL-builds.patch
 )
+
+if [ "${DEQP_TARGET}" = 'android' ]; then
+  gles_cts_patch_files+=(
+    build-deqp-gles_Allow-running-on-Android-from-the-command-line.patch
+    build-deqp-gles_Android-prints-to-stdout-instead-of-logcat.patch
+  )
+fi
 
 
 ### Careful editing anything below this line
@@ -105,8 +112,8 @@ git checkout FETCH_HEAD
 DEQP_COMMIT=$(git rev-parse FETCH_HEAD)
 
 if [ "$DEQP_VERSION" = "$DEQP_MAIN_COMMIT" ]; then
-  merge_base="$(curl-with-retry -s https://api.github.com/repos/KhronosGroup/VK-GL-CTS/compare/main...$DEQP_MAIN_COMMIT | jq -r .merge_base_commit.sha)"
-  if [[ "$merge_base" != "$DEQP_MAIN_COMMIT" ]]; then
+  git fetch origin main
+  if ! git merge-base --is-ancestor "$DEQP_MAIN_COMMIT" origin/main; then
     echo "VK-GL-CTS commit $DEQP_MAIN_COMMIT is not a commit from the main branch."
     exit 1
   fi
@@ -125,14 +132,15 @@ for commit in "${!cts_commits_to_backport}"
 do
   PATCH_URL="https://github.com/KhronosGroup/VK-GL-CTS/commit/$commit.patch"
   echo "Apply patch to ${DEQP_API} CTS from $PATCH_URL"
-  curl-with-retry $PATCH_URL | GIT_COMMITTER_DATE=$(LC_TIME=C date -d@0) git am -
+  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 $PATCH_URL | \
+    GIT_COMMITTER_DATE=$(date -d@0) git am -
 done
 
 cts_patch_files="${prefix}_cts_patch_files[@]"
 for patch in "${!cts_patch_files}"
 do
   echo "Apply patch to ${DEQP_API} CTS from $patch"
-  GIT_COMMITTER_DATE=$(LC_TIME=C date -d@0) git am < $OLDPWD/.gitlab-ci/container/patches/$patch
+  GIT_COMMITTER_DATE=$(date -d@0) git am < $OLDPWD/.gitlab-ci/container/patches/$patch
 done
 
 {
@@ -146,20 +154,12 @@ done
     echo "The following local patches are applied on top:"
     git log --reverse --oneline "$DEQP_COMMIT".. --format='- %s'
   fi
-} > /deqp-$deqp_api/deqp-$deqp_api-version
+} > /deqp-$deqp_api/version
 
 # --insecure is due to SSL cert failures hitting sourceforge for zlib and
 # libpng (sigh).  The archives get their checksums checked anyway, and git
 # always goes through ssh or https.
 python3 external/fetch_sources.py --insecure
-
-case "${DEQP_API}" in
-  VK-main)
-    # Video tests rely on external files
-    python3 external/fetch_video_decode_samples.py
-    python3 external/fetch_video_encode_samples.py
-    ;;
-esac
 
 if [[ "$DEQP_API" = tools ]]; then
   # Save the testlog stylesheets:
@@ -167,6 +167,47 @@ if [[ "$DEQP_API" = tools ]]; then
 fi
 
 popd
+
+pushd /deqp-$deqp_api
+
+if [ "${DEQP_API}" = 'GLES' ]; then
+  if [ "${DEQP_TARGET}" = 'android' ]; then
+    cmake -S /VK-GL-CTS -B . -G Ninja \
+        -DDEQP_TARGET=android \
+        -DCMAKE_BUILD_TYPE=Release \
+        ${EXTRA_CMAKE_ARGS:-}
+    ninja modules/egl/deqp-egl
+    mv modules/egl/deqp-egl{,-android}
+  else
+    # When including EGL/X11 testing, do that build first and save off its
+    # deqp-egl binary.
+    cmake -S /VK-GL-CTS -B . -G Ninja \
+        -DDEQP_TARGET=x11_egl_glx \
+        -DCMAKE_BUILD_TYPE=Release \
+        ${EXTRA_CMAKE_ARGS:-}
+    ninja modules/egl/deqp-egl
+    mv modules/egl/deqp-egl{,-x11}
+
+    cmake -S /VK-GL-CTS -B . -G Ninja \
+        -DDEQP_TARGET=wayland \
+        -DCMAKE_BUILD_TYPE=Release \
+        ${EXTRA_CMAKE_ARGS:-}
+    ninja modules/egl/deqp-egl
+    mv modules/egl/deqp-egl{,-wayland}
+  fi
+fi
+
+cmake -S /VK-GL-CTS -B . -G Ninja \
+      -DDEQP_TARGET=${DEQP_TARGET} \
+      -DCMAKE_BUILD_TYPE=Release \
+      ${EXTRA_CMAKE_ARGS:-}
+
+# Make sure `default` doesn't silently stop detecting one of the platforms we care about
+if [ "${DEQP_TARGET}" = 'default' ]; then
+  grep -q DEQP_SUPPORT_WAYLAND=1 build.ninja
+  grep -q DEQP_SUPPORT_X11=1 build.ninja
+  grep -q DEQP_SUPPORT_XCB=1 build.ninja
+fi
 
 deqp_build_targets=()
 case "${DEQP_API}" in
@@ -179,7 +220,7 @@ case "${DEQP_API}" in
   GLES)
     deqp_build_targets+=(deqp-gles{2,3,31})
     deqp_build_targets+=(glcts)  # needed for gles*-khr tests
-    # deqp-egl also comes from this build, but it is handled separately below.
+    # deqp-egl also comes from this build, but it is handled separately above.
     ;;
   tools)
     deqp_build_targets+=(testlog-to-xml)
@@ -188,59 +229,9 @@ case "${DEQP_API}" in
     ;;
 esac
 
-OLD_IFS="$IFS"
-IFS=";"
-CMAKE_SBT="${deqp_build_targets[*]}"
-IFS="$OLD_IFS"
-
-pushd /deqp-$deqp_api
-
-if [ "${DEQP_API}" = 'GLES' ]; then
-  if [ "${DEQP_TARGET}" = 'android' ]; then
-    cmake -S /VK-GL-CTS -B . -G Ninja \
-        -DDEQP_TARGET=android \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DSELECTED_BUILD_TARGETS="deqp-egl" \
-        ${EXTRA_CMAKE_ARGS:-}
-    ninja modules/egl/deqp-egl
-    mv modules/egl/deqp-egl{,-android}
-  else
-    # When including EGL/X11 testing, do that build first and save off its
-    # deqp-egl binary.
-    cmake -S /VK-GL-CTS -B . -G Ninja \
-        -DDEQP_TARGET=x11_egl_glx \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DSELECTED_BUILD_TARGETS="deqp-egl" \
-        ${EXTRA_CMAKE_ARGS:-}
-    ninja modules/egl/deqp-egl
-    mv modules/egl/deqp-egl{,-x11}
-
-    cmake -S /VK-GL-CTS -B . -G Ninja \
-        -DDEQP_TARGET=wayland \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DSELECTED_BUILD_TARGETS="deqp-egl" \
-        ${EXTRA_CMAKE_ARGS:-}
-    ninja modules/egl/deqp-egl
-    mv modules/egl/deqp-egl{,-wayland}
-  fi
-fi
-
-cmake -S /VK-GL-CTS -B . -G Ninja \
-      -DDEQP_TARGET=${DEQP_TARGET} \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DSELECTED_BUILD_TARGETS="${CMAKE_SBT}" \
-      ${EXTRA_CMAKE_ARGS:-}
-
-# Make sure `default` doesn't silently stop detecting one of the platforms we care about
-if [ "${DEQP_TARGET}" = 'default' ]; then
-  grep -q DEQP_SUPPORT_WAYLAND=1 build.ninja
-  grep -q DEQP_SUPPORT_X11=1 build.ninja
-  grep -q DEQP_SUPPORT_XCB=1 build.ninja
-fi
-
 ninja "${deqp_build_targets[@]}"
 
-if [ "$DEQP_API" != tools ]; then
+if [ "${DEQP_TARGET}" != 'android' ] && [ "$DEQP_API" != tools ]; then
     # Copy out the mustpass lists we want.
     mkdir -p mustpass
 
@@ -274,7 +265,7 @@ if [ "$DEQP_API" != tools ]; then
 
     # Compress the caselists, since Vulkan's in particular are gigantic; higher
     # compression levels provide no real measurable benefit.
-    zstd -f -1 --rm mustpass/*.txt
+    zstd -1 --rm mustpass/*.txt
 fi
 
 if [ "$DEQP_API" = tools ]; then
@@ -285,7 +276,6 @@ if [ "$DEQP_API" = tools ]; then
 fi
 
 # Remove other mustpass files, since we saved off the ones we wanted to conventient locations above.
-rm -rf assets/**/mustpass/
 rm -rf external/**/mustpass/
 rm -rf external/vulkancts/modules/vulkan/vk-main*
 rm -rf external/vulkancts/modules/vulkan/vk-default

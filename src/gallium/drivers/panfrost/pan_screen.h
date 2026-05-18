@@ -41,6 +41,7 @@
 
 #include "pan_device.h"
 #include "pan_mempool.h"
+#include "pan_texture.h"
 
 #define PAN_QUERY_DRAW_CALLS (PIPE_QUERY_DRIVER_SPECIFIC + 0)
 
@@ -74,18 +75,20 @@ struct panfrost_vtable {
    void (*context_cleanup)(struct panfrost_context *ctx);
 
    /* Device-dependent initialization/cleanup of a panfrost_batch */
-   int (*init_batch)(struct panfrost_batch *batch);
+   void (*init_batch)(struct panfrost_batch *batch);
    void (*cleanup_batch)(struct panfrost_batch *batch);
 
    /* Device-dependent submission of a panfrost_batch */
    int (*submit_batch)(struct panfrost_batch *batch, struct pan_fb_info *fb);
 
    /* Get blend shader */
-   struct pan_blend_shader *(*get_blend_shader)(
+   struct pan_blend_shader_variant *(*get_blend_shader)(
       struct pan_blend_shader_cache *cache, const struct pan_blend_state *,
       nir_alu_type, nir_alu_type, unsigned rt);
 
-   void (*compile_shader)(nir_shader *s, struct pan_compile_inputs *inputs,
+   /* Shader compilation methods */
+   const nir_shader_compiler_options *(*get_compiler_options)(void);
+   void (*compile_shader)(nir_shader *s, struct panfrost_compile_inputs *inputs,
                           struct util_dynarray *binary,
                           struct pan_shader_info *info);
 
@@ -107,13 +110,6 @@ struct panfrost_vtable {
 
    /* Select the tile size and calculate the color buffer allocation size */
    void (*select_tile_size)(struct pan_fb_info *fb);
-
-   /* Run a compute shader to detile an MTK 16L32 image */
-   void (*mtk_detile)(struct panfrost_context *ctx, struct pipe_blit_info *info);
-
-   /* construct a render target blend descriptor */
-   uint64_t (*get_conv_desc)(enum pipe_format fmt, unsigned rt,
-                             unsigned force_size, bool dithered);
 };
 
 struct panfrost_screen {
@@ -124,28 +120,11 @@ struct panfrost_screen {
       struct panfrost_pool desc;
    } mempools;
 
-   char renderer_string[100];
    struct panfrost_vtable vtbl;
    struct disk_cache *disk_cache;
-
-   /* Use AFBC tiled layout whenever possible */
-   bool afbc_tiled;
-
-   /* Pack AFBC textures progressively in the background */
-   bool force_afbc_packing;
-
-   /* Discard packing if the packed size percentage reaches this value */
    unsigned max_afbc_packing_ratio;
-
-   /* Consecutive reads threshold after which an AFBC texture is packed */
-   uint32_t afbcp_reads_threshold;
-
-   /* Compute AFBC-P payload sizes on GPU */
-   bool afbcp_gpu_payload_sizes;
-
+   bool force_afbc_packing;
    int force_afrc_rate;
-   uint64_t compute_core_mask;
-   uint64_t fragment_core_mask;
 
    struct {
       unsigned chunk_size;
@@ -175,21 +154,12 @@ void panfrost_cmdstream_screen_init_v6(struct panfrost_screen *screen);
 void panfrost_cmdstream_screen_init_v7(struct panfrost_screen *screen);
 void panfrost_cmdstream_screen_init_v9(struct panfrost_screen *screen);
 void panfrost_cmdstream_screen_init_v10(struct panfrost_screen *screen);
-void panfrost_cmdstream_screen_init_v12(struct panfrost_screen *screen);
-void panfrost_cmdstream_screen_init_v13(struct panfrost_screen *screen);
 
 #define perf_debug(ctx, ...)                                                   \
    do {                                                                        \
       if (unlikely(pan_device((ctx)->base.screen)->debug & PAN_DBG_PERF))      \
          mesa_logw(__VA_ARGS__);                                               \
       util_debug_message(&ctx->base.debug, PERF_INFO, __VA_ARGS__);            \
-   } while (0)
-
-#define afbcp_debug(ctx, ...)                                                  \
-   do {                                                                        \
-      if (unlikely(pan_device((ctx)->base.screen)->debug & PAN_DBG_FORCE_PACK)) \
-         mesa_logw(__VA_ARGS__);                                               \
-      util_debug_message(&ctx->base.debug, INFO, __VA_ARGS__);                 \
    } while (0)
 
 #endif /* PAN_SCREEN_H */

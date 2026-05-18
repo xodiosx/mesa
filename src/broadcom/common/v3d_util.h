@@ -46,14 +46,14 @@
                 v3d_X_thing = &v3d71_##thing;                   \
                 break;                                          \
         default:                                                \
-                UNREACHABLE("Unsupported hardware generation"); \
+                unreachable("Unsupported hardware generation"); \
         }                                                       \
         v3d_X_thing;                                            \
 })
 
 uint32_t
 v3d_csd_choose_workgroups_per_supergroup(struct v3d_device_info *devinfo,
-                                         bool can_use_supergroups,
+                                         bool has_subgroups,
                                          bool has_tsy_barrier,
                                          uint32_t threads,
                                          uint32_t num_wgs,
@@ -94,7 +94,7 @@ log2_tile_size(uint32_t size)
         case 64:
                 return 3;
         default:
-                UNREACHABLE("Unsupported tile width/height");
+                unreachable("Unsupported tile width/height");
         }
 }
 

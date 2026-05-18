@@ -101,7 +101,7 @@ struct vpe_cmd_output {
 
 struct vpe_cmd_info {
     enum vpe_cmd_ops ops;
-    uint16_t          cd; // count down value
+    uint8_t          cd; // count down value
 
     // input
     uint16_t             num_inputs;
@@ -273,19 +273,8 @@ struct vpe_priv {
     uint16_t vpe_num_instance;
     bool     collaboration_mode;
     enum vpe_expansion_mode expansion_mode;
-    const struct vpe_engine       *engine_handle; /**< vpe engine instance */
 };
 
-/** internal vpe engine instance */
-struct vpe_engine_priv {
-    struct vpe_engine pub; /**< public member */
-
-    /** internal */
-    struct vpe_init_data           init;        /**< vpe init data */
-    uint8_t                        ver_major;   /**< vpe major version */
-    uint8_t                        ver_minor;   /**< vpe minor version */
-    uint8_t                        ver_rev;     /**< vpe revision version */
-};
 #ifdef __cplusplus
 }
 #endif

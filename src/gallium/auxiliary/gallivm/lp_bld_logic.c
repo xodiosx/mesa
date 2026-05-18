@@ -35,6 +35,7 @@
 #include <llvm/Config/llvm-config.h>
 
 #include "util/u_cpu_detect.h"
+#include "util/u_memory.h"
 #include "util/u_debug.h"
 
 #include "lp_bld_type.h"
