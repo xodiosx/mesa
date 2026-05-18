@@ -22,7 +22,6 @@ jobs:
       - name: Clone Mesa Wrapper
         run: |
           git clone --depth 1 \
-            --branch wrapper-25 \
             https://github.com/xodiosx/mesa.git \
             mesa-src
           
