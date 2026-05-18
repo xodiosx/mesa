@@ -18,7 +18,7 @@ jobs:
 
       - name: Clone Mesa repo
         run: |
-          git clone --depth=1v --branch wrapper-25 --recurse-submodules --shallow-submodules \
+          git clone --depth=1 --branch wrapper-25 --recurse-submodules --shallow-submodules \
             https://gitlab.freedesktop.org/Pipetto-crypto/mesa.git mesa-src
           cd mesa-src
           git submodule update --init --recursive --depth=1
